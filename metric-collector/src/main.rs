@@ -1,8 +1,14 @@
 use chrono::prelude::*;
 use clap::{command, value_parser, Arg, ArgAction};
-use polars::{df, prelude::*};
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{fs, thread, time::Duration};
+use ctrlc;
+use polars::io::csv::CsvWriter;
+use polars::prelude::*;
+use std::{
+    fs::{self, File},
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 #[derive(Debug)]
 struct SchedStat {
@@ -21,7 +27,14 @@ impl From<Vec<&str>> for SchedStat {
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let flag = Arc::new(Mutex::new(false));
+    let sig_flag = flag.clone();
+    ctrlc::set_handler(move || {
+        let mut flag = sig_flag.lock().unwrap();
+        *flag = true;
+    })
+    .expect("Error setting Ctrl-C handler");
     let mut matches = command!() // requires `cargo` feature
         .next_line_help(true)
         .arg(
@@ -55,9 +68,14 @@ fn main() {
     let mut timeseries = DataFrame::new(vec![Series::new_empty("ts", &DataType::String)]).unwrap();
 
     loop {
+        if *flag.lock().unwrap() == true {
+            break;
+        }
+
         let tasks = fs::read_dir(format!("{proc_root_dir}/task")).unwrap();
         let ts: DateTime<Utc> = Utc::now();
-        let mut row = DataFrame::new(vec![Series::new("ts", &[ts.to_string()])]).unwrap();
+        println!("{:?}", ts);
+        let mut row = DataFrame::new(vec![Series::new("ts", &[ts.to_rfc3339()])]).unwrap();
         for task in tasks {
             if let Err(_) = task {
                 continue;
@@ -105,7 +123,12 @@ fn main() {
             .unwrap();
         }
         timeseries.vstack_mut(&row).unwrap();
-        println!("{:?}", timeseries);
         thread::sleep(Duration::from_millis(period));
     }
+
+    let file = File::create("../data/metric.csv").unwrap();
+    let mut csv = CsvWriter::new(file);
+    csv.finish(&mut timeseries)?;
+
+    Ok(())
 }
