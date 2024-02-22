@@ -1,14 +1,21 @@
 use clap::{command, value_parser, Arg, ArgAction};
 use core_affinity::{self, CoreId};
+use libc;
 use std::{
-    io::{prelude::*, BufReader},
+    fs::OpenOptions,
+    io::{prelude::*, BufReader, SeekFrom},
     net::{TcpListener, TcpStream},
+    os::unix::fs::OpenOptionsExt,
     sync::{
         mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
 };
+
+extern "C" {
+    fn direct_read() -> ();
+}
 
 type Job = Box<dyn FnOnce() -> () + Send + 'static>;
 
@@ -71,33 +78,64 @@ fn handle_connection(mut stream: TcpStream) {
     let mut buf = BufReader::new(&mut stream);
     buf.fill_buf().unwrap();
     req.parse(buf.buffer()).unwrap();
-    match req.path {
-        Some("/cpu") => {
+    println!("{:?}", req.method);
+    match (req.path, req.method) {
+        (Some("/cpu"), _) => {
             cpu_workload();
             stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap();
         }
-        Some("/memory") => {
+        (Some("/memory"), _) => {
             memory_workload();
             stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap()
         }
-        Some("/disk") => {
-            disk_workload();
+        (Some("/disk"), Some("POST")) => {
+            sync_append();
             stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap()
         }
-        Some("/overload_cpu") => stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap(),
-        Some("/overload_disk") => stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap(),
-        Some(_) => stream.write_all(b"HTTP/1.1 404 NOT FOUND\r\n\r\n").unwrap(),
+        (Some("/disk"), Some("PUT")) => {
+            sync_edit();
+            stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap()
+        }
+        (Some("/disk"), Some("GET")) => {
+            unsafe {
+                direct_read();
+            }
+            stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap()
+        }
+        (Some(_), _) => stream.write_all(b"HTTP/1.1 404 NOT FOUND\r\n\r\n").unwrap(),
         _ => stream.write_all(b"HTTP/1.1 404 NOT FOUND\r\n\r\n").unwrap(),
     }
 }
 
 fn cpu_workload() {
-    println!("Executing short cpu workload");
     for _ in 0..100000000 {}
 }
 
-fn disk_workload() {
-    println!("Executing short disk workload");
+fn sync_append() {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .custom_flags(libc::O_SYNC)
+        .open("test")
+        .expect("Can't open file");
+    for i in 0..1_000 {
+        file.write_all(format!("This is write {i}\n").as_bytes())
+            .unwrap();
+    }
+}
+
+fn sync_edit() {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .custom_flags(libc::O_SYNC)
+        .open("test")
+        .expect("Can't open file");
+    for i in 0..1_000 {
+        file.write_all(format!("This is write {i}\n").as_bytes())
+            .unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+    }
 }
 
 fn memory_workload() {}

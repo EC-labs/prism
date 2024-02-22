@@ -57,6 +57,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
 
 [[package]]
+name = "cc"
+version = "1.0.86"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f9fa1897e4325be0d68d48df6aa1a71ac2ed4d27723887e7754192705350730"
+
+[[package]]
 name = "clap"
 version = "4.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -117,10 +123,12 @@ dependencies = [
 name = "example-application"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "clap",
  "core_affinity",
  "http",
  "httparse",
+ "libc",
 ]
 
 [[package]]
