@@ -10,3 +10,6 @@ clap = { version = "4", features = ["derive", "cargo"]}
 polars = "0.36.0"
 chrono = "0.4.33"
 ctrlc = "3.4.2"
+eyre = "0.6.12"
+regex = "1.10.3"
+indoc = "2.0.4"
