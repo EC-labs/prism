@@ -41,19 +41,15 @@ impl Extractor {
         let proc_root_dir = format!("/proc/{:?}", self.config.pid);
 
         let tasks = fs::read_dir(format!("{proc_root_dir}/task"))?;
-        let collectors: Result<Vec<Vec<Box<dyn Collect>>>> = tasks
-            .map(|task| {
-                let file_path = task?.path();
-                let stem = file_path.file_stem().unwrap().to_str().unwrap();
-                let tid: usize = stem.parse()?;
-                let schedstat: Box<dyn Collect> =
-                    Box::new(SchedStat::new(tid, &self.config.data_directory));
-                let sched: Box<dyn Collect> =
-                    Box::new(Sched::new(tid, &self.config.data_directory));
-                Ok(vec![schedstat, sched])
-            })
-            .collect();
-        let mut collectors: Vec<Box<dyn Collect>> = collectors?.into_iter().flatten().collect();
+        let mut collectors: Vec<Box<dyn Collect>> = Vec::new();
+        for task in tasks {
+            let file_path = task?.path();
+            let stem = file_path.file_stem().unwrap().to_str().unwrap();
+            let tid: usize = stem.parse()?;
+
+            collectors.push(Box::new(SchedStat::new(tid, &self.config.data_directory)));
+            collectors.push(Box::new(Sched::new(tid, &self.config.data_directory)));
+        }
 
         loop {
             if *self.terminate_flag.lock().unwrap() == true {

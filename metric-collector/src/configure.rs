@@ -1,3 +1,4 @@
+use chrono::prelude::*;
 use clap::ArgMatches;
 
 pub struct Config {
@@ -14,9 +15,13 @@ impl From<ArgMatches> for Config {
             .expect("Missing period")
             .try_into()
             .expect("Convert usize to u64");
-        let data_directory = matches
+
+        let utc: DateTime<Utc> = Utc::now();
+        let mut data_directory = matches
             .remove_one::<String>("data_directory")
             .expect("Required field");
+        data_directory += &format!("/{}", utc.to_rfc3339());
+
         Self {
             pid,
             period,
