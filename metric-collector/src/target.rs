@@ -7,8 +7,9 @@ use regex::Regex;
 use std::{
     error::Error,
     fmt::{self, Display},
-    fs::{self, File},
+    fs::{self, File, ReadDir},
     io::BufReader,
+    path::PathBuf,
 };
 
 #[derive(Debug)]
@@ -60,6 +61,7 @@ impl Target {
             if let None = captures {
                 continue;
             }
+            let tid: usize = stem.parse()?;
 
             let proc_stat = fs::read_to_string(format!("{}/stat", file_path.to_str().unwrap()))?;
             let mut proc_stat = proc_stat.split(" ");
@@ -79,14 +81,32 @@ impl Target {
                 continue;
             }
 
-            let tid: usize = stem.parse()?;
-            targets.push(Target::new(
-                tid,
-                &format!("{}/{}/{}", data_directory, comm, tid),
-            ));
+            targets.extend(
+                Self::get_threads(file_path)?
+                    .into_iter()
+                    .map(|tid| {
+                        Ok(Target::new(
+                            tid,
+                            &format!("{}/{}/{}", data_directory, comm, tid),
+                        ))
+                    })
+                    .collect::<Result<Vec<Target>>>()?,
+            );
         }
 
         return Ok(targets);
+    }
+
+    fn get_threads(proc_pid_path: PathBuf) -> Result<Vec<usize>> {
+        let tasks = fs::read_dir(format!("{}/task", proc_pid_path.to_str().unwrap()))?;
+
+        tasks
+            .map(|task| {
+                let file_path = task?.path();
+                let stem = file_path.file_stem().unwrap().to_str().unwrap();
+                Ok(stem.parse()?)
+            })
+            .collect()
     }
 
     pub fn sample(&mut self) -> Result<()> {

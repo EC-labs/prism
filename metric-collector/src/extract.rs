@@ -38,21 +38,13 @@ impl Extractor {
 
     pub fn run(self) -> Result<()> {
         self.register_sighandler();
-        let mut targets: Vec<Target> = Vec::new();
 
-        let targets_jbd2 = Target::search_targets_regex("jbd2", true, &self.config.data_directory);
-        if let Ok(targets_jbd2) = targets_jbd2 {
-            targets.extend(targets_jbd2);
-        }
-
-        let proc_root_dir = format!("/proc/{:?}", self.config.pid);
-        let tasks = fs::read_dir(format!("{proc_root_dir}/task"))?;
-        for task in tasks {
-            let file_path = task?.path();
-            let stem = file_path.file_stem().unwrap().to_str().unwrap();
-            let tid: usize = stem.parse()?;
-            targets.push(Target::new(tid, &self.config.data_directory))
-        }
+        let mut targets = Target::search_targets_regex("jbd2", true, &self.config.data_directory)?;
+        targets.extend(Target::search_targets_regex(
+            "example-app",
+            false,
+            &self.config.data_directory,
+        )?);
 
         loop {
             if *self.terminate_flag.lock().unwrap() == true {
