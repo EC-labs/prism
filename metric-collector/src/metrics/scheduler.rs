@@ -60,7 +60,7 @@ impl SchedStat {
     pub fn new(tid: usize, data_directory: &str) -> Self {
         Self {
             proc_file: format!("/proc/{}/schedstat", tid),
-            data_directory: format!("{}/{}/schedstat", data_directory, tid),
+            data_directory: format!("{}/schedstat", data_directory),
             day_epoch: None,
             data_file: None,
         }
@@ -110,7 +110,7 @@ impl Sched {
     pub fn new(tid: usize, data_directory: &str) -> Self {
         Self {
             proc_file: format!("/proc/{tid}/sched"),
-            data_directory: format!("{}/{}/sched", data_directory, tid),
+            data_directory: format!("{}/sched", data_directory),
             data_file: None,
             day_epoch: None,
         }

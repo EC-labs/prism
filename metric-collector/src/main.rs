@@ -2,6 +2,7 @@ mod cmdline;
 mod configure;
 mod extract;
 mod metrics;
+mod target;
 
 use configure::Config;
 use extract::Extractor;

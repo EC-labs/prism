@@ -12,6 +12,7 @@ use crate::metrics::{
     scheduler::{Sched, SchedStat},
     Collect,
 };
+use crate::target::Target;
 
 pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
@@ -37,18 +38,20 @@ impl Extractor {
 
     pub fn run(self) -> Result<()> {
         self.register_sighandler();
+        let mut targets: Vec<Target> = Vec::new();
+
+        let targets_jbd2 = Target::search_targets_regex("jbd2", true, &self.config.data_directory);
+        if let Ok(targets_jbd2) = targets_jbd2 {
+            targets.extend(targets_jbd2);
+        }
 
         let proc_root_dir = format!("/proc/{:?}", self.config.pid);
-
         let tasks = fs::read_dir(format!("{proc_root_dir}/task"))?;
-        let mut collectors: Vec<Box<dyn Collect>> = Vec::new();
         for task in tasks {
             let file_path = task?.path();
             let stem = file_path.file_stem().unwrap().to_str().unwrap();
             let tid: usize = stem.parse()?;
-
-            collectors.push(Box::new(SchedStat::new(tid, &self.config.data_directory)));
-            collectors.push(Box::new(Sched::new(tid, &self.config.data_directory)));
+            targets.push(Target::new(tid, &self.config.data_directory))
         }
 
         loop {
@@ -56,10 +59,10 @@ impl Extractor {
                 break;
             }
 
-            for collector in collectors.iter_mut() {
-                let sample = collector.sample()?;
-                collector.store(sample)?;
-            }
+            targets
+                .iter_mut()
+                .map(|target| target.sample())
+                .collect::<Result<()>>()?;
 
             thread::sleep(Duration::from_millis(self.config.period));
         }
