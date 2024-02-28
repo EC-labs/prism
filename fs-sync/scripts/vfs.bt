@@ -1,0 +1,48 @@
+#!/home/diogo/.local/bin/bpftrace
+
+BEGIN 
+/ comm == "fs-sync" /
+{
+    @total[tid] = (uint64) 0;
+}
+
+kprobe:vfs_read
+/ comm == "fs-sync" /
+{
+    @start[tid, "r"] = nsecs;
+}
+
+kretprobe:vfs_read
+/ comm == "fs-sync" && @start[tid, "r"] /
+{
+    $diff = (nsecs - @start[tid, "r"])/1000;
+    @total[tid] = @total[tid] + $diff;
+    @dist[tid, "r"] = hist($diff);
+}
+
+kprobe:vfs_write
+/ comm == "fs-sync" /
+{
+    @start[tid, "w"] = nsecs;
+}
+
+kretprobe:vfs_write
+/ comm == "fs-sync" && @start[tid, "w"] /
+{
+    $diff = (nsecs - @start[tid, "w"])/1000;
+    @total[tid] = @total[tid] + $diff;
+    @dist[tid, "w"] = hist($diff);
+}
+
+interval:s:1
+{
+    print(@total);
+    print(@dist);
+    clear(@dist);
+}
+
+END
+{
+    clear(@total);
+    clear(@start);
+}
