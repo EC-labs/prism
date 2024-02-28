@@ -42,7 +42,7 @@ impl From<Vec<&str>> for SchedStatSample {
 
 impl ToCsv for SchedStatSample {
     fn csv_headers(&self) -> String {
-        String::from("epoch_ns,runtime,rq_time,run_periods\n")
+        String::from("epoch_ms,runtime,rq_time,run_periods\n")
     }
 
     fn to_csv_row(&self) -> (u128, String) {
@@ -190,7 +190,7 @@ impl From<String> for SchedSample {
 
 impl ToCsv for SchedSample {
     fn csv_headers(&self) -> String {
-        String::from("epoch_ns,runtime,rq_time,sleep_time,block_time,iowait_time\n")
+        String::from("epoch_ms,runtime,rq_time,sleep_time,block_time,iowait_time\n")
     }
 
     fn to_csv_row(&self) -> (u128, String) {

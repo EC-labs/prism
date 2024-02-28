@@ -3,6 +3,24 @@
 `CONFIG_TASK_DELAY_ACCT` && `sysctl "kernel.task_delayacct=1`: Enables taskstats metrics from `struct taskstats` in `include/uapi/linux/taskstats.h`.
 `CONFIG_SCHEDSTATS` && `sysctl "kernel.sched_schedstats=1"`: Enables schedular statistics in the form of `struct sched_statistics` in `include/linux/sched.h`.
 
+# Metrics
+
+## Sched
+
+Metric description: 
+
+* `wait`:  The time spent in the runqueue without running
+* `iowait`: Time the task spends in the `in_iowait` state (Check
+  `kernel/sched/stats.c`)
+* `block`: The time the task spent in the `TASK_UNINTERRUPTIBLE` state while
+  sleeping.
+* `sleep`: The time the task spent in both `TASK_UNINTERRUPTIBLE` and
+  `TASK_INTERRUPTIBLE` sleep.
+
+Observations: 
+
+* `sleep` is a superset of `block` which in turn is a superset of `iowait`.
+
 # Scenarios
 
 ## CPU
@@ -27,11 +45,34 @@ repeats.
 
 **Metrics**
 
-active_time = cpu_runtime + wait_time + block_time ~ 1
-iowait_time / active_time -> close to 1
-block_time / active_time -> close to 1
+- [x] active_time = cpu_runtime + wait_time + block_time ~ 1
+- [x] iowait_time / active_time -> close to 1
+- [x] block_time / active_time -> close to 1
 
 jbd2 thread inactive almost irrelevant
+
+### Synchronous Edit
+
+A thread continuously edits data in a file, without generating new data. The
+file is still opened with the same flags as for the previous case 
+(`O_CREAT | O_SYNC | O_WRONLY`), however the fact that the thread simply edits
+data that already exists on the disk, the amount of file metadata to be
+synchronised with the disk is reduced. This activity manifests itself with the
+iowait_time occupying most of the active_time, and there being additional
+unaccounted block_time due to the synchronisation performed by the journaling
+thread (jbd2). The jbd2 thread no longer presents bottleneck behaviour, but is
+performing useful work. As such vfs_fsync_time should be lower when compared to
+the previous case. 
+
+**Metrics**
+
+- [x] active_time = cpu_runtime + wait_time + block_time ~ 1
+- [x] iowait_time / active_time -> > 75%
+- [x] block_time / active_time -> close to 1
+vfs_fsync_time / active_time -> close to 0
+
+- [x] jbd2_active_time = cpu_runtime + wait_time + block_time ~ 0.2 
+- [x] jbd2_iowait_time / jbd2_active_time -> close to 0
 
 ### Synchronous Append
 
@@ -58,29 +99,6 @@ vfs_fsync_time / active_time -> close to 1
 
 jbd2_active_time = cpu_runtime + wait_time + block_time ~ 1 
 jbd2_iowait_time / jbd2_active_time -> close to 1
-
-### Synchronous Edit
-
-A thread continuously edits data in a file, without generating new data. The
-file is still opened with the same flags as for the previous case 
-(`O_CREAT | O_SYNC | O_WRONLY`), however the fact that the thread simply edits
-data that already exists on the disk, the amount of file metadata to be
-synchronised with the disk is reduced. This activity manifests itself with the
-iowait_time occupying most of the active_time, and there being additional
-unaccounted block_time due to the synchronisation performed by the journaling
-thread (jbd2). The jbd2 thread no longer presents bottleneck behaviour, but is
-performing useful work. As such vfs_fsync_time should be lower when compared to
-the previous case. 
-
-**Metrics**
-
-active_time = cpu_runtime + wait_time + block_time ~ 1
-iowait_time / active_time -> > 75%
-block_time / active_time -> close to 1
-vfs_fsync_time / active_time -> close to 0
-
-jbd2_active_time = cpu_runtime + wait_time + block_time ~ 0.2 
-jbd2_iowait_time / jbd2_active_time -> close to 0
 
 ### ThreadPool IO
 

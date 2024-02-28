@@ -78,7 +78,7 @@ fn handle_connection(mut stream: TcpStream) {
     let mut buf = BufReader::new(&mut stream);
     buf.fill_buf().unwrap();
     req.parse(buf.buffer()).unwrap();
-    println!("{:?}", req.method);
+    println!("{:?}: {:?}", req.method, req.path);
     match (req.path, req.method) {
         (Some("/cpu"), _) => {
             cpu_workload();
