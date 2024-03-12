@@ -5,7 +5,7 @@ import re
 import csv
 
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 
 class MetricClass(Enum): 
@@ -41,13 +41,7 @@ def transform_metrics(metrics: pd.DataFrame, metric_class: MetricClass):
         metrics["block_rate"] = metrics["block_time"].diff() / time_delta
         metrics["sleep_rate"] = metrics["sleep_time"].diff() / time_delta
         metrics["runnable"] = metrics["runtime_rate"] + metrics["rq_rate"]
-
         metrics["active_rate"] = metrics["block_rate"] + metrics["runtime_rate"] + metrics["rq_rate"]
-        metrics["[runnable/active]"] = (metrics["runtime_rate"] + metrics["rq_rate"])/metrics["active_rate"]
-        metrics["[running/active]"] = metrics["runtime_rate"]/metrics["active_rate"]
-        metrics["[rq/active]"] = metrics["rq_rate"]/metrics["active_rate"]
-        metrics["[iowait/active]"] = metrics["iowait_rate"]/metrics["active_rate"]
-        metrics["[block/active]"] = metrics["block_rate"]/metrics["active_rate"]
     else: 
         raise NotImplemented()
     metrics.dropna(inplace=True)
@@ -85,7 +79,11 @@ def load_response_times(file: str) -> pd.DataFrame:
     response_time["start_epoch_s"] = (response_time["end_epoch_s"] - response_time["duration_s"]).astype("Int64")
     return response_time
 
-def response_time_percentiles(response_times: pd.DataFrame, quantile=0.9) -> pd.DataFrame: 
+def response_time_percentiles(
+    response_times: pd.DataFrame, 
+    quantile: float = 0.9, 
+    violation_threshold: Optional[float] = None
+) -> pd.DataFrame: 
     """Convert response time samples to per second percentiles."""
     response_sorted_start = response_times.loc[
         :, ["start_epoch_s", "end_epoch_s", "duration_s"]
@@ -112,4 +110,8 @@ def response_time_percentiles(response_times: pd.DataFrame, quantile=0.9) -> pd.
             curr, 
             intersection["duration_s"].quantile(q=quantile),
         ))
-    return pd.DataFrame(temp, columns=["epoch_s", "percentile_90"])
+    percentiles = pd.DataFrame(temp, columns=["epoch_s", "percentile_value"])
+    if violation_threshold == None: 
+        return percentiles
+    percentiles['slo_violation'] = (percentiles["percentile_value"] > violation_threshold).astype("float64")
+    return percentiles
