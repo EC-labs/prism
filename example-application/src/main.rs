@@ -17,7 +17,7 @@ extern "C" {
     fn direct_read() -> ();
 }
 
-type Job = Box<dyn FnOnce() -> () + Send + 'static>;
+type Job = Box<dyn FnOnce(usize) -> () + Send + 'static>;
 
 struct Worker {
     id: usize,
@@ -33,7 +33,7 @@ impl Worker {
 
             let job = rx.lock().unwrap().recv().unwrap();
             println!("worker {:?} start", id);
-            job();
+            job(id);
             println!("worker {:?} end", id);
         });
 
@@ -65,14 +65,14 @@ impl ThreadPool {
 
     pub fn execute<F>(&self, f: F)
     where
-        F: FnOnce() -> () + Send + 'static,
+        F: FnOnce(usize) -> () + Send + 'static,
     {
         let job = Box::new(f);
         self.tx.send(job).unwrap();
     }
 }
 
-fn handle_connection(mut stream: TcpStream) {
+fn handle_connection(id: usize, mut stream: TcpStream) {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
     let mut buf = BufReader::new(&mut stream);
@@ -89,7 +89,7 @@ fn handle_connection(mut stream: TcpStream) {
             stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap()
         }
         (Some("/disk"), Some("POST")) => {
-            sync_append();
+            sync_append(id);
             stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap()
         }
         (Some("/disk"), Some("PUT")) => {
@@ -111,12 +111,13 @@ fn cpu_workload() {
     for _ in 0..100000000 {}
 }
 
-fn sync_append() {
+fn sync_append(id: usize) {
     let mut file = OpenOptions::new()
         .write(true)
+        .append(true)
         .create(true)
         .custom_flags(libc::O_SYNC)
-        .open("test")
+        .open(&format!("test_{}", id))
         .expect("Can't open file");
     for i in 0..1_000 {
         file.write_all(format!("This is write {i}\n").as_bytes())
@@ -162,8 +163,8 @@ fn main() {
     for stream in listener.incoming() {
         let stream = stream.unwrap();
 
-        pool.execute(|| {
-            handle_connection(stream);
+        pool.execute(|usize| {
+            handle_connection(usize, stream);
         });
     }
 }

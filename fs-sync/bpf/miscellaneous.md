@@ -291,6 +291,8 @@ interval:s:1
 '
 ```
 
+Succesful attempt to find the total time the process spends off-cpu after
+having entered `jbd2_log_wait_commit`.
 ```bash
 sudo bpftrace -e '
 kprobe:jbd2_log_wait_commit
@@ -325,6 +327,8 @@ interval:s:1
 '
 ```
 
+Failed attempt to find the total time the process spent off-cpu after having
+entered `jbd2_log_wait_commit`.
 ```bash
 sudo bpftrace -e '
 kprobe:jbd2_log_wait_commit
@@ -360,6 +364,8 @@ interval:s:1
 '
 ```
 
+Failed attempt to determine the total time a process spends off CPU after
+voluntarily yielding.
 ```bash
 sudo bpftrace -e '
 kprobe:schedule 
