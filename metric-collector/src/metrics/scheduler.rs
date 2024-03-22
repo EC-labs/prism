@@ -68,7 +68,7 @@ impl SchedStat {
 }
 
 impl Collect for SchedStat {
-    fn sample(&self) -> Result<Box<dyn ToCsv>> {
+    fn sample(&mut self) -> Result<Box<dyn ToCsv>> {
         let contents = fs::read_to_string(&self.proc_file)?.replace("\n", "");
         let sample = SchedStatSample::from(contents.split(" ").collect::<Vec<&str>>());
         Ok(Box::new(sample))
@@ -118,7 +118,7 @@ impl Sched {
 }
 
 impl Collect for Sched {
-    fn sample(&self) -> Result<Box<dyn ToCsv>> {
+    fn sample(&mut self) -> Result<Box<dyn ToCsv>> {
         let contents = fs::read_to_string(&self.proc_file)?;
         let sample = SchedSample::from(contents);
         Ok(Box::new(sample))

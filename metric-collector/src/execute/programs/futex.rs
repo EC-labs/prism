@@ -9,10 +9,10 @@ pub enum WaitEvent {
     Start {
         pid: usize,
         tid: usize,
-        epoch: u64,
+        epoch: u128,
     },
     Elapsed {
-        elapsed: u64,
+        elapsed: u128,
         tid: usize,
         pid: usize,
     },
@@ -95,7 +95,7 @@ impl FutexProgram {
         self.header_lines == 2
     }
 
-    pub fn poll_events(&mut self, tid: usize) -> Option<Vec<WaitEvent>> {
+    pub fn poll_events(&mut self, tid: usize) -> Result<Vec<WaitEvent>> {
         loop {
             let mut buf: [u8; 256] = [0; 256];
             let bytes = self.reader.read(&mut buf);
@@ -107,7 +107,7 @@ impl FutexProgram {
                         break;
                     }
 
-                    return None;
+                    return Err(error.into());
                 }
                 Ok(bytes) => bytes,
             };
@@ -131,7 +131,7 @@ impl FutexProgram {
                 }
             }
         }
-        self.events.remove(&tid)
+        Ok(self.events.remove(&tid).unwrap_or(Vec::new()))
     }
 }
 

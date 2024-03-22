@@ -4,7 +4,7 @@ pub mod futex;
 pub mod scheduler;
 
 pub trait Collect {
-    fn sample(&self) -> Result<Box<dyn ToCsv>>;
+    fn sample(&mut self) -> Result<Box<dyn ToCsv>>;
 
     fn store(&mut self, sample: Box<dyn ToCsv>) -> Result<()>;
 }
