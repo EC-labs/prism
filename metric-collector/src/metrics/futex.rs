@@ -49,7 +49,6 @@ impl Collect for Futex {
         let sample = FutexSample {
             cumulative_futex_wait: self.sum_futex_wait_time + time_since_wait_start,
         };
-        println!("{:?}", sample);
         Ok(Box::new(sample))
     }
 

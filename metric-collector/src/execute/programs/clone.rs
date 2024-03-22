@@ -53,7 +53,7 @@ impl Clone {
     }
 
     pub fn header_read(&self) -> bool {
-        self.header_lines == 2
+        self.header_lines == 1
     }
 
     pub fn poll_events(&mut self) -> Result<Vec<usize>> {

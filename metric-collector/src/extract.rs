@@ -1,6 +1,7 @@
 use ctrlc;
 use eyre::Result;
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -13,7 +14,7 @@ use crate::target::Target;
 pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
     config: Config,
-    targets: Vec<Target>,
+    targets: HashMap<usize, Target>,
 }
 
 impl Extractor {
@@ -21,7 +22,7 @@ impl Extractor {
         Self {
             config,
             terminate_flag: Arc::new(Mutex::new(false)),
-            targets: Vec::new(),
+            targets: HashMap::new(),
         }
     }
 
@@ -38,44 +39,61 @@ impl Extractor {
         executor
             .monitor_groups
             .iter_mut()
-            .for_each(|(pid, monitor_group)| {
+            .for_each(|(_, monitor_group)| {
                 let new_targets = monitor_group.clone.poll_events().unwrap();
+                println!("new targets: {:?}", new_targets);
                 for target in new_targets {
-                    self.targets.push(Target::new(
+                    self.targets.insert(
                         target,
-                        monitor_group.futex.clone(),
-                        &self.config.data_directory,
-                    ));
+                        Target::new(
+                            target,
+                            monitor_group.futex.clone(),
+                            &self.config.data_directory,
+                        ),
+                    );
                 }
             });
     }
 
-    fn sample_targets(&mut self) -> Result<()> {
-        self.targets
-            .iter_mut()
-            .map(|target| target.sample())
-            .collect::<Result<()>>()
+    fn sample_targets(&mut self) {
+        let mut targets_remove = Vec::new();
+        self.targets.iter_mut().for_each(|(tid, target)| {
+            if let Err(_) = target.sample() {
+                targets_remove.push(*tid)
+            }
+        });
+
+        for tid in targets_remove {
+            self.targets.remove(&tid);
+        }
     }
 
     pub fn run(mut self) -> Result<()> {
         self.register_sighandler();
         let mut executor = Executor::new();
 
-        self.targets =
-            Target::search_targets_regex("jbd2", true, &self.config.data_directory, &mut executor)?;
-        self.targets.extend(Target::search_targets_regex(
+        Target::search_targets_regex("jbd2", true, &self.config.data_directory, &mut executor)?
+            .into_iter()
+            .for_each(|target| {
+                self.targets.insert(target.tid, target);
+            });
+
+        let targets = Target::search_targets_regex(
             "thread-sync",
             false,
             &self.config.data_directory,
             &mut executor,
-        )?);
+        )?;
+        targets.into_iter().for_each(|target| {
+            self.targets.insert(target.tid, target);
+        });
 
         loop {
             if *self.terminate_flag.lock().unwrap() == true {
                 break;
             }
 
-            self.sample_targets()?;
+            self.sample_targets();
             self.register_new_targets(&mut executor);
             thread::sleep(Duration::from_millis(self.config.period));
         }

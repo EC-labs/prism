@@ -33,12 +33,14 @@ impl Error for NotFound {
 }
 
 pub struct Target {
+    pub tid: usize,
     collectors: Vec<Box<dyn Collect>>,
 }
 
 impl Target {
     pub fn new(tid: usize, futex_program: Rc<RefCell<FutexProgram>>, data_directory: &str) -> Self {
         Self {
+            tid,
             collectors: vec![
                 Box::new(SchedStat::new(tid, data_directory)),
                 Box::new(Sched::new(tid, data_directory)),
