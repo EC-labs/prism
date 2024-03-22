@@ -1,22 +1,19 @@
 use ctrlc;
 use eyre::Result;
 use std::{
-    fs,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
 use crate::configure::Config;
-use crate::metrics::{
-    scheduler::{Sched, SchedStat},
-    Collect,
-};
+use crate::execute::Executor;
 use crate::target::Target;
 
 pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
     config: Config,
+    targets: Vec<Target>,
 }
 
 impl Extractor {
@@ -24,6 +21,7 @@ impl Extractor {
         Self {
             config,
             terminate_flag: Arc::new(Mutex::new(false)),
+            targets: Vec::new(),
         }
     }
 
@@ -36,14 +34,40 @@ impl Extractor {
         .expect("Error setting Ctrl-C handler");
     }
 
-    pub fn run(self) -> Result<()> {
-        self.register_sighandler();
+    fn register_new_targets(&mut self, executor: &mut Executor) {
+        executor
+            .monitor_groups
+            .iter_mut()
+            .for_each(|(pid, monitor_group)| {
+                let new_targets = monitor_group.clone.poll_events().unwrap();
+                for target in new_targets {
+                    self.targets.push(Target::new(
+                        target,
+                        monitor_group.futex.clone(),
+                        &self.config.data_directory,
+                    ));
+                }
+            });
+    }
 
-        let mut targets = Target::search_targets_regex("jbd2", true, &self.config.data_directory)?;
-        targets.extend(Target::search_targets_regex(
-            "example-app",
+    fn sample_targets(&mut self) -> Result<()> {
+        self.targets
+            .iter_mut()
+            .map(|target| target.sample())
+            .collect::<Result<()>>()
+    }
+
+    pub fn run(mut self) -> Result<()> {
+        self.register_sighandler();
+        let mut executor = Executor::new();
+
+        self.targets =
+            Target::search_targets_regex("jbd2", true, &self.config.data_directory, &mut executor)?;
+        self.targets.extend(Target::search_targets_regex(
+            "thread-sync",
             false,
             &self.config.data_directory,
+            &mut executor,
         )?);
 
         loop {
@@ -51,11 +75,8 @@ impl Extractor {
                 break;
             }
 
-            targets
-                .iter_mut()
-                .map(|target| target.sample())
-                .collect::<Result<()>>()?;
-
+            self.sample_targets()?;
+            self.register_new_targets(&mut executor);
             thread::sleep(Duration::from_millis(self.config.period));
         }
 

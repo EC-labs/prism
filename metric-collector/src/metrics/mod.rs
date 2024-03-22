@@ -1,5 +1,6 @@
 use eyre::Result;
 
+pub mod futex;
 pub mod scheduler;
 
 pub trait Collect {

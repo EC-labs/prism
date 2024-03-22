@@ -1,15 +1,20 @@
-use crate::metrics::{
-    scheduler::{Sched, SchedStat},
-    Collect,
+use crate::{
+    execute::{programs::futex::FutexProgram, Executor},
+    metrics::{
+        futex::Futex,
+        scheduler::{Sched, SchedStat},
+        Collect,
+    },
 };
 use eyre::Result;
 use regex::Regex;
 use std::{
+    cell::RefCell,
     error::Error,
     fmt::{self, Display},
-    fs::{self, File, ReadDir},
-    io::BufReader,
+    fs,
     path::PathBuf,
+    rc::Rc,
 };
 
 #[derive(Debug)]
@@ -29,19 +34,16 @@ impl Error for NotFound {
 
 pub struct Target {
     collectors: Vec<Box<dyn Collect>>,
-    tid: usize,
-    name: String,
 }
 
 impl Target {
-    pub fn new(tid: usize, data_directory: &str) -> Self {
+    pub fn new(tid: usize, futex_program: Rc<RefCell<FutexProgram>>, data_directory: &str) -> Self {
         Self {
-            tid,
             collectors: vec![
                 Box::new(SchedStat::new(tid, data_directory)),
                 Box::new(Sched::new(tid, data_directory)),
+                Box::new(Futex::new(futex_program, tid, data_directory)),
             ],
-            name: String::from(""),
         }
     }
 
@@ -49,6 +51,7 @@ impl Target {
         name: &str,
         kthread: bool,
         data_directory: &str,
+        executor: &mut Executor,
     ) -> Result<Vec<Self>> {
         let mut targets = Vec::new();
 
@@ -61,9 +64,12 @@ impl Target {
             if let None = captures {
                 continue;
             }
-            let tid: usize = stem.parse()?;
 
-            let proc_stat = fs::read_to_string(format!("{}/stat", file_path.to_str().unwrap()))?;
+            let proc_stat = fs::read_to_string(format!("{}/stat", file_path.to_str().unwrap()));
+            if let Err(_) = proc_stat {
+                continue;
+            }
+            let proc_stat = proc_stat.unwrap();
             let mut proc_stat = proc_stat.split(" ");
             let (comm, flags) = (proc_stat.nth(1).unwrap(), proc_stat.nth(6).unwrap());
             let re = Regex::new(r"[\(\)]")?;
@@ -80,6 +86,15 @@ impl Target {
             if let None = re_match {
                 continue;
             }
+            let pid: usize = stem.parse()?;
+            executor.monitor(pid)?;
+
+            let futex_program = executor
+                .monitor_groups
+                .get(&stem.parse()?)
+                .unwrap()
+                .futex
+                .clone();
 
             targets.extend(
                 Self::get_threads(file_path)?
@@ -87,6 +102,7 @@ impl Target {
                     .map(|tid| {
                         Ok(Target::new(
                             tid,
+                            futex_program.clone(),
                             &format!("{}/{}/{}", data_directory, comm, tid),
                         ))
                     })

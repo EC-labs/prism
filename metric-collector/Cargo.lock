@@ -596,6 +596,7 @@ dependencies = [
  "ctrlc",
  "eyre",
  "indoc",
+ "libc",
  "polars",
  "regex",
 ]

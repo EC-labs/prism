@@ -1,0 +1,17 @@
+#!/home/diogo/.local/bin/bpftrace
+/* Signals when a thread enters a waiting state for a futex, and when it
+ * returns from waiting. 
+ */
+
+tracepoint:syscalls:sys_enter_clone*
+/ pid == $1 / 
+{
+    @enter[tid] = 1
+}
+
+tracepoint:syscalls:sys_exit_clone*
+/ @enter[tid] /
+{
+    printf("%ld\n", args->ret);
+    @enter[tid] = 0;
+}

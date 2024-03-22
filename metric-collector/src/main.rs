@@ -1,5 +1,6 @@
 mod cmdline;
 mod configure;
+mod execute;
 mod extract;
 mod metrics;
 mod target;
