@@ -2,6 +2,7 @@ use ctrlc;
 use eyre::Result;
 use std::{
     collections::HashMap,
+    sync::mpsc::Receiver,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -15,6 +16,7 @@ pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
     config: Config,
     targets: HashMap<usize, Target>,
+    rx_timer: Option<Receiver<bool>>,
 }
 
 impl Extractor {
@@ -23,6 +25,7 @@ impl Extractor {
             config,
             terminate_flag: Arc::new(Mutex::new(false)),
             targets: HashMap::new(),
+            rx_timer: None,
         }
     }
 
@@ -67,8 +70,26 @@ impl Extractor {
         }
     }
 
+    fn start_timer_thread(&mut self) {
+        let (tx_timer, rx_timer) = std::sync::mpsc::channel::<bool>();
+        self.rx_timer = Some(rx_timer);
+
+        let period = self.config.period;
+        let terminate_flag = self.terminate_flag.clone();
+
+        thread::spawn(move || {
+            while *terminate_flag.lock().unwrap() == false {
+                thread::sleep(Duration::from_millis(period));
+                if let Err(_) = tx_timer.send(true) {
+                    break;
+                };
+            }
+        });
+    }
+
     pub fn run(mut self) -> Result<()> {
         self.register_sighandler();
+        self.start_timer_thread();
         let mut executor = Executor::new();
 
         Target::search_targets_regex("jbd2", true, &self.config.data_directory, &mut executor)?
@@ -87,14 +108,15 @@ impl Extractor {
             self.targets.insert(target.tid, target);
         });
 
+        let rx_timer = self.rx_timer.take().unwrap();
         loop {
+            rx_timer.recv().unwrap();
             if *self.terminate_flag.lock().unwrap() == true {
                 break;
             }
 
             self.sample_targets();
             self.register_new_targets(&mut executor);
-            thread::sleep(Duration::from_millis(self.config.period));
         }
 
         Ok(())
