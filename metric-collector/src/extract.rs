@@ -41,7 +41,6 @@ impl Extractor {
             .iter_mut()
             .for_each(|(_, monitor_group)| {
                 let new_targets = monitor_group.clone.poll_events().unwrap();
-                println!("new targets: {:?}", new_targets);
                 for target in new_targets {
                     self.targets.insert(
                         target,
@@ -79,7 +78,7 @@ impl Extractor {
             });
 
         let targets = Target::search_targets_regex(
-            "thread-sync",
+            "example-app",
             false,
             &self.config.data_directory,
             &mut executor,

@@ -1,10 +1,14 @@
 use eyre::Result;
+use nix::time::{self, ClockId};
 use regex::Regex;
 use std::fmt::Debug;
 use std::fs::{self, File};
 use std::io::prelude::*;
 use std::time::UNIX_EPOCH;
-use std::{concat, time::SystemTime};
+use std::{
+    concat,
+    time::{Duration, SystemTime},
+};
 
 use super::{Collect, ToCsv};
 
@@ -168,22 +172,59 @@ impl From<String> for SchedSample {
             .as_millis();
 
         let re = Regex::new(concat!(
-            r"sum_exec_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
+            r"se.sum_exec_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
             r"sum_sleep_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
             r"sum_block_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
+            r"wait_start\s*:\s*(\d+\.\d+)\n(.*\n)*",
+            r"sleep_start\s*:\s*(\d+\.\d+)\n(.*\n)*",
+            r"block_start\s*:\s*(\d+\.\d+)\n(.*\n)*",
             r"wait_sum\s*:\s*(\d+\.\d+)\n(.*\n)*",
             r"iowait_sum\s*:\s*(\d+\.\d+)\n(.*\n)*",
         ))
         .unwrap();
         let captures = re.captures(&content).unwrap();
+        let time_since_boot =
+            Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_nanos();
+        let time_since_boot = (time_since_boot / 1_000_000) as f64;
+
+        let wait_start = &captures[7];
+        let sleep_start = &captures[9];
+        let block_start = &captures[11];
+
+        let wait_since_start = if wait_start != "0.000000" {
+            let wait_start: f64 = wait_start.parse().unwrap();
+            f64::max(time_since_boot - wait_start, 0.0)
+        } else {
+            0.0
+        };
+
+        let sleep_since_start = if sleep_start != "0.000000" {
+            let sleep_start: f64 = captures[9].parse().unwrap();
+            f64::max(time_since_boot - sleep_start, 0.0)
+        } else {
+            0.0
+        };
+
+        let block_since_start = if block_start != "0.000000" {
+            let block_start: f64 = captures[11].parse().unwrap();
+            f64::max(time_since_boot - block_start, 0.0)
+        } else {
+            0.0
+        };
+
+        let sum_runtime: f64 = captures[1].parse().unwrap();
+        let sum_sleep: f64 = captures[3].parse().unwrap();
+        let sum_block: f64 = captures[5].parse().unwrap();
+        let sum_wait: f64 = captures[13].parse().unwrap();
+        let sum_iowait: f64 = captures[15].parse().unwrap();
 
         Self {
             epoch,
-            runtime: captures[1].parse().unwrap(),
-            sleep_time: captures[3].parse().unwrap(),
-            block_time: captures[5].parse().unwrap(),
-            rq_time: captures[7].parse().unwrap(),
-            iowait_time: captures[9].parse().unwrap(),
+            runtime: sum_runtime,
+            sleep_time: sum_sleep + sleep_since_start,
+            block_time: sum_block + block_since_start,
+            rq_time: sum_wait + wait_since_start,
+            iowait_time: sum_iowait,
         }
     }
 }
