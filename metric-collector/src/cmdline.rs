@@ -5,11 +5,11 @@ pub fn register_args() -> Command {
         .next_line_help(true)
         .arg(
             Arg::new("pid")
-                .required(true)
+                .required(false)
                 .long("pid")
                 .action(ArgAction::Set)
                 .value_parser(value_parser!(usize))
-                .help("The main process to monitor"),
+                .help("PID of the main process to monitor"),
         )
         .arg(
             Arg::new("period")
@@ -18,14 +18,21 @@ pub fn register_args() -> Command {
                 .long("period")
                 .action(ArgAction::Set)
                 .value_parser(value_parser!(u64))
-                .help("The main process to monitor"),
+                .help("Sleep time between two consecutive samples"),
         )
         .arg(
-            Arg::new("data_directory")
+            Arg::new("data-directory")
                 .required(false)
                 .default_value("./data")
-                .long("data_directory")
+                .long("data-directory")
                 .action(ArgAction::Set)
-                .help("The main process to monitor"),
+                .help("Root directory where data should be stored"),
+        )
+        .arg(
+            Arg::new("process-name")
+                .required(false)
+                .long("process-name")
+                .action(ArgAction::Set)
+                .help("Name of the target process"),
         )
 }

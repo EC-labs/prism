@@ -2,14 +2,16 @@ use chrono::prelude::*;
 use clap::ArgMatches;
 
 pub struct Config {
-    pub pid: usize,
+    pub pid: Option<usize>,
     pub period: u64,
     pub data_directory: String,
+    pub process_name: Option<String>,
 }
 
 impl From<ArgMatches> for Config {
     fn from(mut matches: ArgMatches) -> Self {
-        let pid = matches.remove_one::<usize>("pid").expect("Required field");
+        let pid = matches.remove_one::<usize>("pid");
+        let process_name = matches.remove_one::<String>("process-name");
         let period: u64 = matches
             .remove_one::<u64>("period")
             .expect("Missing period")
@@ -18,7 +20,7 @@ impl From<ArgMatches> for Config {
 
         let utc: DateTime<Utc> = Utc::now();
         let mut data_directory = matches
-            .remove_one::<String>("data_directory")
+            .remove_one::<String>("data-directory")
             .expect("Required field");
         data_directory += &format!("/{}", utc.to_rfc3339());
 
@@ -26,6 +28,7 @@ impl From<ArgMatches> for Config {
             pid,
             period,
             data_directory,
+            process_name,
         }
     }
 }

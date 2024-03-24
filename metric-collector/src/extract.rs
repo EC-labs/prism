@@ -78,7 +78,7 @@ impl Extractor {
             });
 
         let targets = Target::search_targets_regex(
-            "example-app",
+            self.config.process_name.as_ref().unwrap(),
             false,
             &self.config.data_directory,
             &mut executor,
