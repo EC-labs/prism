@@ -71,7 +71,7 @@ def metric_files_to_df(files: list[str]) -> pd.DataFrame:
     return metrics
 
 def load_response_times(file: str) -> pd.DataFrame: 
-    response_time = pd.read_csv("../data/response_time.csv")
+    response_time = pd.read_csv(file)
     response_time["end_epoch_s"] = (
         pd.to_datetime(response_time["end_ts"]).astype("int64")//1e9
     ).astype("Int64")

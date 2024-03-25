@@ -53,7 +53,10 @@ impl FutexProgram {
         let (mut reader, writer) = super::pipe();
         super::fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
         let child = Command::new("bpftrace")
-            .args(["./src/bpf/futex_wait.bt", &format!("{}", pid)])
+            .args([
+                "./metric-collector/src/bpf/futex_wait.bt",
+                &format!("{}", pid),
+            ])
             .stdout(writer)
             .spawn()?;
         Ok(Self {

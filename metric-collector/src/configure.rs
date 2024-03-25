@@ -22,7 +22,7 @@ impl From<ArgMatches> for Config {
         let mut data_directory = matches
             .remove_one::<String>("data-directory")
             .expect("Required field");
-        data_directory += &format!("/{}", utc.to_rfc3339());
+        data_directory += &format!("/{}/system-metrics", utc.to_rfc3339());
 
         Self {
             pid,
