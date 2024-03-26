@@ -79,7 +79,6 @@ impl Clone {
                 self.handle_header(&mut iterator);
             }
             while let Some(event) = self.handle_event(&mut iterator) {
-                println!("{:?}", event);
                 let tid = String::from_utf8(event)?;
                 let tid: usize = tid.parse()?;
                 res.push(tid);
