@@ -44,13 +44,13 @@ impl Extractor {
             .iter_mut()
             .for_each(|(_, monitor_group)| {
                 let new_targets = monitor_group.clone.poll_events().unwrap();
-                for target in new_targets {
+                for (comm, tid) in new_targets {
                     self.targets.insert(
-                        target,
+                        tid,
                         Target::new(
-                            target,
+                            tid,
                             monitor_group.futex.clone(),
-                            &self.config.data_directory,
+                            &format!("{}/{}/{}", &self.config.data_directory, comm, tid),
                         ),
                     );
                 }

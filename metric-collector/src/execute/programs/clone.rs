@@ -1,6 +1,7 @@
 use eyre::Result;
 use std::io::ErrorKind;
 use std::process::{Child, Command};
+use std::rc::Rc;
 use std::{fs::File, io::prelude::*};
 
 pub struct Clone {
@@ -56,7 +57,7 @@ impl Clone {
         self.header_lines == 1
     }
 
-    pub fn poll_events(&mut self) -> Result<Vec<usize>> {
+    pub fn poll_events(&mut self) -> Result<Vec<(Rc<str>, usize)>> {
         let mut res = Vec::new();
         loop {
             let mut buf: [u8; 256] = [0; 256];
@@ -79,9 +80,11 @@ impl Clone {
                 self.handle_header(&mut iterator);
             }
             while let Some(event) = self.handle_event(&mut iterator) {
-                let tid = String::from_utf8(event)?;
-                let tid: usize = tid.parse()?;
-                res.push(tid);
+                let event = String::from_utf8(event)?;
+                let mut elements = event.split("\t");
+                let comm = Rc::from(elements.next().unwrap());
+                let tid: usize = elements.next().unwrap().parse()?;
+                res.push((comm, tid));
             }
         }
         Ok(res)
