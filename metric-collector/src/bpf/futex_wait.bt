@@ -6,32 +6,77 @@
 #include <linux/futex.h>
 
 BEGIN {
-    printf("%-10s\t%20s\t%20s\t%20s\n", 
-           "EVENT_TYPE", "PID", "THREAD-ID", "VALUE");
+    @pids[$1] = 1;
 }
 
 tracepoint:syscalls:sys_enter_futex 
-/ pid == $1 /
 {
     /* We want to account for all waits */
-    $op = args->op^FUTEX_PRIVATE_FLAG;
+    $task = curtask->group_leader;
+    $uaddr = args->uaddr;
+    $root_pid = 0;
+    $i = 0;
+    while(($root_pid == 0) && ($i < 100)) {
+        if(!($task->flags & PF_FORKNOEXEC)) {
+            $root_pid = $task->pid;
+            break;
+        }
 
-    if ($op == FUTEX_WAIT_BITSET || $op == FUTEX_WAIT) {
-        @start[tid] = nsecs;
-        printf("%-10s\t%20lld\t%20lld\t%20lld\n", 
-               "start", pid, tid, @start[tid]);
+        $task = $task->parent;
+        $i += 1;
+    }
+    
+    if ($root_pid == 0) {
+        return;
+    }
+
+    if (@futex[$root_pid, $uaddr] && !@pids[pid]) {
+        printf("%-10s\t%lld\n", "NewProcess", pid);
+        @pids[pid] = 1;
+    }
+
+    if (!@pids[pid]) {
+        return;
+    }
+
+    if (!@futex[$root_pid, $uaddr]) {
+        @futex[$root_pid, $uaddr] = 1;
+    }
+    
+    $op = args->op&(~FUTEX_PRIVATE_FLAG);
+    $op = $op&(~FUTEX_CLOCK_REALTIME);
+    if (($op == FUTEX_WAIT_BITSET) || ($op == FUTEX_WAIT)) {
+        @start[tid] = (nsecs, $root_pid, $uaddr);
+        printf("%-10s\t%20lld\t%lld\t%lx\t%20lld\n", 
+               "WaitStart", tid, $root_pid, $uaddr, @start[tid].0);
+    } else if (($op == FUTEX_WAKE) || ($op == FUTEX_WAKE_BITSET)) {
+        @wake[tid] = (nsecs, $root_pid, $uaddr);
+    } else {
+        printf("%-10s\t%d\n", "UnhandledOpcode", args->op);
     }
 }
 
 tracepoint:syscalls:sys_exit_futex 
-/ @start[tid] / 
 {
-    $diff = (uint64)(nsecs - @start[tid]);
-    @start[tid] = 0;
-    printf("%-10s\t%20lld\t%20lld\t%20lld\n", 
-           "elapsed", pid, tid, $diff);
+    if (@start[tid].0) {
+        $data = @start[tid];
+        $diff = (uint64)(nsecs - $data.0);
+        printf("%-10s\t%20lld\t%lld\t%lx\t%20lld\t%d\n", 
+               "WaitElapsed", tid, $data.1, $data.2, $diff, args->ret);
+        delete(@start[tid]);
+    }
+
+    if (@wake[tid].0) {
+        $data = @wake[tid];
+        printf("%-10s\t%20lld\t%lld\t%lx\t%20lld\t%d\n", 
+               "Wake", tid, $data.1, $data.2, $data.0, args->ret);
+        delete(@wake[tid]);
+    }
 }
 
 END {
     clear(@start);
+    clear(@pids);
+    clear(@futex);
+    clear(@wake);
 }

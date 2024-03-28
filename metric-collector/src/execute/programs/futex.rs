@@ -2,40 +2,76 @@ use eyre::Result;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::process::{Child, Command};
+use std::rc::Rc;
 use std::{fs::File, io::prelude::*};
 
 #[derive(Debug)]
-pub enum WaitEvent {
+pub enum FutexEvent {
     Start {
-        pid: usize,
         tid: usize,
-        epoch: u128,
+        root_pid: usize,
+        uaddr: Rc<str>,
+        ns_since_boot: u128,
     },
     Elapsed {
-        elapsed: u128,
         tid: usize,
+        root_pid: usize,
+        uaddr: Rc<str>,
+        ns_elapsed: u128,
+        ret: i32,
+    },
+    Wake {
+        tid: usize,
+        root_pid: usize,
+        uaddr: Rc<str>,
+        ns_since_boot: u128,
+        ret: i32,
+    },
+    NewProcess {
         pid: usize,
+    },
+    UnhandledOpcode {
+        opcode: String,
+    },
+    Unexpected {
+        data: String,
     },
 }
 
-impl From<Vec<u8>> for WaitEvent {
+impl From<Vec<u8>> for FutexEvent {
     fn from(value: Vec<u8>) -> Self {
         let event_string = String::from_utf8(value).unwrap();
         let event_string = event_string.replace(" ", "");
 
-        let elements: Vec<&str> = event_string.split("\t").collect();
-        if elements[0] == "elapsed" {
-            Self::Elapsed {
-                pid: elements[1].parse().unwrap(),
-                tid: elements[2].parse().unwrap(),
-                elapsed: elements[3].parse().unwrap(),
-            }
-        } else {
-            Self::Start {
-                pid: elements[1].parse().unwrap(),
-                tid: elements[2].parse().unwrap(),
-                epoch: elements[3].parse().unwrap(),
-            }
+        let mut elements = event_string.split("\t");
+        match elements.next().unwrap() {
+            "WaitStart" => Self::Start {
+                tid: elements.next().unwrap().parse().unwrap(),
+                root_pid: elements.next().unwrap().parse().unwrap(),
+                uaddr: Rc::from(elements.next().unwrap()),
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
+            },
+            "WaitElapsed" => Self::Elapsed {
+                tid: elements.next().unwrap().parse().unwrap(),
+                root_pid: elements.next().unwrap().parse().unwrap(),
+                uaddr: Rc::from(elements.next().unwrap()),
+                ns_elapsed: elements.next().unwrap().parse().unwrap(),
+                ret: elements.next().unwrap().parse().unwrap(),
+            },
+            "Wake" => Self::Wake {
+                tid: elements.next().unwrap().parse().unwrap(),
+                root_pid: elements.next().unwrap().parse().unwrap(),
+                uaddr: Rc::from(elements.next().unwrap()),
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
+                ret: elements.next().unwrap().parse().unwrap(),
+            },
+            "UnhandledOpcode" => Self::UnhandledOpcode {
+                opcode: elements.next().unwrap().into(),
+            },
+            "NewProcess" => Self::NewProcess {
+                pid: elements.next().unwrap().parse().unwrap(),
+            },
+            _ => Self::Unexpected { data: event_string },
         }
     }
 }
@@ -43,7 +79,7 @@ impl From<Vec<u8>> for WaitEvent {
 pub struct FutexProgram {
     child: Child,
     reader: File,
-    events: HashMap<usize, Vec<WaitEvent>>,
+    events: HashMap<usize, Vec<FutexEvent>>,
     header_lines: u8,
     current_event: Option<Vec<u8>>,
 }
@@ -95,10 +131,10 @@ impl FutexProgram {
     }
 
     fn header_read(&self) -> bool {
-        self.header_lines == 2
+        self.header_lines == 1
     }
 
-    pub fn poll_events(&mut self, tid: usize) -> Result<Vec<WaitEvent>> {
+    pub fn poll_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
         loop {
             let mut buf: [u8; 256] = [0; 256];
             let bytes = self.reader.read(&mut buf);
@@ -120,9 +156,11 @@ impl FutexProgram {
                 self.handle_header(&mut iterator);
             }
             while let Some(event) = self.handle_event(&mut iterator) {
-                let event = WaitEvent::from(event);
+                let event = FutexEvent::from(event);
                 match &event {
-                    WaitEvent::Start { tid, .. } | WaitEvent::Elapsed { tid, .. } => {
+                    FutexEvent::Start { tid, .. }
+                    | FutexEvent::Elapsed { tid, .. }
+                    | FutexEvent::Wake { tid, .. } => {
                         let tid_events = self.events.get_mut(tid);
                         if let None = tid_events {
                             self.events.insert(*tid, Vec::new());
@@ -130,6 +168,15 @@ impl FutexProgram {
 
                         let tid_events = self.events.get_mut(tid).unwrap();
                         tid_events.push(event);
+                    }
+                    FutexEvent::NewProcess { .. } => {
+                        todo!();
+                    }
+                    FutexEvent::UnhandledOpcode { .. } => {
+                        println!("Futex unhandled opcode. {:?}", event);
+                    }
+                    FutexEvent::Unexpected { .. } => {
+                        println!("Futex unexpected event. {:?}", event);
                     }
                 }
             }
