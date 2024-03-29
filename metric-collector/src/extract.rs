@@ -50,7 +50,8 @@ impl Extractor {
                         Target::new(
                             tid,
                             monitor_group.futex.clone(),
-                            &format!("{}/{}/{}", &self.config.data_directory, comm, tid),
+                            self.config.data_directory.clone(),
+                            &format!("{}/{}", comm, tid),
                         ),
                     );
                 }
@@ -92,16 +93,20 @@ impl Extractor {
         self.start_timer_thread();
         let mut executor = Executor::new();
 
-        Target::search_targets_regex("jbd2", true, &self.config.data_directory, &mut executor)?
-            .into_iter()
-            .for_each(|target| {
-                self.targets.insert(target.tid, target);
-            });
+        let targets = Target::search_targets_regex(
+            "jbd2",
+            true,
+            self.config.data_directory.clone(),
+            &mut executor,
+        )?;
+        targets.into_iter().for_each(|target| {
+            self.targets.insert(target.tid, target);
+        });
 
         let targets = Target::search_targets_regex(
             self.config.process_name.as_ref().unwrap(),
             false,
-            &self.config.data_directory,
+            self.config.data_directory.clone(),
             &mut executor,
         )?;
         targets.into_iter().for_each(|target| {

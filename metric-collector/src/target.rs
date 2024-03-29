@@ -38,13 +38,29 @@ pub struct Target {
 }
 
 impl Target {
-    pub fn new(tid: usize, futex_program: Rc<RefCell<FutexProgram>>, data_directory: &str) -> Self {
+    pub fn new(
+        tid: usize,
+        futex_program: Rc<RefCell<FutexProgram>>,
+        root_directory: Rc<str>,
+        target_subdirectory: &str,
+    ) -> Self {
         Self {
             tid,
             collectors: vec![
-                Box::new(SchedStat::new(tid, data_directory)),
-                Box::new(Sched::new(tid, data_directory)),
-                Box::new(Futex::new(futex_program, tid, data_directory)),
+                Box::new(SchedStat::new(
+                    tid,
+                    &format!("{}/{}", root_directory, target_subdirectory),
+                )),
+                Box::new(Sched::new(
+                    tid,
+                    &format!("{}/{}", root_directory, target_subdirectory),
+                )),
+                Box::new(Futex::new(
+                    futex_program,
+                    tid,
+                    root_directory,
+                    target_subdirectory,
+                )),
             ],
         }
     }
@@ -52,7 +68,7 @@ impl Target {
     pub fn search_targets_regex(
         name: &str,
         kthread: bool,
-        data_directory: &str,
+        data_directory: Rc<str>,
         executor: &mut Executor,
     ) -> Result<Vec<Self>> {
         let mut targets = Vec::new();
@@ -105,7 +121,8 @@ impl Target {
                         Ok(Target::new(
                             tid,
                             futex_program.clone(),
-                            &format!("{}/{}/{}", data_directory, comm, tid),
+                            data_directory.clone(),
+                            &format!("{}/{}", comm, tid),
                         ))
                     })
                     .collect::<Result<Vec<Target>>>()?,

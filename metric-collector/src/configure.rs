@@ -1,10 +1,11 @@
 use chrono::prelude::*;
 use clap::ArgMatches;
+use std::rc::Rc;
 
 pub struct Config {
     pub pid: Option<usize>,
     pub period: u64,
-    pub data_directory: String,
+    pub data_directory: Rc<str>,
     pub process_name: Option<String>,
 }
 
@@ -27,7 +28,7 @@ impl From<ArgMatches> for Config {
         Self {
             pid,
             period,
-            data_directory,
+            data_directory: Rc::from(data_directory),
             process_name,
         }
     }

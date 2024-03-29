@@ -12,5 +12,5 @@ pub trait Collect {
 pub trait ToCsv {
     fn to_csv_row(&self) -> (u128, String);
 
-    fn csv_headers(&self) -> String;
+    fn csv_headers(&self) -> &'static str;
 }

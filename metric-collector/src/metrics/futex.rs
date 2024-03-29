@@ -1,48 +1,153 @@
 use eyre::Result;
+use lru::LruCache;
 use nix::time::{self, ClockId};
 use std::{
     cell::RefCell,
+    error::Error,
+    fmt,
     fs::{self, File},
     io::prelude::*,
+    num::NonZeroUsize,
+    path::Path,
     rc::Rc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use super::{Collect, ToCsv};
-use crate::execute::programs::futex::{FutexEvent, FutexProgram};
+use crate::execute::programs::futex::{FutexEvent, FutexProgram, BOOT_EPOCH_NS};
+
+#[derive(Debug)]
+struct UnwritableEvent;
+
+impl fmt::Display for UnwritableEvent {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
+impl Error for UnwritableEvent {
+    fn description(&self) -> &str {
+        "Event is not writable"
+    }
+}
 
 pub struct Futex {
     futex_program: Rc<RefCell<FutexProgram>>,
     tid: usize,
     sum_futex_wait_time: u128,
     futex_wait_start: Option<u128>,
-    boot_epoch_ns: u128,
     events: Option<Vec<FutexEvent>>,
-    day_epoch: Option<u128>,
-    data_file: Option<File>,
-    data_directory: String,
+    current_start: Option<FutexEvent>,
+    data_files: LruCache<String, File>,
+    target_subdirectory: String,
+    root_directory: Rc<str>,
 }
 
 impl Futex {
-    pub fn new(futex_program: Rc<RefCell<FutexProgram>>, tid: usize, data_directory: &str) -> Self {
-        let ns_since_boot =
-            Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_nanos();
-        let start = SystemTime::now();
-        let ns_since_epoch = start
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_nanos();
+    pub fn new(
+        futex_program: Rc<RefCell<FutexProgram>>,
+        tid: usize,
+        root_directory: Rc<str>,
+        target_subdirectory: &str,
+    ) -> Self {
         Self {
             futex_program,
             tid,
             sum_futex_wait_time: 0,
             futex_wait_start: None,
-            boot_epoch_ns: ns_since_epoch - ns_since_boot,
             events: None,
-            day_epoch: None,
-            data_file: None,
-            data_directory: format!("{}/futex", data_directory),
+            current_start: None,
+            data_files: LruCache::new(NonZeroUsize::new(4).unwrap()),
+            target_subdirectory: format!("{}/{}/futex", root_directory, target_subdirectory),
+            root_directory: root_directory.clone(),
         }
+    }
+
+    fn get_or_create_file(&mut self, filepath: &Path, headers: &str) -> Result<&File> {
+        let file = self.data_files.get(filepath.to_str().unwrap());
+        if let None = file {
+            let file = File::options().append(true).open(filepath);
+            let file = match file {
+                Err(_) => {
+                    fs::create_dir_all(filepath.parent().unwrap())?;
+                    let mut file = File::options().append(true).create(true).open(filepath)?;
+                    file.write_all(headers.as_bytes())?;
+                    file
+                }
+                Ok(file) => file,
+            };
+            self.data_files.put(filepath.to_str().unwrap().into(), file);
+        }
+
+        let file = self.data_files.get(filepath.to_str().unwrap());
+        Ok(file.unwrap())
+    }
+
+    fn store_sample(&mut self, sample: Box<dyn ToCsv>) -> Result<()> {
+        let (epoch, row) = sample.to_csv_row();
+        let day_epoch = (epoch / (1000 * 60 * 60 * 24)) * (1000 * 60 * 60 * 24);
+        let filepath = format!("{}/{}.csv", self.target_subdirectory, day_epoch);
+        let filepath = Path::new(&filepath);
+        let mut file = self.get_or_create_file(filepath, &sample.csv_headers())?;
+        file.write_all(row.as_bytes())?;
+
+        Ok(())
+    }
+
+    fn write_event(&mut self, event: &FutexEvent) -> Result<()> {
+        let filename = match event {
+            FutexEvent::Elapsed { ns_since_boot, .. } => {
+                let epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
+                let epoch_minute_s = (epoch_ns / (1_000_000_000 * 60)) * 60;
+                format!(
+                    "{}/futex/wait/{}/{}.csv",
+                    self.root_directory, self.tid, epoch_minute_s,
+                )
+            }
+            FutexEvent::Wake {
+                root_pid,
+                uaddr,
+                ns_since_boot,
+                ..
+            } => {
+                let epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
+                let epoch_minute_s = (epoch_ns / (1_000_000_000 * 60)) * 60;
+                format!(
+                    "{}/futex/wake/{}/{}/{}.csv",
+                    self.root_directory, root_pid, uaddr, epoch_minute_s,
+                )
+            }
+            _ => return Err(UnwritableEvent.into()),
+        };
+
+        let mut file = self.get_or_create_file(&Path::new(&filename), event.csv_headers())?;
+        file.write_all(event.to_csv_row().1.as_bytes())?;
+        Ok(())
+    }
+
+    fn store_events(&mut self) -> Result<()> {
+        for event in self.events.take().unwrap() {
+            match event {
+                FutexEvent::Start { .. } => {
+                    self.current_start = Some(event);
+                }
+                FutexEvent::Elapsed { ret, .. } => {
+                    // Store start and elapsed events
+                    let write_event = self.current_start.take().unwrap();
+                    if ret == 0 {
+                        self.write_event(&write_event)?;
+                        self.write_event(&event)?;
+                    }
+                }
+                FutexEvent::Wake { ret, .. } => {
+                    if ret > 0 {
+                        self.write_event(&event)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -84,27 +189,8 @@ impl Collect for Futex {
     }
 
     fn store(&mut self, sample: Box<dyn ToCsv>) -> Result<()> {
-        let (epoch, row) = sample.to_csv_row();
-        let day_epoch = (epoch / (1000 * 60 * 60 * 24)) * (1000 * 60 * 60 * 24);
-
-        if Some(day_epoch) != self.day_epoch {
-            let filepath = format!("{}/{}.csv", self.data_directory, day_epoch);
-            fs::create_dir_all(&self.data_directory)?;
-            self.day_epoch = Some(day_epoch);
-            let file = File::options().append(true).open(&filepath);
-            let file = match file {
-                Err(_) => {
-                    let mut file = File::options().append(true).create(true).open(&filepath)?;
-                    file.write_all(sample.csv_headers().as_bytes())?;
-                    file
-                }
-                Ok(file) => file,
-            };
-            self.data_file = Some(file);
-        }
-        self.data_file.as_ref().unwrap().write_all(row.as_bytes())?;
-
-        Ok(())
+        self.store_sample(sample)?;
+        self.store_events()
     }
 }
 
@@ -115,8 +201,8 @@ struct FutexSample {
 }
 
 impl ToCsv for FutexSample {
-    fn csv_headers(&self) -> String {
-        String::from("epoch_ms,futex_wait\n")
+    fn csv_headers(&self) -> &'static str {
+        "epoch_ms,futex_wait\n"
     }
 
     fn to_csv_row(&self) -> (u128, String) {

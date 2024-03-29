@@ -1,9 +1,16 @@
 use eyre::Result;
+use nix::time::{self, ClockId};
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::process::{Child, Command};
 use std::rc::Rc;
+use std::sync::RwLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs::File, io::prelude::*};
+
+use crate::metrics::ToCsv;
+
+pub static BOOT_EPOCH_NS: RwLock<u128> = RwLock::new(0);
 
 #[derive(Debug)]
 pub enum FutexEvent {
@@ -17,6 +24,7 @@ pub enum FutexEvent {
         tid: usize,
         root_pid: usize,
         uaddr: Rc<str>,
+        ns_since_boot: u128,
         ns_elapsed: u128,
         ret: i32,
     },
@@ -55,6 +63,7 @@ impl From<Vec<u8>> for FutexEvent {
                 tid: elements.next().unwrap().parse().unwrap(),
                 root_pid: elements.next().unwrap().parse().unwrap(),
                 uaddr: Rc::from(elements.next().unwrap()),
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
                 ns_elapsed: elements.next().unwrap().parse().unwrap(),
                 ret: elements.next().unwrap().parse().unwrap(),
             },
@@ -76,6 +85,59 @@ impl From<Vec<u8>> for FutexEvent {
     }
 }
 
+impl ToCsv for FutexEvent {
+    fn to_csv_row(&self) -> (u128, String) {
+        match self {
+            FutexEvent::Wake {
+                tid,
+                root_pid,
+                uaddr,
+                ns_since_boot,
+                ..
+            } => {
+                let epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
+                (
+                    epoch_ns,
+                    format!("{},{},{},{}\n", epoch_ns, tid, root_pid, uaddr,),
+                )
+            }
+            FutexEvent::Elapsed {
+                tid,
+                root_pid,
+                uaddr,
+                ns_since_boot,
+                ns_elapsed,
+                ..
+            } => {
+                let end_epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
+                let start_epoch_ns = end_epoch_ns - ns_elapsed;
+                (
+                    end_epoch_ns,
+                    format!(
+                        "{},{},{},{},{},{}\n",
+                        start_epoch_ns, end_epoch_ns, ns_elapsed, tid, root_pid, uaddr,
+                    ),
+                )
+            }
+            _ => {
+                todo!()
+            }
+        }
+    }
+
+    fn csv_headers(&self) -> &'static str {
+        match self {
+            FutexEvent::Wake { .. } => "epoch_ns,tid,root_pid,uaddr\n",
+            FutexEvent::Elapsed { .. } => {
+                "start_epoch_ns,end_epoch_ns,elapsed_ns,tid,root_pid,uaddr\n"
+            }
+            _ => {
+                todo!()
+            }
+        }
+    }
+}
+
 pub struct FutexProgram {
     child: Child,
     reader: File,
@@ -86,6 +148,17 @@ pub struct FutexProgram {
 
 impl FutexProgram {
     pub fn new(pid: usize) -> Result<Self> {
+        if *BOOT_EPOCH_NS.read().unwrap() == 0 {
+            let ns_since_boot =
+                Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_nanos();
+            let start = SystemTime::now();
+            let ns_since_epoch = start
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_nanos();
+            *BOOT_EPOCH_NS.write().unwrap() = ns_since_epoch - ns_since_boot;
+        }
+
         let (mut reader, writer) = super::pipe();
         super::fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
         let child = Command::new("bpftrace")
