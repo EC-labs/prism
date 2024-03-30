@@ -1,10 +1,20 @@
 #!/home/diogo/.local/bin/bpftrace
+
 #include <linux/stat.h>
 #include <linux/fs.h>
 
-BEGIN 
+tracepoint:syscalls:sys_enter_access
+/ pid == $1 /
 {
-    @pids[$1] = 1;
+    $filename = str(args->filename);
+    if ($filename != "metric-collector-new-pid") {
+        return;
+    }
+
+    $new_pid = (uint32) args->mode;
+    if (!@pids[$new_pid]) {
+        @pids[$new_pid] = 1;
+    }
 }
 
 kfunc:vmlinux:vfs_read

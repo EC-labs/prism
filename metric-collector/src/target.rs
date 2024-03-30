@@ -101,15 +101,9 @@ impl Target {
                 continue;
             }
             let pid: usize = stem.parse()?;
-            executor.monitor(pid)?;
+            executor.monitor(pid);
 
-            let futex_program = executor
-                .monitor_groups
-                .get(&stem.parse()?)
-                .unwrap()
-                .futex
-                .clone();
-
+            let futex_program = executor.futex.clone();
             targets.extend(
                 Self::get_threads(file_path)?
                     .into_iter()

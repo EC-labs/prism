@@ -1,38 +1,40 @@
 use eyre::Result;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::ffi::CString;
+use std::{cell::RefCell, rc::Rc};
 
 pub mod programs;
 
 use programs::clone::Clone;
 use programs::futex::FutexProgram;
 
-pub struct MonitorGroup {
+pub struct Executor {
     pub clone: Clone,
     pub futex: Rc<RefCell<FutexProgram>>,
 }
 
-impl MonitorGroup {
-    fn new(pid: usize) -> Result<Self> {
-        Ok(MonitorGroup {
-            clone: Clone::new(pid)?,
-            futex: Rc::new(RefCell::new(FutexProgram::new(pid)?)),
+impl Executor {
+    pub fn new() -> Result<Self> {
+        let pid = std::process::id();
+        let mut clone = Clone::new(pid)?;
+        let mut futex = FutexProgram::new(pid)?;
+
+        while (true, true) != (clone.header_read(), futex.header_read()) {
+            clone.poll_events()?;
+            futex.poll_events()?;
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+        }
+
+        Ok(Executor {
+            clone,
+            futex: Rc::new(RefCell::new(futex)),
         })
     }
-}
 
-pub struct Executor {
-    pub monitor_groups: HashMap<usize, MonitorGroup>,
-}
-
-impl Executor {
-    pub fn new() -> Self {
-        Executor {
-            monitor_groups: HashMap::new(),
+    pub fn monitor(&mut self, pid: usize) {
+        println!("Monitoring new process {}", pid);
+        let event_id = CString::new("metric-collector-new-pid").unwrap();
+        unsafe {
+            libc::access(event_id.as_ptr(), pid as i32);
         }
-    }
-
-    pub fn monitor(&mut self, pid: usize) -> Result<()> {
-        self.monitor_groups.insert(pid, MonitorGroup::new(pid)?);
-        Ok(())
     }
 }

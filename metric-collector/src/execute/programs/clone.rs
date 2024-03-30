@@ -12,7 +12,7 @@ pub struct Clone {
 }
 
 impl Clone {
-    pub fn new(pid: usize) -> Result<Self> {
+    pub fn new(pid: u32) -> Result<Self> {
         let (mut reader, writer) = super::pipe();
         super::fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
         let child = Command::new("bpftrace")

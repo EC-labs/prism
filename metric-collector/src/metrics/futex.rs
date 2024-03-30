@@ -131,10 +131,8 @@ impl Futex {
                     self.current_start = Some(event);
                 }
                 FutexEvent::Elapsed { ret, .. } => {
-                    // Store start and elapsed events
-                    let write_event = self.current_start.take().unwrap();
+                    self.current_start.take().unwrap();
                     if ret == 0 {
-                        self.write_event(&write_event)?;
                         self.write_event(&event)?;
                     }
                 }
@@ -154,7 +152,7 @@ impl Collect for Futex {
     fn sample(&mut self) -> Result<()> {
         let time_since_boot =
             Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME)?).as_nanos();
-        self.events = Some(self.futex_program.borrow_mut().poll_events(self.tid)?);
+        self.events = Some(self.futex_program.borrow_mut().get_events(self.tid)?);
         for event in self.events.as_ref().unwrap() {
             match event {
                 FutexEvent::Start { ns_since_boot, .. } => {

@@ -3,8 +3,22 @@
  * returns from waiting. 
  */
 
+tracepoint:syscalls:sys_enter_access
+/ pid == $1 /
+{
+    $filename = str(args->filename);
+    if ($filename != "metric-collector-new-pid") {
+        return;
+    }
+
+    $new_pid = args->mode;
+    if (!@pids[$new_pid]) {
+        @pids[$new_pid] = 1;
+    }
+}
+
 tracepoint:syscalls:sys_enter_clone*
-/ pid == $1 / 
+/ @pids[pid] / 
 {
     @enter[tid] = 1
 }

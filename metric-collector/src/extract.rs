@@ -40,28 +40,33 @@ impl Extractor {
 
     fn register_new_targets(&mut self, executor: &mut Executor) {
         executor
-            .monitor_groups
-            .iter_mut()
-            .for_each(|(_, monitor_group)| {
-                let new_targets = monitor_group.clone.poll_events().unwrap();
-                for (comm, tid) in new_targets {
-                    self.targets.insert(
-                        tid,
-                        Target::new(
-                            tid,
-                            monitor_group.futex.clone(),
-                            self.config.data_directory.clone(),
-                            &format!("{}/{}", comm, tid),
-                        ),
-                    );
+            .clone
+            .poll_events()
+            .unwrap()
+            .into_iter()
+            .for_each(|(comm, tid)| {
+                if let Some(_) = self.targets.get(&tid) {
+                    return;
                 }
-            });
+
+                println!("Register new target {}", tid);
+                self.targets.insert(
+                    tid,
+                    Target::new(
+                        tid,
+                        executor.futex.clone(),
+                        self.config.data_directory.clone(),
+                        &format!("{}/{}", comm, tid),
+                    ),
+                );
+            })
     }
 
     fn sample_targets(&mut self) {
         let mut targets_remove = Vec::new();
         self.targets.iter_mut().for_each(|(tid, target)| {
             if let Err(_) = target.sample() {
+                println!("Remove target {tid}");
                 targets_remove.push(*tid)
             }
         });
@@ -91,8 +96,7 @@ impl Extractor {
     pub fn run(mut self) -> Result<()> {
         self.register_sighandler();
         self.start_timer_thread();
-        let mut executor = Executor::new();
-
+        let mut executor = Executor::new()?;
         let targets = Target::search_targets_regex(
             "jbd2",
             true,

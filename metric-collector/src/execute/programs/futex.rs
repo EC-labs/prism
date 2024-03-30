@@ -141,7 +141,7 @@ pub struct FutexProgram {
 }
 
 impl FutexProgram {
-    pub fn new(pid: usize) -> Result<Self> {
+    pub fn new(pid: u32) -> Result<Self> {
         if *BOOT_EPOCH_NS.read().unwrap() == 0 {
             let ns_since_boot =
                 Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_nanos();
@@ -197,11 +197,11 @@ impl FutexProgram {
         return None;
     }
 
-    fn header_read(&self) -> bool {
+    pub fn header_read(&self) -> bool {
         self.header_lines == 1
     }
 
-    pub fn poll_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
+    pub fn poll_events(&mut self) -> Result<()> {
         loop {
             let mut buf: [u8; 256] = [0; 256];
             let bytes = self.reader.read(&mut buf);
@@ -248,6 +248,11 @@ impl FutexProgram {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub fn get_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
+        self.poll_events()?;
         Ok(self.events.remove(&tid).unwrap_or(Vec::new()))
     }
 }
