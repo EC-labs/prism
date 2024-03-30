@@ -22,19 +22,15 @@ struct NotFound;
 
 impl Display for NotFound {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "Target not found")
     }
 }
 
-impl Error for NotFound {
-    fn description(&self) -> &str {
-        "target not found"
-    }
-}
+impl Error for NotFound {}
 
 pub struct Target {
     pub tid: usize,
-    collectors: Vec<Box<dyn Collect>>,
+    collectors: [Box<dyn Collect>; 3],
 }
 
 impl Target {
@@ -46,7 +42,7 @@ impl Target {
     ) -> Self {
         Self {
             tid,
-            collectors: vec![
+            collectors: [
                 Box::new(SchedStat::new(
                     tid,
                     &format!("{}/{}", root_directory, target_subdirectory),
@@ -146,8 +142,8 @@ impl Target {
 
     pub fn sample(&mut self) -> Result<()> {
         for collector in self.collectors.iter_mut() {
-            let sample = collector.sample()?;
-            collector.store(sample)?;
+            collector.sample()?;
+            collector.store()?;
         }
         Ok(())
     }

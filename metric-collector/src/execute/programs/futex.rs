@@ -86,7 +86,7 @@ impl From<Vec<u8>> for FutexEvent {
 }
 
 impl ToCsv for FutexEvent {
-    fn to_csv_row(&self) -> (u128, String) {
+    fn to_csv_row(&self) -> String {
         match self {
             FutexEvent::Wake {
                 tid,
@@ -96,10 +96,7 @@ impl ToCsv for FutexEvent {
                 ..
             } => {
                 let epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
-                (
-                    epoch_ns,
-                    format!("{},{},{},{}\n", epoch_ns, tid, root_pid, uaddr,),
-                )
+                format!("{},{},{},{}\n", epoch_ns, tid, root_pid, uaddr,)
             }
             FutexEvent::Elapsed {
                 tid,
@@ -111,12 +108,9 @@ impl ToCsv for FutexEvent {
             } => {
                 let end_epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
                 let start_epoch_ns = end_epoch_ns - ns_elapsed;
-                (
-                    end_epoch_ns,
-                    format!(
-                        "{},{},{},{},{},{}\n",
-                        start_epoch_ns, end_epoch_ns, ns_elapsed, tid, root_pid, uaddr,
-                    ),
+                format!(
+                    "{},{},{},{},{},{}\n",
+                    start_epoch_ns, end_epoch_ns, ns_elapsed, tid, root_pid, uaddr,
                 )
             }
             _ => {

@@ -10,13 +10,14 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use super::{Collect, ToCsv};
+use super::{Collect, MissingSample, ToCsv};
 
 pub struct SchedStat {
     proc_file: String,
     data_directory: String,
     day_epoch: Option<u128>,
     data_file: Option<File>,
+    sample: Option<SchedStatSample>,
 }
 
 #[derive(Debug)]
@@ -49,13 +50,10 @@ impl ToCsv for SchedStatSample {
         "epoch_ms,runtime,rq_time,run_periods\n"
     }
 
-    fn to_csv_row(&self) -> (u128, String) {
-        (
-            self.epoch,
-            format!(
-                "{},{},{},{}\n",
-                self.epoch, self.runtime, self.rq_time, self.run_periods
-            ),
+    fn to_csv_row(&self) -> String {
+        format!(
+            "{},{},{},{}\n",
+            self.epoch, self.runtime, self.rq_time, self.run_periods
         )
     }
 }
@@ -67,20 +65,28 @@ impl SchedStat {
             data_directory: format!("{}/schedstat", data_directory),
             day_epoch: None,
             data_file: None,
+            sample: None,
         }
     }
 }
 
 impl Collect for SchedStat {
-    fn sample(&mut self) -> Result<Box<dyn ToCsv>> {
+    fn sample(&mut self) -> Result<()> {
         let contents = fs::read_to_string(&self.proc_file)?.replace("\n", "");
         let sample = SchedStatSample::from(contents.split(" ").collect::<Vec<&str>>());
-        Ok(Box::new(sample))
+        self.sample = Some(sample);
+        Ok(())
     }
 
-    fn store(&mut self, sample: Box<dyn ToCsv>) -> Result<()> {
-        let (epoch, row) = sample.to_csv_row();
-        let day_epoch = (epoch / (1000 * 60 * 60 * 24)) * (1000 * 60 * 60 * 24);
+    fn store(&mut self) -> Result<()> {
+        if let None = self.sample {
+            return Err(MissingSample.into());
+        }
+
+        let sample = self.sample.take().unwrap();
+        let epoch_ms = sample.epoch;
+        let row = sample.to_csv_row();
+        let day_epoch = (epoch_ms / (1000 * 60 * 60 * 24)) * (1000 * 60 * 60 * 24);
 
         if Some(day_epoch) != self.day_epoch {
             let filepath = format!("{}/{}.csv", self.data_directory, day_epoch);
@@ -108,6 +114,7 @@ pub struct Sched {
     data_directory: String,
     data_file: Option<File>,
     day_epoch: Option<u128>,
+    sample: Option<SchedSample>,
 }
 
 impl Sched {
@@ -117,20 +124,28 @@ impl Sched {
             data_directory: format!("{}/sched", data_directory),
             data_file: None,
             day_epoch: None,
+            sample: None,
         }
     }
 }
 
 impl Collect for Sched {
-    fn sample(&mut self) -> Result<Box<dyn ToCsv>> {
+    fn sample(&mut self) -> Result<()> {
         let contents = fs::read_to_string(&self.proc_file)?;
         let sample = SchedSample::from(contents);
-        Ok(Box::new(sample))
+        self.sample = Some(sample);
+        Ok(())
     }
 
-    fn store(&mut self, sample: Box<dyn ToCsv>) -> Result<()> {
-        let (epoch, row) = sample.to_csv_row();
-        let day_epoch = (epoch / (1000 * 60 * 60 * 24)) * (1000 * 60 * 60 * 24);
+    fn store(&mut self) -> Result<()> {
+        if let None = self.sample {
+            return Err(MissingSample.into());
+        }
+
+        let sample = self.sample.take().unwrap();
+        let epoch_ms = sample.epoch;
+        let row = sample.to_csv_row();
+        let day_epoch = (epoch_ms / (1000 * 60 * 60 * 24)) * (1000 * 60 * 60 * 24);
 
         if Some(day_epoch) != self.day_epoch {
             let filepath = format!("{}/{}.csv", self.data_directory, day_epoch);
@@ -234,18 +249,15 @@ impl ToCsv for SchedSample {
         "epoch_ms,runtime,rq_time,sleep_time,block_time,iowait_time\n"
     }
 
-    fn to_csv_row(&self) -> (u128, String) {
-        (
+    fn to_csv_row(&self) -> String {
+        format!(
+            "{},{},{},{},{},{}\n",
             self.epoch,
-            format!(
-                "{},{},{},{},{},{}\n",
-                self.epoch,
-                self.runtime,
-                self.rq_time,
-                self.sleep_time,
-                self.block_time,
-                self.iowait_time
-            ),
+            self.runtime,
+            self.rq_time,
+            self.sleep_time,
+            self.block_time,
+            self.iowait_time
         )
     }
 }
