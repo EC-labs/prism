@@ -59,7 +59,26 @@ impl Extractor {
                         &format!("{}/{}", comm, tid),
                     ),
                 );
-            })
+            });
+
+        let new_pids = executor.futex.borrow_mut().get_new_pid_events().unwrap();
+        for (comm, pid) in new_pids {
+            executor.monitor(pid);
+            Target::get_threads(pid)
+                .unwrap()
+                .into_iter()
+                .for_each(|tid| {
+                    self.targets.insert(
+                        tid,
+                        Target::new(
+                            tid,
+                            executor.futex.clone(),
+                            self.config.data_directory.clone(),
+                            &format!("{}/{}", comm, tid),
+                        ),
+                    );
+                });
+        }
     }
 
     fn sample_targets(&mut self) {

@@ -41,7 +41,7 @@ tracepoint:syscalls:sys_enter_futex
     }
 
     if (@futex[$root_pid, $uaddr] && !@pids[pid]) {
-        printf("%-10s\t%lld\n", "NewProcess", pid);
+        printf("%-10s\t%s\t%lld\n", "NewProcess", comm, pid);
         @pids[pid] = 1;
     }
 

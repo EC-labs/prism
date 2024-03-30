@@ -105,7 +105,7 @@ impl Target {
 
             let futex_program = executor.futex.clone();
             targets.extend(
-                Self::get_threads(file_path)?
+                Self::get_threads(pid)?
                     .into_iter()
                     .map(|tid| {
                         Ok(Target::new(
@@ -122,8 +122,8 @@ impl Target {
         return Ok(targets);
     }
 
-    fn get_threads(proc_pid_path: PathBuf) -> Result<Vec<usize>> {
-        let tasks = fs::read_dir(format!("{}/task", proc_pid_path.to_str().unwrap()))?;
+    pub fn get_threads(pid: usize) -> Result<Vec<usize>> {
+        let tasks = fs::read_dir(format!("/proc/{}/task", pid))?;
 
         tasks
             .map(|task| {

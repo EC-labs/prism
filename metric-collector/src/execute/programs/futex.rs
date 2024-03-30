@@ -36,6 +36,7 @@ pub enum FutexEvent {
         ret: i32,
     },
     NewProcess {
+        comm: Rc<str>,
         pid: usize,
     },
     UnhandledOpcode {
@@ -78,6 +79,7 @@ impl From<Vec<u8>> for FutexEvent {
                 opcode: elements.next().unwrap().into(),
             },
             "NewProcess" => Self::NewProcess {
+                comm: elements.next().unwrap().into(),
                 pid: elements.next().unwrap().parse().unwrap(),
             },
             _ => Self::Unexpected { data: event_string },
@@ -136,6 +138,7 @@ pub struct FutexProgram {
     child: Child,
     reader: File,
     events: HashMap<usize, Vec<FutexEvent>>,
+    new_pids: Option<Vec<(Rc<str>, usize)>>,
     header_lines: u8,
     current_event: Option<Vec<u8>>,
 }
@@ -168,6 +171,7 @@ impl FutexProgram {
             events: HashMap::new(),
             header_lines: 0,
             current_event: None,
+            new_pids: None,
         })
     }
 
@@ -236,8 +240,12 @@ impl FutexProgram {
                         let tid_events = self.events.get_mut(tid).unwrap();
                         tid_events.push(event);
                     }
-                    FutexEvent::NewProcess { .. } => {
-                        todo!();
+                    FutexEvent::NewProcess { pid, comm } => {
+                        if let None = self.new_pids {
+                            self.new_pids = Some(Vec::new());
+                        }
+                        let new_pids = self.new_pids.as_mut().unwrap();
+                        new_pids.push((comm.clone(), *pid));
                     }
                     FutexEvent::UnhandledOpcode { .. } => {
                         println!("Futex unhandled opcode. {:?}", event);
@@ -251,9 +259,13 @@ impl FutexProgram {
         Ok(())
     }
 
-    pub fn get_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
-        self.poll_events()?;
+    pub fn get_futex_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
         Ok(self.events.remove(&tid).unwrap_or(Vec::new()))
+    }
+
+    pub fn get_new_pid_events(&mut self) -> Result<Vec<(Rc<str>, usize)>> {
+        self.poll_events()?;
+        Ok(self.new_pids.take().unwrap_or(Vec::new()))
     }
 }
 
