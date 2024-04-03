@@ -40,6 +40,7 @@ impl Target {
         root_directory: Rc<str>,
         target_subdirectory: &str,
     ) -> Self {
+        println!("Register new target {}", tid);
         Self {
             tid,
             collectors: [

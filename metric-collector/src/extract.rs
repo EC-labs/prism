@@ -49,7 +49,6 @@ impl Extractor {
                     return;
                 }
 
-                println!("Register new target {}", tid);
                 self.targets.insert(
                     tid,
                     Target::new(

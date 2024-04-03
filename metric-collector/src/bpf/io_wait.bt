@@ -1,0 +1,35 @@
+#!/home/diogo/.local/bin/bpftrace
+
+kfunc:vmlinux:__submit_bio
+{
+    $bio = args->bio;
+    $bdev = $bio->bi_bdev->bd_dev;
+    $bi_iter = $bio->bi_iter;
+    $op = $bio->bi_opf & ((1 << 8) - 1);
+    $is_write = $op & 1;
+    printf("%lld\ts\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
+           nsecs, $bdev, $bi_iter.bi_sector, $bi_iter.bi_size, $is_write, tid, comm);
+}
+
+kfunc:vmlinux:bio_endio
+{
+    $bio = args->bio;
+    $bdev = $bio->bi_bdev->bd_dev;
+    $bi_iter = $bio->bi_iter;
+    $op = $bio->bi_opf & ((1 << 8) - 1);
+    $is_write = $op & 1;
+    printf("%lld\te\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
+           nsecs, $bdev, $bi_iter.bi_sector, $bi_iter.bi_size, $is_write, tid, comm);
+}
+
+kfunc:vmlinux:io_schedule
+{
+    printf("%lld\tio_s\t%lld\t%s\n", 
+           nsecs, tid, comm);
+}
+
+kretfunc:vmlinux:io_schedule
+{
+    printf("%lld\tio_e\t%lld\t%s\n", 
+           nsecs, tid, comm);
+}

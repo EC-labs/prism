@@ -3,6 +3,12 @@
 #include <linux/stat.h>
 #include <linux/fs.h>
 
+BEGIN 
+/ str($2) == "debug" /
+{
+    @pids[$1] = 1;
+}
+
 tracepoint:syscalls:sys_enter_access
 / pid == $1 /
 {
@@ -24,63 +30,47 @@ kfunc:vmlinux:vfs_read
 
     if (($mode & S_IFMT) == S_IFIFO) {
         $i_id = $inode->i_ino;
-        $s_id = $inode->i_sb->s_dev;
+        $s_dev = $inode->i_sb->s_dev;
 
-        if (!@pipes[$s_id, $i_id]) {
+        if (!@pipes[$s_dev, $i_id]) {
             if (@pids[pid]) {
-                @pipes[$s_id, $i_id] = 1;
+                @pipes[$s_dev, $i_id] = 1;
             }
         } 
 
-        if (!@pipes[$s_id, $i_id]) {
+        if (!@pipes[$s_dev, $i_id]) {
             return;
         }
 
         if (!@pids[pid]) {
-            printf("%s\t%lld\n", 
-                   "NewProcess", pid);
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
             @pids[pid] = 1
         }
 
-        @start_fifo[tid, $s_id, $i_id] = nsecs;
+        @start_fifo[tid, $s_dev, $i_id] = nsecs;
         printf("%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "FifoReadStart", tid, $s_id, $i_id, @start_fifo[tid, $s_id, $i_id]);
-    } else if (($mode & S_IFMT) == S_IFREG) {
-        if (!@pids[pid]) {
-            return;
-        }
-        @start_regular[tid] = nsecs;
-    }
+               "FifoReadStart", tid, $s_dev, $i_id, @start_fifo[tid, $s_dev, $i_id]);
+    } 
 }
 
 kretfunc:vmlinux:vfs_read 
 {
-    if (!@pids[pid]) {
-        return;
-    }
-
     $inode = (struct inode *)args->file->f_inode;
     $mode = $inode->i_mode;
 
     if (($mode & S_IFMT) == S_IFIFO) {
         $i_id = $inode->i_ino;
-        $s_id = $inode->i_sb->s_dev;
+        $s_dev = $inode->i_sb->s_dev;
 
-        if (!@start_fifo[tid, $s_id, $i_id]) {
+        if (!@start_fifo[tid, $s_dev, $i_id]) {
             return;
         }
 
         printf("%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "FifoReadEnd", tid, $s_id, $i_id, nsecs - @start_fifo[tid, $s_id, $i_id]);
-        delete(@start_fifo[tid, $s_id, $i_id]);
-    } else if (($mode & S_IFMT) == S_IFREG) {
-        if (!@start_regular[tid]) {
-            return;
-        }
-        
-        @hist_regular["r", tid] = hist(nsecs - @start_regular[tid]);
-    }
-    
+               "FifoReadEnd", tid, $s_dev, $i_id, nsecs - @start_fifo[tid, $s_dev, $i_id]);
+        delete(@start_fifo[tid, $s_dev, $i_id]);
+    }    
 }
 
 kfunc:vmlinux:vfs_write
@@ -90,15 +80,15 @@ kfunc:vmlinux:vfs_write
 
     if (($mode & S_IFMT) == S_IFIFO) {
         $i_id = $inode->i_ino;
-        $s_id = $inode->i_sb->s_dev;
+        $s_dev = $inode->i_sb->s_dev;
 
-        if (!@pipes[$s_id, $i_id]) {
+        if (!@pipes[$s_dev, $i_id]) {
             if (@pids[pid]) {
-                @pipes[$s_id, $i_id] = 1;
+                @pipes[$s_dev, $i_id] = 1;
             }
         } 
 
-        if (!@pipes[$s_id, $i_id]) {
+        if (!@pipes[$s_dev, $i_id]) {
             return;
         }
 
@@ -108,51 +98,29 @@ kfunc:vmlinux:vfs_write
             @pids[pid] = 1
         }
 
-        @start_fifo[tid, $s_id, $i_id] = nsecs;
+        @start_fifo[tid, $s_dev, $i_id] = nsecs;
         printf("%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "FifoWriteStart", tid, $s_id, $i_id, @start_fifo[tid, $s_id, $i_id]);
-    } else if (($mode & S_IFMT) == S_IFREG) {
-        if (!@pids[pid]) {
-            return;
-        }
-
-        @start_regular[tid] = nsecs;
+               "FifoWriteStart", tid, $s_dev, $i_id, @start_fifo[tid, $s_dev, $i_id]);
     }
 }
 
 kretfunc:vmlinux:vfs_write 
 {
-    if (!@pids[pid]) {
-        return;
-    }
-
     $inode = (struct inode *)args->file->f_inode;
     $mode = $inode->i_mode;
 
     if (($mode & S_IFMT) == S_IFIFO) {
         $i_id = $inode->i_ino;
-        $s_id = $inode->i_sb->s_dev;
+        $s_dev = $inode->i_sb->s_dev;
 
-        if (!@start_fifo[tid, $s_id, $i_id]) {
+        if (!@start_fifo[tid, $s_dev, $i_id]) {
             return;
         }
 
         printf("%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "FifoWriteEnd", tid, $s_id, $i_id, nsecs - @start_fifo[tid, $s_id, $i_id]);
-        delete(@start_fifo[tid, $s_id, $i_id]);
-    } else if (($mode & S_IFMT) == S_IFREG) {
-        if (!@start_regular[tid]) {
-            return;
-        }
-        
-        @hist_regular["w", tid] = hist(nsecs - @start_regular[tid]);
+               "FifoWriteEnd", tid, $s_dev, $i_id, nsecs - @start_fifo[tid, $s_dev, $i_id]);
+        delete(@start_fifo[tid, $s_dev, $i_id]);
     }
-}
-
-interval:s:1
-{
-    print(@hist_regular);
-    clear(@hist_regular);
 }
 
 END 
@@ -160,6 +128,4 @@ END
     clear(@start_fifo);
     clear(@pipes);
     clear(@pids);
-    clear(@hist_regular);
-    clear(@start_regular);
 }
