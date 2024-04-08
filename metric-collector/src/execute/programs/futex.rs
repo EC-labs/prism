@@ -1,16 +1,12 @@
 use eyre::Result;
-use nix::time::{self, ClockId};
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::process::{Child, Command};
 use std::rc::Rc;
-use std::sync::RwLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs::File, io::prelude::*};
 
+use super::BOOT_EPOCH_NS;
 use crate::metrics::ToCsv;
-
-pub static BOOT_EPOCH_NS: RwLock<u128> = RwLock::new(0);
 
 #[derive(Debug)]
 pub enum FutexEvent {
@@ -145,17 +141,6 @@ pub struct FutexProgram {
 
 impl FutexProgram {
     pub fn new(pid: u32) -> Result<Self> {
-        if *BOOT_EPOCH_NS.read().unwrap() == 0 {
-            let ns_since_boot =
-                Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_nanos();
-            let start = SystemTime::now();
-            let ns_since_epoch = start
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_nanos();
-            *BOOT_EPOCH_NS.write().unwrap() = ns_since_epoch - ns_since_boot;
-        }
-
         let (mut reader, writer) = super::pipe();
         super::fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
         let child = Command::new("bpftrace")

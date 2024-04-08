@@ -7,4 +7,5 @@ members = [
     "example-application",
     "workload-generator",
     "thread-sync",
+    "poc",
 ]

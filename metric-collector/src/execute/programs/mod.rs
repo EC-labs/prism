@@ -1,8 +1,11 @@
 use libc::{self, c_int};
-use std::{fs::File, os::unix::prelude::*, process};
+use std::{fs::File, os::unix::prelude::*, process, sync::RwLock};
 
 pub mod clone;
 pub mod futex;
+pub mod iowait;
+
+pub static BOOT_EPOCH_NS: RwLock<u128> = RwLock::new(0);
 
 fn pipe() -> (File, File) {
     let mut fds: [c_int; 2] = [0; 2];

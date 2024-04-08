@@ -5,6 +5,7 @@ use std::{
 };
 
 pub mod futex;
+pub mod iowait;
 pub mod scheduler;
 
 pub trait Collect {

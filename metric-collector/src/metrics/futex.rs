@@ -14,7 +14,10 @@ use std::{
 };
 
 use super::{Collect, MissingSample, ToCsv};
-use crate::execute::programs::futex::{FutexEvent, FutexProgram, BOOT_EPOCH_NS};
+use crate::execute::programs::{
+    futex::{FutexEvent, FutexProgram},
+    BOOT_EPOCH_NS,
+};
 
 #[derive(Debug)]
 struct UnwritableEvent;

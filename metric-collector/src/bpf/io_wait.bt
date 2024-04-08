@@ -4,32 +4,54 @@ kfunc:vmlinux:__submit_bio
 {
     $bio = args->bio;
     $bdev = $bio->bi_bdev->bd_dev;
+    $part0 = $bio->bi_bdev->bd_disk->part0->bd_dev;
     $bi_iter = $bio->bi_iter;
+    
     $op = $bio->bi_opf & ((1 << 8) - 1);
+    $status = $bio->bi_status;
     $is_write = $op & 1;
-    printf("%lld\ts\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
-           nsecs, $bdev, $bi_iter.bi_sector, $bi_iter.bi_size, $is_write, tid, comm);
+    
+    printf("bio_s\t%lld\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
+           nsecs, $bdev, $part0, $bi_iter.bi_sector, $bi_iter.bi_size/512, $is_write, $op, $status, tid, comm);
 }
 
 kfunc:vmlinux:bio_endio
 {
+   
     $bio = args->bio;
     $bdev = $bio->bi_bdev->bd_dev;
+    $part0 = $bio->bi_bdev->bd_disk->part0->bd_dev;
     $bi_iter = $bio->bi_iter;
+    
     $op = $bio->bi_opf & ((1 << 8) - 1);
+    $status = $bio->bi_status;
     $is_write = $op & 1;
-    printf("%lld\te\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
-           nsecs, $bdev, $bi_iter.bi_sector, $bi_iter.bi_size, $is_write, tid, comm);
+   
+    printf("bio_e\t%lld\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
+           nsecs, $bdev, $part0, $bi_iter.bi_sector, $bi_iter.bi_size/512, $is_write, $op, $status, tid, comm);
 }
+
+tracepoint:block:block_io_start
+{
+    printf("t_s\t%lld\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
+           nsecs, args->dev, args->sector, args->nr_sector, args->bytes, tid, comm);
+}
+
+tracepoint:block:block_io_done
+{
+    printf("t_e\t%lld\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
+           nsecs, args->dev, args->sector, args->nr_sector, args->bytes, tid, comm);
+}
+
 
 kfunc:vmlinux:io_schedule
 {
-    printf("%lld\tio_s\t%lld\t%s\n", 
+    printf("io_s\t%lld\t%lld\t%s\n", 
            nsecs, tid, comm);
 }
 
 kretfunc:vmlinux:io_schedule
 {
-    printf("%lld\tio_e\t%lld\t%s\n", 
+    printf("io_e\t%lld\t%lld\t%s\n", 
            nsecs, tid, comm);
 }

@@ -8,14 +8,18 @@ use std::{
     time::Duration,
 };
 
-use crate::configure::Config;
 use crate::execute::Executor;
 use crate::target::Target;
+use crate::{
+    configure::Config,
+    metrics::{iowait::IOWait, Collect},
+};
 
 pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
     config: Config,
     targets: HashMap<usize, Target>,
+    system_metrics: Vec<Box<dyn Collect>>,
     rx_timer: Option<Receiver<bool>>,
 }
 
@@ -25,6 +29,7 @@ impl Extractor {
             config,
             terminate_flag: Arc::new(Mutex::new(false)),
             targets: HashMap::new(),
+            system_metrics: Vec::new(),
             rx_timer: None,
         }
     }
@@ -111,10 +116,20 @@ impl Extractor {
         });
     }
 
+    fn sample_system_metrics(&mut self) -> Result<()> {
+        for metric in self.system_metrics.iter_mut() {
+            metric.sample()?;
+            metric.store()?;
+        }
+
+        Ok(())
+    }
+
     pub fn run(mut self) -> Result<()> {
         self.register_sighandler();
         self.start_timer_thread();
         let mut executor = Executor::new()?;
+
         let targets = Target::search_targets_regex(
             "jbd2",
             true,
@@ -135,6 +150,9 @@ impl Extractor {
             self.targets.insert(target.tid, target);
         });
 
+        self.system_metrics
+            .push(Box::new(IOWait::new(executor.io_wait.clone())));
+
         let rx_timer = self.rx_timer.take().unwrap();
         loop {
             rx_timer.recv().unwrap();
@@ -143,6 +161,7 @@ impl Extractor {
             }
 
             self.sample_targets();
+            self.sample_system_metrics()?;
             self.register_new_targets(&mut executor);
         }
 

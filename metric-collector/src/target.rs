@@ -13,7 +13,6 @@ use std::{
     error::Error,
     fmt::{self, Display},
     fs,
-    path::PathBuf,
     rc::Rc,
 };
 

@@ -1181,6 +1181,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "poc"
+version = "0.1.0"
+
+[[package]]
 name = "polars"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
