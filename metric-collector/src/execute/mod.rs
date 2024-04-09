@@ -1,6 +1,8 @@
 use eyre::Result;
 use nix::time::{self, ClockId};
 use std::ffi::CString;
+use std::fs::File;
+use std::io::Read;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, rc::Rc};
 
@@ -11,13 +13,13 @@ use programs::futex::FutexProgram;
 use programs::iowait::IOWaitProgram;
 use programs::BOOT_EPOCH_NS;
 
-pub struct Executor {
+pub struct Executor<R: Read> {
     pub clone: Clone,
     pub futex: Rc<RefCell<FutexProgram>>,
-    pub io_wait: Rc<RefCell<IOWaitProgram>>,
+    pub io_wait: Rc<RefCell<IOWaitProgram<R>>>,
 }
 
-impl Executor {
+impl Executor<File> {
     pub fn new() -> Result<Self> {
         if *BOOT_EPOCH_NS.read().unwrap() == 0 {
             let ns_since_boot =
@@ -54,7 +56,9 @@ impl Executor {
             futex: Rc::new(RefCell::new(futex)),
         })
     }
+}
 
+impl<R: Read> Executor<R> {
     pub fn monitor(&mut self, pid: usize) {
         println!("Monitoring new process {}", pid);
         let event_id = CString::new("metric-collector-new-pid").unwrap();

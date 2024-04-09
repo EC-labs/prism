@@ -128,15 +128,15 @@ impl From<Vec<u8>> for IOWaitEvent {
     }
 }
 
-pub struct IOWaitProgram {
-    child: Child,
-    reader: File,
+pub struct IOWaitProgram<R: Read> {
+    child: Option<Child>,
+    reader: R,
     header_lines: u8,
     current_event: Option<Vec<u8>>,
     events: Option<Vec<IOWaitEvent>>,
 }
 
-impl IOWaitProgram {
+impl IOWaitProgram<File> {
     pub fn new() -> Result<Self> {
         let (mut reader, writer) = super::pipe();
         super::fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
@@ -145,12 +145,24 @@ impl IOWaitProgram {
             .stdout(writer)
             .spawn()?;
         Ok(Self {
-            child,
             reader,
+            child: Some(child),
             header_lines: 0,
             current_event: None,
             events: None,
         })
+    }
+}
+
+impl<R: Read> IOWaitProgram<R> {
+    pub fn custom_reader(reader: R) -> Self {
+        Self {
+            reader,
+            child: None,
+            header_lines: 0,
+            current_event: None,
+            events: None,
+        }
     }
 
     fn handle_header<'a, I: Iterator<Item = &'a u8>>(&mut self, buf: &mut I) {
@@ -197,7 +209,12 @@ impl IOWaitProgram {
 
                     return Err(error.into());
                 }
-                Ok(bytes) => bytes,
+                Ok(bytes) => {
+                    if bytes == 0 {
+                        break;
+                    }
+                    bytes
+                }
             };
 
             let mut iterator = buf[..bytes].into_iter();
@@ -223,9 +240,13 @@ impl IOWaitProgram {
     }
 }
 
-impl Drop for IOWaitProgram {
+impl<R: Read> Drop for IOWaitProgram<R> {
     fn drop(&mut self) {
-        if let Err(why) = self.child.kill() {
+        if let None = self.child {
+            return;
+        }
+
+        if let Err(why) = self.child.as_mut().unwrap().kill() {
             println!("Failed to kill futex {}", why);
         }
     }
