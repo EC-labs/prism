@@ -17,13 +17,13 @@ use super::Collect;
 
 #[derive(Debug, PartialEq, Eq)]
 struct ThreadDeviceStats {
-    buffer: HashMap<u64, u64>,
+    minute_map: HashMap<u64, HashMap<u64, u64>>,
 }
 
 impl ThreadDeviceStats {
     fn new() -> Self {
         Self {
-            buffer: HashMap::new(),
+            minute_map: HashMap::new(),
         }
     }
 
@@ -41,19 +41,60 @@ impl ThreadDeviceStats {
         };
 
         for key in from..=to as u64 {
-            let sectors = if let Some(sectors) = self.buffer.get_mut(&key) {
-                sectors
-            } else if contribution > 0 {
-                self.buffer.entry(key).or_insert(0)
-            } else {
-                continue;
-            };
-            *sectors = (*sectors as i64 + contribution) as u64;
-            if *sectors == 0 {
-                self.buffer.remove(&key);
+            if self.update(key, contribution) {
+                bio.last_instant_accounted = Some(key);
             }
-            bio.last_instant_accounted = Some(key);
         }
+    }
+
+    fn update(&mut self, second: u64, value: i64) -> bool {
+        let sectors = if let Some(sectors) = self.get_mut_entry(&second) {
+            sectors
+        } else if value > 0 {
+            self.insert_entry(second, 0)
+        } else {
+            return false;
+        };
+        *sectors = (*sectors as i64 + value) as u64;
+        if *sectors == 0 {
+            self.remove_entry(&second);
+        }
+        return true;
+    }
+
+    fn get_mut_entry(&mut self, second: &u64) -> Option<&mut u64> {
+        let minute = second / 60;
+        if let Some(map) = self.minute_map.get_mut(&minute) {
+            map.get_mut(second)
+        } else {
+            None
+        }
+    }
+
+    fn insert_entry(&mut self, second: u64, value: u64) -> &mut u64 {
+        let minute = second / 60;
+        self.minute_map
+            .entry(minute)
+            .or_insert(HashMap::new())
+            .entry(second)
+            .or_insert(value)
+    }
+
+    fn remove_entry(&mut self, second: &u64) -> Option<u64> {
+        let minute = second / 60;
+        if let Some(map) = self.minute_map.get_mut(&minute) {
+            map.remove(second)
+        } else {
+            None
+        }
+    }
+
+    fn get_entries(&self) -> HashMap<u64, u64> {
+        self.minute_map
+            .iter()
+            .map(|(_, map)| map.iter().map(|(k, v)| (*k, *v)))
+            .flatten()
+            .collect()
     }
 }
 
@@ -282,6 +323,22 @@ mod tests {
     // bio_e	772129085777546	264241152	264241152	443677192	8	1	1	0	0	swapper/13
     // bio_e	772129085778357	264241153	264241153	443675144	8	1	1	0	0	swapper/13
 
+    fn get_buffer<'a, R: Read>(
+        iowait: &'a IOWait<R>,
+        thread: &usize,
+        device: &u32,
+    ) -> Result<HashMap<u64, u64>> {
+        let thread_stats = iowait
+            .thread_map
+            .get(thread)
+            .ok_or_eyre("Missing key thread map")?;
+        Ok(thread_stats
+            .device_map
+            .get(device)
+            .ok_or_eyre("Missing key device map")?
+            .get_entries())
+    }
+
     #[test]
     fn submit() -> Result<()> {
         let reader = indoc! {r#"
@@ -295,14 +352,14 @@ mod tests {
         iowait.current_sample_instant = Some(000001);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8)]), buffer);
 
         iowait.current_sample_instant = Some(000002);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8), (2, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8), (2, 8)]), buffer);
         let buffer = get_buffer(&iowait, &4, &264241153)?;
-        assert_eq!(&HashMap::from([(2, 8)]), buffer);
+        assert_eq!(HashMap::from([(2, 8)]), buffer);
 
         Ok(())
     }
@@ -323,7 +380,7 @@ mod tests {
         iowait.current_sample_instant = Some(000001);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8)]), buffer);
 
         let data = indoc! {r#"
             bio_s	000000110000000	264241153	264241153	443675144	8	1	1	0	3	LS Thread
@@ -332,7 +389,7 @@ mod tests {
         iowait.current_sample_instant = Some(000002);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 16), (2, 16)]), buffer);
+        assert_eq!(HashMap::from([(1, 16), (2, 16)]), buffer);
 
         Ok(())
     }
@@ -354,21 +411,21 @@ mod tests {
         iowait.current_sample_instant = Some(000001);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8)]), buffer);
 
         iowait.current_sample_instant = Some(000002);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8), (2, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8), (2, 8)]), buffer);
         let buffer = get_buffer(&iowait, &4, &264241153)?;
-        assert_eq!(&HashMap::from([(2, 8)]), buffer);
+        assert_eq!(HashMap::from([(2, 8)]), buffer);
 
         iowait.current_sample_instant = Some(000003);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8), (2, 8), (3, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8), (2, 8), (3, 8)]), buffer);
         let buffer = get_buffer(&iowait, &4, &264241153)?;
-        assert_eq!(&HashMap::from([(2, 8), (3, 8)]), buffer);
+        assert_eq!(HashMap::from([(2, 8), (3, 8)]), buffer);
 
         let data = indoc! {r#"
             bio_e	000002900000000	264241153	264241153	443675136	8	1	1	0	0	swapper/13
@@ -377,9 +434,9 @@ mod tests {
         iowait.current_sample_instant = Some(000004);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8), (2, 8), (3, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8), (2, 8), (3, 8)]), buffer);
         let buffer = get_buffer(&iowait, &4, &264241153)?;
-        assert_eq!(&HashMap::from([(2, 8), (3, 8), (4, 8)]), buffer);
+        assert_eq!(HashMap::from([(2, 8), (3, 8), (4, 8)]), buffer);
 
         Ok(())
     }
@@ -401,14 +458,14 @@ mod tests {
         iowait.current_sample_instant = Some(000001);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8)]), buffer);
 
         iowait.current_sample_instant = Some(000003);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8), (2, 8), (3, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8), (2, 8), (3, 8)]), buffer);
         let buffer = get_buffer(&iowait, &4, &264241153)?;
-        assert_eq!(&HashMap::from([(2, 8), (3, 8)]), buffer);
+        assert_eq!(HashMap::from([(2, 8), (3, 8)]), buffer);
 
         let data = indoc! {r#"
             bio_e	000001900000000	264241153	264241153	443675136	8	1	1	0	0	swapper/13
@@ -417,9 +474,9 @@ mod tests {
         iowait.current_sample_instant = Some(000004);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &4, &264241153)?;
-        assert_eq!(&HashMap::from([(2, 8), (3, 8), (4, 8)]), buffer);
+        assert_eq!(HashMap::from([(2, 8), (3, 8), (4, 8)]), buffer);
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8), (2, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8), (2, 8)]), buffer);
 
         let data = indoc! {r#"
             bio_e	000002900000000	264241153	264241153	443675144	8	1	1	0	0	swapper/13
@@ -428,27 +485,11 @@ mod tests {
         iowait.current_sample_instant = Some(000004);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &4, &264241153)?;
-        assert_eq!(&HashMap::from([(2, 8), (3, 8)]), buffer);
+        assert_eq!(HashMap::from([(2, 8), (3, 8)]), buffer);
         let buffer = get_buffer(&iowait, &3, &264241153)?;
-        assert_eq!(&HashMap::from([(1, 8), (2, 8)]), buffer);
+        assert_eq!(HashMap::from([(1, 8), (2, 8)]), buffer);
 
         Ok(())
-    }
-
-    fn get_buffer<'a, R: Read>(
-        iowait: &'a IOWait<R>,
-        thread: &usize,
-        device: &u32,
-    ) -> Result<&'a HashMap<u64, u64>> {
-        let thread_stats = iowait
-            .thread_map
-            .get(thread)
-            .ok_or_eyre("Missing key thread map")?;
-        Ok(&thread_stats
-            .device_map
-            .get(device)
-            .ok_or_eyre("Missing key device map")?
-            .buffer)
     }
 
     #[test]
@@ -467,20 +508,20 @@ mod tests {
         let mut buf = ThreadDeviceStats::new();
         let mut bio = create_bio(0100, 2);
         buf.account(&mut bio, 1);
-        assert_eq!(HashMap::from([(1, 2)]), buf.buffer);
+        assert_eq!(HashMap::from([(1, 2)]), buf.get_entries());
 
         let mut bio = create_bio(1100, 10);
         buf.account(&mut bio, 2);
-        assert_eq!(HashMap::from([(1, 2), (2, 10)]), buf.buffer);
+        assert_eq!(HashMap::from([(1, 2), (2, 10)]), buf.get_entries());
 
         buf.account(&mut bio, 3);
-        assert_eq!(HashMap::from([(1, 2), (2, 10), (3, 10)]), buf.buffer);
+        assert_eq!(HashMap::from([(1, 2), (2, 10), (3, 10)]), buf.get_entries());
 
         let mut bio = create_bio(1100, 4);
         buf.account(&mut bio, 4);
         assert_eq!(
             HashMap::from([(1, 2), (2, 14), (3, 14), (4, 4)]),
-            buf.buffer
+            buf.get_entries()
         );
     }
 
@@ -503,10 +544,10 @@ mod tests {
         buf.account(&mut bio, 3);
         let mut bio = create_bio(1100, 4);
         buf.account(&mut bio, 4);
-        assert_eq!(HashMap::from([(2, 14), (3, 14), (4, 4)]), buf.buffer);
+        assert_eq!(HashMap::from([(2, 14), (3, 14), (4, 4)]), buf.get_entries());
 
         // Subtract
         buf.account(&mut bio, 2);
-        assert_eq!(HashMap::from([(2, 14), (3, 10)]), buf.buffer);
+        assert_eq!(HashMap::from([(2, 14), (3, 10)]), buf.get_entries());
     }
 }
