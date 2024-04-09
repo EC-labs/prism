@@ -201,6 +201,44 @@ impl<R: Read> IOWait<R> {
         }
     }
 
+    fn process_submit_bio(&mut self, mut bio: Bio) {
+        if bio.first_instant_s() <= self.current_sample_instant.unwrap() {
+            let thread_acc = self
+                .thread_map
+                .entry(bio.tid)
+                .or_insert(ThreadIOStats::new());
+            thread_acc.account(&mut bio, self.current_sample_instant.unwrap());
+        }
+
+        let bio_map = self
+            .pending_requests
+            .entry(bio.device)
+            .or_insert(HashMap::new());
+        bio_map.insert(BioKey::from(&bio), bio);
+    }
+
+    fn process_bioendio(&mut self, key: BioKey, ns_since_boot: u128) {
+        let bios = if let Some(requests) = self.pending_requests.get_mut(&key.device) {
+            requests
+        } else {
+            return;
+        };
+        let bio = bios.remove(&key);
+        if let None = bio {
+            return;
+        }
+        let mut bio = bio.unwrap();
+
+        let last_instant = (boot_to_epoch(ns_since_boot) / 1_000_000_000 + 1) as u64;
+        if last_instant <= self.current_sample_instant.unwrap() {
+            let thread_acc = self
+                .thread_map
+                .entry(bio.tid)
+                .or_insert(ThreadIOStats::new());
+            thread_acc.account(&mut bio, last_instant);
+        }
+    }
+
     fn process_event(&mut self, event: IOWaitEvent) {
         match event {
             IOWaitEvent::SubmitBio {
@@ -211,28 +249,15 @@ impl<R: Read> IOWait<R> {
                 ns_since_boot,
                 ..
             } => {
-                let mut bio = Bio {
+                let bio = Bio {
                     device,
                     sector,
                     sector_cnt,
                     epoch_ns: boot_to_epoch(ns_since_boot) as u64,
-                    tid: tid,
+                    tid,
                     last_instant_accounted: None,
                 };
-
-                if bio.first_instant_s() <= self.current_sample_instant.unwrap() {
-                    let thread_acc = self
-                        .thread_map
-                        .entry(bio.tid)
-                        .or_insert(ThreadIOStats::new());
-                    thread_acc.account(&mut bio, self.current_sample_instant.unwrap());
-                }
-
-                let bio_map = self
-                    .pending_requests
-                    .entry(device)
-                    .or_insert(HashMap::new());
-                bio_map.insert(BioKey::from(&bio), bio);
+                self.process_submit_bio(bio);
             }
             IOWaitEvent::BioEndIO {
                 device,
@@ -241,34 +266,27 @@ impl<R: Read> IOWait<R> {
                 ns_since_boot,
                 ..
             } => {
-                let bios = if let Some(requests) = self.pending_requests.get_mut(&device) {
-                    requests
-                } else {
-                    return;
-                };
-
                 let key = BioKey {
                     device,
                     sector,
                     sector_cnt,
                 };
-                let bio = bios.remove(&key);
-                if let None = bio {
-                    return;
-                }
-                let mut bio = bio.unwrap();
-
-                let last_instant = (boot_to_epoch(ns_since_boot) / 1_000_000_000 + 1) as u64;
-                if last_instant <= self.current_sample_instant.unwrap() {
-                    let thread_acc = self
-                        .thread_map
-                        .entry(bio.tid)
-                        .or_insert(ThreadIOStats::new());
-                    thread_acc.account(&mut bio, last_instant);
-                }
+                self.process_bioendio(key, ns_since_boot);
             }
             _ => {}
         };
+    }
+
+    fn set_current_sample_instant(&mut self, value: Option<u64>) {
+        if let None = value {
+            let epoch_ns = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_nanos();
+            self.current_sample_instant = Some(((epoch_ns as u64) / 1_000_000_000) + 1);
+        } else {
+            self.current_sample_instant = value;
+        }
     }
 }
 
@@ -276,13 +294,8 @@ impl<R: Read> Collect for IOWait<R> {
     fn sample(&mut self) -> Result<()> {
         let events = self.iowait_program.borrow_mut().take_events()?;
 
-        let epoch_ns = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_nanos();
-
         if let None = self.current_sample_instant {
-            self.current_sample_instant = Some(((epoch_ns as u64) / 1_000_000_000) + 1);
+            self.set_current_sample_instant(None)
         }
 
         for event in events {
