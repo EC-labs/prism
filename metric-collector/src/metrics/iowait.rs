@@ -230,13 +230,11 @@ impl<R: Read> IOWait<R> {
         let mut bio = bio.unwrap();
 
         let last_instant = (boot_to_epoch(ns_since_boot) / 1_000_000_000 + 1) as u64;
-        if last_instant <= self.current_sample_instant.unwrap() {
-            let thread_acc = self
-                .thread_map
-                .entry(bio.tid)
-                .or_insert(ThreadIOStats::new());
-            thread_acc.account(&mut bio, last_instant);
-        }
+        let thread_acc = self
+            .thread_map
+            .entry(bio.tid)
+            .or_insert(ThreadIOStats::new());
+        thread_acc.account(&mut bio, last_instant);
     }
 
     fn process_event(&mut self, event: IOWaitEvent) {
@@ -562,5 +560,47 @@ mod tests {
         // Subtract
         buf.account(&mut bio, 2);
         assert_eq!(HashMap::from([(2, 14), (3, 10)]), buf.get_entries());
+    }
+
+    #[test]
+    fn minute_maps() -> Result<()> {
+        println!();
+        let reader = indoc! {r#"
+            Attaching 6 probes...
+            bio_s	000000100000000	264241153	264241153	443675136	8	1	1	0	3	LS Thread
+            bio_e	000001100000000	264241153	264241153	443675136	8	1	1	0	0	swapper/13
+            bio_s	000000100000000	264241153	264241153	443675148	8	1	1	0	4	LS Thread
+            bio_e	000001100000000	264241153	264241153	443675148	8	1	1	0	0	swapper/13
+            bio_s	000061000000000	264241153	264241154	443675144	8	1	1	0	4	LS Thread
+            bio_e	000062000000000	264241153	264241154	443675144	8	1	1	0	0	swapper/13
+        "#};
+        let iowait_program = IOWaitProgram::custom_reader(reader.as_bytes());
+        let mut iowait = IOWait::new(Rc::new(RefCell::new(iowait_program)));
+
+        iowait.current_sample_instant = Some(1);
+        iowait.sample().unwrap();
+        let buffer = get_buffer(&iowait, &3, &264241153)?;
+        assert_eq!(HashMap::from([(1, 8), (2, 8)]), buffer);
+
+        iowait.current_sample_instant = Some(70);
+        iowait.sample().unwrap();
+        let buffer = get_buffer(&iowait, &3, &264241153)?;
+        assert_eq!(HashMap::from([(1, 8), (2, 8)]), buffer);
+        let buffer = get_buffer(&iowait, &4, &264241153)?;
+        assert_eq!(HashMap::from([(1, 8), (2, 8), (62, 8), (63, 8)]), buffer);
+
+        let minute = iowait
+            .thread_map
+            .get(&4)
+            .ok_or_eyre("Missing thread")?
+            .device_map
+            .get(&264241153)
+            .ok_or_eyre("Missing device")?;
+        let map = minute.minute_map.get(&0).ok_or_eyre("Missing minute")?;
+        assert_eq!(&HashMap::from([(1, 8), (2, 8)]), map);
+        let map = minute.minute_map.get(&1).ok_or_eyre("Missing minute")?;
+        assert_eq!(&HashMap::from([(62, 8), (63, 8)]), map);
+
+        Ok(())
     }
 }
