@@ -12,7 +12,7 @@ kfunc:vmlinux:__submit_bio
     $is_write = $op & 1;
     
     printf("bio_s\t%lld\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
-           nsecs, $bdev, $part0, $bi_iter.bi_sector, $bi_iter.bi_size/512, $is_write, $op, $status, tid, comm);
+           nsecs, $part0, $bdev, $bi_iter.bi_sector, $bi_iter.bi_size/512, $is_write, $op, $status, tid, comm);
 }
 
 kfunc:vmlinux:bio_endio
@@ -28,7 +28,7 @@ kfunc:vmlinux:bio_endio
     $is_write = $op & 1;
    
     printf("bio_e\t%lld\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
-           nsecs, $bdev, $part0, $bi_iter.bi_sector, $bi_iter.bi_size/512, $is_write, $op, $status, tid, comm);
+           nsecs, $part0, $bdev, $bi_iter.bi_sector, $bi_iter.bi_size/512, $is_write, $op, $status, tid, comm);
 }
 
 tracepoint:block:block_io_start

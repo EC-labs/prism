@@ -150,8 +150,10 @@ impl Extractor {
             self.targets.insert(target.tid, target);
         });
 
-        self.system_metrics
-            .push(Box::new(IOWait::new(executor.io_wait.clone())));
+        self.system_metrics.push(Box::new(IOWait::new(
+            executor.io_wait.clone(),
+            Some(self.config.data_directory.clone()),
+        )));
 
         let rx_timer = self.rx_timer.take().unwrap();
         loop {

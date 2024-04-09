@@ -73,8 +73,8 @@ impl From<Vec<u8>> for IOWaitEvent {
         match elements.next().unwrap() {
             "bio_s" => Self::SubmitBio {
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                device: elements.next().unwrap().parse().unwrap(),
                 part0: elements.next().unwrap().parse().unwrap(),
+                device: elements.next().unwrap().parse().unwrap(),
                 sector: elements.next().unwrap().parse().unwrap(),
                 sector_cnt: elements.next().unwrap().parse().unwrap(),
                 is_write: elements.next().unwrap() == "1",
@@ -85,8 +85,8 @@ impl From<Vec<u8>> for IOWaitEvent {
             },
             "bio_e" => Self::BioEndIO {
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                device: elements.next().unwrap().parse().unwrap(),
                 part0: elements.next().unwrap().parse().unwrap(),
+                device: elements.next().unwrap().parse().unwrap(),
                 sector: elements.next().unwrap().parse().unwrap(),
                 sector_cnt: elements.next().unwrap().parse().unwrap(),
                 is_write: elements.next().unwrap() == "1",

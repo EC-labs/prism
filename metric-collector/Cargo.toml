@@ -24,3 +24,4 @@ indoc = "2.0.4"
 libc = "0.2.153"
 nix = { version = "0.28.0", features = ["time"] }
 lru = "0.12.3"
+tempdir = "0.3.7"
