@@ -380,6 +380,7 @@ impl<R: Read> Collect for IOWait<R> {
         }
         self.current_sample_instant_s = None;
         self.last_store_10s = Some(current_sample_insant_s / 10);
+
         Ok(())
     }
 }

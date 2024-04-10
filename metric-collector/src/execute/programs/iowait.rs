@@ -1,9 +1,13 @@
 use eyre::Result;
+use std::os::unix::prelude::*;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::{
     fs::File,
     io::{prelude::*, ErrorKind},
     process::{Child, Command},
     rc::Rc,
+    thread,
 };
 
 #[derive(Debug)]
@@ -136,14 +140,28 @@ pub struct IOWaitProgram<R: Read> {
     events: Option<Vec<IOWaitEvent>>,
 }
 
-impl IOWaitProgram<File> {
-    pub fn new() -> Result<Self> {
-        let (mut reader, writer) = super::pipe();
-        super::fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
+impl IOWaitProgram<ChannelReader> {
+    pub fn new(terminate_flag: Arc<Mutex<bool>>) -> Result<Self> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = ChannelReader {
+            receiver: rx,
+            hanging: None,
+        };
+
+        let (bpf_pipe_rx, bpf_pipe_tx) = super::pipe();
+        let res = unsafe { libc::fcntl(bpf_pipe_rx.as_raw_fd(), libc::F_SETPIPE_SZ, 1048576) };
+        if res != 0 {
+            println!("Non-zero fcntl return {:?}", res);
+        }
+        let res = unsafe { libc::fcntl(bpf_pipe_tx.as_raw_fd(), libc::F_SETPIPE_SZ, 1048576) };
+        if res != 0 {
+            println!("Non-zero fcntl return {:?}", res);
+        }
         let child = Command::new("bpftrace")
             .args(["./metric-collector/src/bpf/io_wait.bt"])
-            .stdout(writer)
+            .stdout(bpf_pipe_tx)
             .spawn()?;
+        Self::start_bpf_reader(tx, bpf_pipe_rx, terminate_flag);
         Ok(Self {
             reader,
             child: Some(child),
@@ -151,6 +169,28 @@ impl IOWaitProgram<File> {
             current_event: None,
             events: None,
         })
+    }
+
+    fn start_bpf_reader(
+        mut tx: Sender<Arc<[u8]>>,
+        mut bpf_pipe_rx: File,
+        terminate_flag: Arc<Mutex<bool>>,
+    ) {
+        thread::spawn(move || loop {
+            if *terminate_flag.lock().unwrap() == true {
+                break;
+            }
+            let mut buf: [u8; 1024] = [0; 1024];
+            let res = bpf_pipe_rx.read(&mut buf);
+            if let Ok(bytes) = res {
+                if bytes == 0 {
+                    break;
+                }
+
+                println!("{}", String::from_utf8(buf[..bytes - 1].into()).unwrap());
+                tx.send(Arc::from(&buf[..bytes]));
+            }
+        });
     }
 }
 
@@ -197,7 +237,7 @@ impl<R: Read> IOWaitProgram<R> {
 
     pub fn poll_events(&mut self) -> Result<()> {
         loop {
-            let mut buf: [u8; 256] = [0; 256];
+            let mut buf: [u8; 65536] = [0; 65536];
             let bytes = self.reader.read(&mut buf);
 
             let bytes = match bytes {
@@ -248,6 +288,51 @@ impl<R: Read> Drop for IOWaitProgram<R> {
 
         if let Err(why) = self.child.as_mut().unwrap().kill() {
             println!("Failed to kill futex {}", why);
+        }
+    }
+}
+
+pub struct ChannelReader {
+    receiver: Receiver<Arc<[u8]>>,
+    hanging: Option<Arc<[u8]>>,
+}
+
+impl ChannelReader {
+    fn store(&mut self, data: &[u8]) {
+        if let None = self.hanging {
+            self.hanging = Some(Arc::from(data))
+        } else {
+            let hanging: Vec<u8> = [self.hanging.as_ref().unwrap(), data].concat();
+            self.hanging = Some(Arc::from(&*hanging))
+        }
+    }
+
+    fn cp(&mut self, data: Arc<[u8]>, buf: &mut [u8], start: usize) -> usize {
+        let free = buf.len() - start;
+        let cp_size = usize::min(free, data.len());
+        buf[start..(start + cp_size)].clone_from_slice(&data[..cp_size]);
+        if cp_size == free {
+            self.store(&data[cp_size..]);
+        }
+        free - cp_size
+    }
+}
+
+impl Read for ChannelReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut free = buf.len();
+        if let Some(data) = self.hanging.take() {
+            free = self.cp(data, buf, 0);
+        }
+
+        loop {
+            let data = self.receiver.try_recv();
+            if let Err(_) = data {
+                return Ok(buf.len() - free);
+            }
+            if let Ok(data) = data {
+                free = self.cp(data, buf, buf.len() - free);
+            }
         }
     }
 }

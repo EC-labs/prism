@@ -72,7 +72,12 @@ impl Clone {
 
                     return Err(error.into());
                 }
-                Ok(bytes) => bytes,
+                Ok(bytes) => {
+                    if bytes == 0 {
+                        break;
+                    }
+                    bytes
+                }
             };
 
             let mut iterator = buf[..bytes].into_iter();

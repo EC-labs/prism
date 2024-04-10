@@ -128,7 +128,7 @@ impl Extractor {
     pub fn run(mut self) -> Result<()> {
         self.register_sighandler();
         self.start_timer_thread();
-        let mut executor = Executor::new()?;
+        let mut executor = Executor::new(self.terminate_flag.clone())?;
 
         let targets = Target::search_targets_regex(
             "jbd2",

@@ -3,6 +3,7 @@ use nix::time::{self, ClockId};
 use std::ffi::CString;
 use std::fs::File;
 use std::io::Read;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, rc::Rc};
 
@@ -10,6 +11,7 @@ pub mod programs;
 
 use programs::clone::Clone;
 use programs::futex::FutexProgram;
+use programs::iowait::ChannelReader;
 use programs::iowait::IOWaitProgram;
 use programs::BOOT_EPOCH_NS;
 
@@ -19,8 +21,8 @@ pub struct Executor<R: Read> {
     pub io_wait: Rc<RefCell<IOWaitProgram<R>>>,
 }
 
-impl Executor<File> {
-    pub fn new() -> Result<Self> {
+impl Executor<ChannelReader> {
+    pub fn new(terminate_flag: Arc<Mutex<bool>>) -> Result<Self> {
         if *BOOT_EPOCH_NS.read().unwrap() == 0 {
             let ns_since_boot =
                 Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_nanos();
@@ -35,7 +37,7 @@ impl Executor<File> {
         let pid = std::process::id();
         let mut clone = Clone::new(pid)?;
         let mut futex = FutexProgram::new(pid)?;
-        let mut io_wait = IOWaitProgram::new()?;
+        let mut io_wait = IOWaitProgram::new(terminate_flag)?;
 
         while (true, true, true)
             != (
