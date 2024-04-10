@@ -2,7 +2,6 @@ use ctrlc;
 use eyre::Result;
 use std::{
     collections::HashMap,
-    io::Read,
     sync::{mpsc::Receiver, Arc, Mutex},
     thread,
     time::Duration,
@@ -43,7 +42,7 @@ impl Extractor {
         .expect("Error setting Ctrl-C handler");
     }
 
-    fn register_new_targets<R: Read>(&mut self, executor: &mut Executor<R>) {
+    fn register_new_targets(&mut self, executor: &mut Executor) {
         executor
             .clone
             .poll_events()

@@ -3,8 +3,7 @@ use std::os::unix::prelude::*;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::{
-    fs::File,
-    io::{prelude::*, ErrorKind},
+    io::prelude::*,
     process::{Child, Command},
     rc::Rc,
     thread,
@@ -132,21 +131,17 @@ impl From<Vec<u8>> for IOWaitEvent {
     }
 }
 
-pub struct IOWaitProgram<R: Read> {
+pub struct IOWaitProgram {
     child: Option<Child>,
-    reader: R,
     header_lines: u8,
     current_event: Option<Vec<u8>>,
     events: Option<Vec<IOWaitEvent>>,
+    rx: Receiver<Arc<[u8]>>,
 }
 
-impl IOWaitProgram<ChannelReader> {
+impl IOWaitProgram {
     pub fn new(terminate_flag: Arc<Mutex<bool>>) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel();
-        let reader = ChannelReader {
-            receiver: rx,
-            hanging: None,
-        };
 
         let (bpf_pipe_rx, bpf_pipe_tx) = super::pipe();
         let res = unsafe { libc::fcntl(bpf_pipe_rx.as_raw_fd(), libc::F_SETPIPE_SZ, 1048576) };
@@ -163,7 +158,7 @@ impl IOWaitProgram<ChannelReader> {
             .spawn()?;
         Self::start_bpf_reader(tx, bpf_pipe_rx, terminate_flag);
         Ok(Self {
-            reader,
+            rx,
             child: Some(child),
             header_lines: 0,
             current_event: None,
@@ -171,33 +166,41 @@ impl IOWaitProgram<ChannelReader> {
         })
     }
 
-    fn start_bpf_reader(
-        mut tx: Sender<Arc<[u8]>>,
-        mut bpf_pipe_rx: File,
+    fn start_bpf_reader<R>(
+        tx: Sender<Arc<[u8]>>,
+        mut bpf_pipe_rx: R,
         terminate_flag: Arc<Mutex<bool>>,
-    ) {
+    ) where
+        R: Read + Send + 'static,
+    {
         thread::spawn(move || loop {
             if *terminate_flag.lock().unwrap() == true {
                 break;
             }
-            let mut buf: [u8; 1024] = [0; 1024];
+            let mut buf: [u8; 65536] = [0; 65536];
             let res = bpf_pipe_rx.read(&mut buf);
             if let Ok(bytes) = res {
                 if bytes == 0 {
                     break;
                 }
 
-                println!("{}", String::from_utf8(buf[..bytes - 1].into()).unwrap());
-                tx.send(Arc::from(&buf[..bytes]));
+                if let Err(_) = tx.send(Arc::from(&buf[..bytes])) {
+                    break;
+                };
             }
         });
     }
 }
 
-impl<R: Read> IOWaitProgram<R> {
-    pub fn custom_reader(reader: R) -> Self {
+impl IOWaitProgram {
+    pub fn custom_reader<R: Read + Send + 'static>(
+        reader: R,
+        terminate_flag: Arc<Mutex<bool>>,
+    ) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Self::start_bpf_reader(tx, reader, terminate_flag);
         Self {
-            reader,
+            rx,
             child: None,
             header_lines: 0,
             current_event: None,
@@ -235,29 +238,19 @@ impl<R: Read> IOWaitProgram<R> {
         self.header_lines == 1
     }
 
-    pub fn poll_events(&mut self) -> Result<()> {
+    pub fn poll_events(&mut self) -> Result<usize> {
         loop {
-            let mut buf: [u8; 65536] = [0; 65536];
-            let bytes = self.reader.read(&mut buf);
+            let res = self.rx.try_recv();
 
-            let bytes = match bytes {
-                Err(error) => {
-                    let kind = error.kind();
-                    if kind == ErrorKind::WouldBlock {
-                        break;
-                    }
-
-                    return Err(error.into());
+            let buf = match res {
+                Err(TryRecvError::Empty) => {
+                    break;
                 }
-                Ok(bytes) => {
-                    if bytes == 0 {
-                        break;
-                    }
-                    bytes
-                }
+                Err(e) => return Err(e.into()),
+                Ok(buf) => buf,
             };
 
-            let mut iterator = buf[..bytes].into_iter();
+            let mut iterator = buf.into_iter();
             if !self.header_read() {
                 self.handle_header(&mut iterator);
             }
@@ -271,16 +264,26 @@ impl<R: Read> IOWaitProgram<R> {
                 events.push(event);
             }
         }
-        Ok(())
+        Ok(self.events.as_ref().map_or(0, |events| events.len()))
     }
 
     pub fn take_events(&mut self) -> Result<Vec<IOWaitEvent>> {
-        self.poll_events()?;
-        Ok(self.events.take().unwrap_or(Vec::new()))
+        let res = self.poll_events();
+        match res {
+            Ok(_) => Ok(self.events.take().unwrap_or(Vec::new())),
+            Err(e) => {
+                let events = self.events.take();
+                if events.is_some() {
+                    Ok(events.unwrap())
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 }
 
-impl<R: Read> Drop for IOWaitProgram<R> {
+impl Drop for IOWaitProgram {
     fn drop(&mut self) {
         if let None = self.child {
             return;

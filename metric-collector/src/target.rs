@@ -13,7 +13,6 @@ use std::{
     error::Error,
     fmt::{self, Display},
     fs,
-    io::Read,
     rc::Rc,
 };
 
@@ -62,11 +61,11 @@ impl Target {
         }
     }
 
-    pub fn search_targets_regex<R: Read>(
+    pub fn search_targets_regex(
         name: &str,
         kthread: bool,
         data_directory: Rc<str>,
-        executor: &mut Executor<R>,
+        executor: &mut Executor,
     ) -> Result<Vec<Self>> {
         let mut targets = Vec::new();
 

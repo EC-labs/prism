@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     hash::Hash,
-    io::{Read, Write},
+    io::Write,
     path::Path,
     rc::Rc,
     time::{SystemTime, UNIX_EPOCH},
@@ -52,7 +52,7 @@ impl ThreadDeviceStats {
 
     fn store_minute(&self, minute: &u64, map: &HashMap<u64, u64>) -> Result<()> {
         let minute_s = minute * 60;
-        let file_path = format!("{}/{:?}/{:?}.csv", self.dir, minute_s * 60, self.device);
+        let file_path = format!("{}/{:?}/{:?}.csv", self.dir, minute_s, self.device);
         let parent = Path::new(&file_path).parent().unwrap();
         fs::create_dir_all(&parent)?;
         let mut file = File::create(&file_path)?;
@@ -128,14 +128,6 @@ impl ThreadDeviceStats {
         } else {
             None
         }
-    }
-
-    fn get_entries(&self) -> HashMap<u64, u64> {
-        self.minute_map
-            .iter()
-            .map(|(_, map)| map.iter().map(|(k, v)| (*k, *v)))
-            .flatten()
-            .collect()
     }
 }
 
@@ -221,8 +213,8 @@ impl Hash for Bio {
     }
 }
 
-pub struct IOWait<R: Read> {
-    iowait_program: Rc<RefCell<IOWaitProgram<R>>>,
+pub struct IOWait {
+    iowait_program: Rc<RefCell<IOWaitProgram>>,
     pending_requests: HashMap<u32, HashMap<BioKey, Bio>>,
     thread_map: HashMap<usize, ThreadIOStats>,
     current_sample_instant_s: Option<u64>,
@@ -230,8 +222,8 @@ pub struct IOWait<R: Read> {
     dir: Rc<str>,
 }
 
-impl<R: Read> IOWait<R> {
-    pub fn new(iowait_program: Rc<RefCell<IOWaitProgram<R>>>, parent: Option<Rc<str>>) -> Self {
+impl IOWait {
+    pub fn new(iowait_program: Rc<RefCell<IOWaitProgram>>, parent: Option<Rc<str>>) -> Self {
         let dir = if let None = parent {
             Rc::from("iowait")
         } else {
@@ -350,9 +342,13 @@ impl<R: Read> IOWait<R> {
     }
 }
 
-impl<R: Read> Collect for IOWait<R> {
+impl Collect for IOWait {
     fn sample(&mut self) -> Result<()> {
-        let events = self.iowait_program.borrow_mut().take_events()?;
+        let events = self
+            .iowait_program
+            .borrow_mut()
+            .take_events()
+            .unwrap_or(Vec::new());
 
         if let None = self.current_sample_instant_s {
             self.set_current_sample_instant(None)
@@ -375,6 +371,7 @@ impl<R: Read> Collect for IOWait<R> {
             }
         }
 
+        println!("Store iowait");
         for (_, thread_stats) in self.thread_map.iter_mut() {
             thread_stats.store(current_sample_insant_s)?
         }
@@ -392,8 +389,9 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::fs;
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     use crate::execute::programs::iowait::IOWaitProgram;
     use crate::execute::programs::{fcntl_setfd, pipe};
@@ -401,6 +399,16 @@ mod tests {
     use crate::metrics::Collect;
 
     use super::{IOWait, ThreadDeviceStats};
+
+    impl ThreadDeviceStats {
+        fn get_entries(&self) -> HashMap<u64, u64> {
+            self.minute_map
+                .iter()
+                .map(|(_, map)| map.iter().map(|(k, v)| (*k, *v)))
+                .flatten()
+                .collect()
+        }
+    }
 
     // Attaching 6 probes...
     // bio_s	772129082664043	264241153	264241153	443675136	8	1	1	0	3	LS Thread
@@ -410,8 +418,8 @@ mod tests {
     // bio_e	772129085777546	264241152	264241152	443677192	8	1	1	0	0	swapper/13
     // bio_e	772129085778357	264241153	264241153	443675144	8	1	1	0	0	swapper/13
 
-    fn get_buffer<'a, R: Read>(
-        iowait: &'a IOWait<R>,
+    fn get_buffer<'a>(
+        iowait: &'a IOWait,
         thread: &usize,
         device: &u32,
     ) -> Result<HashMap<u64, u64>> {
@@ -433,7 +441,12 @@ mod tests {
             bio_s	000000100000000	264241153	264241153	443675136	8	1	1	0	3	LS Thread
             bio_s	000001100000000	264241153	264241153	443675144	8	1	1	0	4	LS Thread
         "#};
-        let iowait_program = IOWaitProgram::custom_reader(reader.as_bytes());
+        let terminate_flag = Arc::new(Mutex::new(false));
+        let mut iowait_program = IOWaitProgram::custom_reader(reader.as_bytes(), terminate_flag);
+        while !iowait_program.header_read() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let _ = iowait_program.poll_events();
+        }
         let mut iowait = IOWait::new(Rc::new(RefCell::new(iowait_program)), None);
 
         iowait.current_sample_instant_s = Some(000001);
@@ -456,14 +469,22 @@ mod tests {
         let (mut reader, mut writer) = pipe();
         fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
 
-        let iowait_program = IOWaitProgram::custom_reader(reader);
-        let mut iowait = IOWait::new(Rc::new(RefCell::new(iowait_program)), None);
-
         let data = indoc! {r#"
             Attaching 6 probes...
             bio_s	000000100000000	264241153	264241153	443675136	8	1	1	0	3	LS Thread
         "#};
         writer.write_all(data.as_bytes())?;
+
+        let terminate_flag = Arc::new(Mutex::new(false));
+        let mut iowait_program = IOWaitProgram::custom_reader(reader, terminate_flag);
+        while !iowait_program.header_read() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            iowait_program.poll_events()?;
+        }
+
+        let iowait_program = Rc::new(RefCell::new(iowait_program));
+        let mut iowait = IOWait::new(iowait_program.clone(), None);
+
         iowait.current_sample_instant_s = Some(000001);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
@@ -473,6 +494,8 @@ mod tests {
             bio_s	000000110000000	264241153	264241153	443675144	8	1	1	0	3	LS Thread
         "#};
         writer.write_all(data.as_bytes())?;
+        drop(writer);
+        while let Ok(_) = iowait_program.borrow_mut().poll_events() {}
         iowait.current_sample_instant_s = Some(000002);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
@@ -485,16 +508,22 @@ mod tests {
     fn sample() -> Result<()> {
         let (mut reader, mut writer) = pipe();
         fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
-
-        let iowait_program = IOWaitProgram::custom_reader(reader);
-        let mut iowait = IOWait::new(Rc::new(RefCell::new(iowait_program)), None);
-
         let data = indoc! {r#"
             Attaching 6 probes...
             bio_s	000000100000000	264241153	264241153	443675136	8	1	1	0	3	LS Thread
             bio_s	000001100000000	264241153	264241153	443675144	8	1	1	0	4	LS Thread
         "#};
         writer.write_all(data.as_bytes())?;
+
+        let terminate_flag = Arc::new(Mutex::new(false));
+        let mut iowait_program = IOWaitProgram::custom_reader(reader, terminate_flag);
+        while !iowait_program.header_read() {
+            let _ = iowait_program.poll_events();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let iowait_program = Rc::new(RefCell::new(iowait_program));
+        let mut iowait = IOWait::new(iowait_program.clone(), None);
+
         iowait.current_sample_instant_s = Some(000001);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
@@ -518,6 +547,7 @@ mod tests {
             bio_e	000002900000000	264241153	264241153	443675136	8	1	1	0	0	swapper/13
         "#};
         writer.write_all(data.as_bytes())?;
+        while iowait_program.borrow_mut().poll_events().unwrap() == 0 {}
         iowait.current_sample_instant_s = Some(000004);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
@@ -532,16 +562,22 @@ mod tests {
     fn bioendio() -> Result<()> {
         let (mut reader, mut writer) = pipe();
         fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
-
-        let iowait_program = IOWaitProgram::custom_reader(reader);
-        let mut iowait = IOWait::new(Rc::new(RefCell::new(iowait_program)), None);
-
         let data = indoc! {r#"
             Attaching 6 probes...
             bio_s	000000100000000	264241153	264241153	443675136	8	1	1	0	3	LS Thread
             bio_s	000001100000000	264241153	264241153	443675144	8	1	1	0	4	LS Thread
         "#};
         writer.write_all(data.as_bytes())?;
+
+        let terminate_flag = Arc::new(Mutex::new(false));
+        let mut iowait_program = IOWaitProgram::custom_reader(reader, terminate_flag);
+        while !iowait_program.header_read() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let _ = iowait_program.poll_events();
+        }
+        let iowait_program = Rc::new(RefCell::new(iowait_program));
+        let mut iowait = IOWait::new(iowait_program.clone(), None);
+
         iowait.current_sample_instant_s = Some(000001);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
@@ -558,6 +594,7 @@ mod tests {
             bio_e	000001900000000	264241153	264241153	443675136	8	1	1	0	0	swapper/13
         "#};
         writer.write_all(data.as_bytes())?;
+        while iowait_program.borrow_mut().poll_events().unwrap() == 0 {}
         iowait.current_sample_instant_s = Some(000004);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &4, &264241153)?;
@@ -569,6 +606,7 @@ mod tests {
             bio_e	000002900000000	264241153	264241153	443675144	8	1	1	0	0	swapper/13
         "#};
         writer.write_all(data.as_bytes())?;
+        while iowait_program.borrow_mut().poll_events().unwrap() == 0 {}
         iowait.current_sample_instant_s = Some(000004);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &4, &264241153)?;
@@ -583,16 +621,21 @@ mod tests {
     fn bioendio_within_interval() -> Result<()> {
         let (mut reader, mut writer) = pipe();
         fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
-
-        let iowait_program = IOWaitProgram::custom_reader(reader);
-        let mut iowait = IOWait::new(Rc::new(RefCell::new(iowait_program)), None);
-
         let data = indoc! {r#"
             Attaching 6 probes...
             bio_s	000001100000000	264241153	264241153	443675136	8	1	1	0	3	LS Thread
             bio_e	000001200000000	264241153	264241153	443675136	8	1	1	0	3	LS Thread
         "#};
         writer.write_all(data.as_bytes())?;
+
+        let terminate_flag = Arc::new(Mutex::new(false));
+        let mut iowait_program = IOWaitProgram::custom_reader(reader, terminate_flag);
+        while !iowait_program.header_read() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let _ = iowait_program.poll_events();
+        }
+        let mut iowait = IOWait::new(Rc::new(RefCell::new(iowait_program)), None);
+
         iowait.current_sample_instant_s = Some(2);
         iowait.sample().unwrap();
         let buffer = get_buffer(&iowait, &3, &264241153)?;
@@ -671,7 +714,12 @@ mod tests {
             bio_s	000061000000000	264241153	264241154	443675144	8	1	1	0	4	LS Thread
             bio_e	000062000000000	264241153	264241154	443675144	8	1	1	0	0	swapper/13
         "#};
-        let iowait_program = IOWaitProgram::custom_reader(reader.as_bytes());
+        let terminate_flag = Arc::new(Mutex::new(false));
+        let mut iowait_program = IOWaitProgram::custom_reader(reader.as_bytes(), terminate_flag);
+        while !iowait_program.header_read() {
+            let _ = iowait_program.poll_events();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let mut iowait = IOWait::new(Rc::new(RefCell::new(iowait_program)), None);
 
         iowait.current_sample_instant_s = Some(1);
@@ -712,7 +760,12 @@ mod tests {
             bio_s	000061000000000	264241153	264241154	443675144	8	1	1	0	4	LS Thread
             bio_e	000062000000000	264241153	264241154	443675144	8	1	1	0	0	swapper/13
         "#};
-        let iowait_program = IOWaitProgram::custom_reader(reader.as_bytes());
+        let terminate_flag = Arc::new(Mutex::new(false));
+        let mut iowait_program = IOWaitProgram::custom_reader(reader.as_bytes(), terminate_flag);
+        while !iowait_program.header_read() {
+            let _ = iowait_program.poll_events();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         let tmp_dir = TempDir::new("test_store")?;
         let mut iowait = IOWait::new(
@@ -772,7 +825,12 @@ mod tests {
             bio_s	000008000000000	264241153	264241154	443675144	8	1	1	0	4	LS Thread
             bio_e	000009000000000	264241153	264241154	443675144	8	1	1	0	0	swapper/13
         "#};
-        let iowait_program = IOWaitProgram::custom_reader(reader.as_bytes());
+        let terminate_flag = Arc::new(Mutex::new(false));
+        let mut iowait_program = IOWaitProgram::custom_reader(reader.as_bytes(), terminate_flag);
+        while !iowait_program.header_read() {
+            let _ = iowait_program.poll_events();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         let tmp_dir = TempDir::new("test_store")?;
         let mut iowait = IOWait::new(

@@ -32,10 +32,9 @@ void direct_read() {
         .tv_sec = 0,
         .tv_nsec = 1000000,
     };
-    for (ssize_t i=0; i<1000; i++) {
+    for (ssize_t i=0; i<10000; i++) {
 
         ssize_t bytes_read = read(file_descriptor, buffer, buffer_size);
-        printf("%ld %ld\n", i, bytes_read);
         if (bytes_read == -1) {
             perror("read");
             free(buffer);
