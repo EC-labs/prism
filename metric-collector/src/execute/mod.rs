@@ -70,3 +70,38 @@ impl Executor {
 pub fn boot_to_epoch(boot_ns: u128) -> u128 {
     *BOOT_EPOCH_NS.read().unwrap() + boot_ns
 }
+
+pub trait BpfReader {
+    fn header_read(&self) -> bool;
+    fn header_lines_get_mut(&mut self) -> &mut u8;
+
+    fn current_event_as_mut(&mut self) -> Option<&mut Vec<u8>>;
+    fn set_current_event(&mut self, val: Vec<u8>);
+    fn take_current_event(&mut self) -> Option<Vec<u8>>;
+
+    fn handle_header<'a, I: Iterator<Item = &'a u8>>(&mut self, buf: &mut I) {
+        while !self.header_read() {
+            let newline = buf.find(|&&b| b == b'\n');
+            if let Some(_) = newline {
+                *self.header_lines_get_mut() += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn handle_event<'a, I: Iterator<Item = &'a u8>>(&mut self, buf: &mut I) -> Option<Vec<u8>> {
+        if let None = self.current_event_as_mut() {
+            self.set_current_event(Vec::new());
+        }
+
+        while let Some(byte) = buf.next() {
+            if *byte != b'\n' {
+                self.current_event_as_mut().map(|curr| curr.push(*byte));
+            } else {
+                return self.take_current_event();
+            }
+        }
+        return None;
+    }
+}

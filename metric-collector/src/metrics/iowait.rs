@@ -394,7 +394,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::execute::programs::iowait::IOWaitProgram;
-    use crate::execute::programs::{fcntl_setfd, pipe};
+    use crate::execute::{
+        programs::{fcntl_setfd, pipe},
+        BpfReader,
+    };
     use crate::metrics::iowait::Bio;
     use crate::metrics::Collect;
 

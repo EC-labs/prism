@@ -1,7 +1,4 @@
 #!/home/diogo/.local/bin/bpftrace
-/* Signals when a thread enters a waiting state for a futex, and when it
- * returns from waiting. 
- */
 
 tracepoint:syscalls:sys_enter_access
 / pid == $1 /
