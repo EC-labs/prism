@@ -2,6 +2,9 @@
 
 #include <linux/stat.h>
 #include <linux/fs.h>
+#include <linux/net.h>
+#include <linux/socket.h>
+#include <net/sock.h>
 
 BEGIN 
 / str($2) == "debug" /
@@ -9,6 +12,12 @@ BEGIN
     @pids[$1] = 1;
 }
 
+/* This probe is used to register new pids. 
+ * 
+ * The first argument is the pid of the metric collector sending the event. The
+ * new pid is extracted from the mode argument passed in via the mode system *
+ * call parameter.
+ */
 tracepoint:syscalls:sys_enter_access
 / pid == $1 /
 {
@@ -23,22 +32,27 @@ tracepoint:syscalls:sys_enter_access
     }
 }
 
+
+
+/* 
+ * STREAMS
+ */
 kfunc:vmlinux:vfs_read
 {
     $inode = (struct inode *)args->file->f_inode;
     $mode = $inode->i_mode;
 
-    if (($mode & S_IFMT) == S_IFIFO) {
+    if ((($mode & S_IFMT) == S_IFIFO) || (($mode & S_IFMT) == S_IFCHR)) {
         $i_id = $inode->i_ino;
         $s_dev = $inode->i_sb->s_dev;
 
-        if (!@pipes[$s_dev, $i_id]) {
+        if (!@files[$s_dev, $i_id]) {
             if (@pids[pid]) {
-                @pipes[$s_dev, $i_id] = 1;
+                @files[$s_dev, $i_id] = 1;
             }
         } 
 
-        if (!@pipes[$s_dev, $i_id]) {
+        if (!@files[$s_dev, $i_id]) {
             return;
         }
 
@@ -48,9 +62,9 @@ kfunc:vmlinux:vfs_read
             @pids[pid] = 1
         }
 
-        @start_fifo[tid, $s_dev, $i_id] = nsecs;
+        @start_file[tid, $s_dev, $i_id] = nsecs;
         printf("%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "FifoReadStart", tid, $s_dev, $i_id, @start_fifo[tid, $s_dev, $i_id]);
+               "ReadStart", tid, $s_dev, $i_id, @start_file[tid, $s_dev, $i_id]);
     } 
 }
 
@@ -59,17 +73,17 @@ kretfunc:vmlinux:vfs_read
     $inode = (struct inode *)args->file->f_inode;
     $mode = $inode->i_mode;
 
-    if (($mode & S_IFMT) == S_IFIFO) {
+    if ((($mode & S_IFMT) == S_IFIFO) || (($mode & S_IFMT) == S_IFCHR)) {
         $i_id = $inode->i_ino;
         $s_dev = $inode->i_sb->s_dev;
 
-        if (!@start_fifo[tid, $s_dev, $i_id]) {
+        if (!@start_file[tid, $s_dev, $i_id]) {
             return;
         }
 
         printf("%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "FifoReadEnd", tid, $s_dev, $i_id, nsecs - @start_fifo[tid, $s_dev, $i_id]);
-        delete(@start_fifo[tid, $s_dev, $i_id]);
+               "ReadEnded", tid, $s_dev, $i_id, nsecs - @start_file[tid, $s_dev, $i_id]);
+        delete(@start_file[tid, $s_dev, $i_id]);
     }    
 }
 
@@ -78,29 +92,29 @@ kfunc:vmlinux:vfs_write
     $inode = (struct inode *)args->file->f_inode;
     $mode = $inode->i_mode;
 
-    if (($mode & S_IFMT) == S_IFIFO) {
+    if ((($mode & S_IFMT) == S_IFIFO) || (($mode & S_IFMT) == S_IFCHR)) {
         $i_id = $inode->i_ino;
         $s_dev = $inode->i_sb->s_dev;
 
-        if (!@pipes[$s_dev, $i_id]) {
+        if (!@files[$s_dev, $i_id]) {
             if (@pids[pid]) {
-                @pipes[$s_dev, $i_id] = 1;
+                @files[$s_dev, $i_id] = 1;
             }
         } 
 
-        if (!@pipes[$s_dev, $i_id]) {
+        if (!@files[$s_dev, $i_id]) {
             return;
         }
 
         if (!@pids[pid]) {
-            printf("%s\t%lld\n", 
-                   "NewProcess", pid);
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
             @pids[pid] = 1
         }
 
-        @start_fifo[tid, $s_dev, $i_id] = nsecs;
+        @start_file[tid, $s_dev, $i_id] = nsecs;
         printf("%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "FifoWriteStart", tid, $s_dev, $i_id, @start_fifo[tid, $s_dev, $i_id]);
+               "WriteStart", tid, $s_dev, $i_id, @start_file[tid, $s_dev, $i_id]);
     }
 }
 
@@ -109,23 +123,185 @@ kretfunc:vmlinux:vfs_write
     $inode = (struct inode *)args->file->f_inode;
     $mode = $inode->i_mode;
 
-    if (($mode & S_IFMT) == S_IFIFO) {
+    if ((($mode & S_IFMT) == S_IFIFO) || (($mode & S_IFMT) == S_IFCHR)) {
         $i_id = $inode->i_ino;
         $s_dev = $inode->i_sb->s_dev;
 
-        if (!@start_fifo[tid, $s_dev, $i_id]) {
+        if (!@start_file[tid, $s_dev, $i_id]) {
             return;
         }
 
         printf("%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "FifoWriteEnd", tid, $s_dev, $i_id, nsecs - @start_fifo[tid, $s_dev, $i_id]);
-        delete(@start_fifo[tid, $s_dev, $i_id]);
+               "WriteEnd", tid, $s_dev, $i_id, nsecs - @start_file[tid, $s_dev, $i_id]);
+        delete(@start_file[tid, $s_dev, $i_id]);
     }
 }
 
+
+
+/*
+ * SOCKETS
+ */
+kfunc:vmlinux:tcp_connect
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $sk = args->sk;
+    $inet_family = $sk->__sk_common.skc_family;
+
+    if ($inet_family != AF_INET) {
+        return;
+    }
+
+    $daddr = ntop($sk->__sk_common.skc_daddr);
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = bswap($dport);
+
+    if (!@socks[$saddr, $lport, $daddr, $dport]) {
+        @socks[$saddr, $lport, $daddr, $dport] = 1;
+    }
+    @start_sock[tid] = nsecs;
+    printf("ConnectStart\t%lld\t%s\t%s\t%d\t%s\t%d\n", tid, comm, $saddr, $lport, $daddr, $dport);
+}
+
+
+kretfunc:vmlinux:tcp_connect
+/ @start_sock[tid] /
+{
+    printf("%s\t%lld\t%s\t%lld\n",
+           "ConnectEnded", tid, comm, nsecs - @start_sock[tid]);
+    delete(@start_sock[tid]);
+}
+
+kfunc:vmlinux:do_accept 
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $socket = (struct socket *)args->file->private_data;
+    $sk = $socket->sk;
+	$inet_family = $sk->__sk_common.skc_family;
+    
+    if ($inet_family != AF_INET) {
+        return;
+    }
+
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+    $lport = $sk->__sk_common.skc_num;
+
+    @start_sock[tid] = nsecs;
+    printf("AcceptStart\t%lld\t%s\t%s\t%d\n", tid, comm, $saddr, $lport);
+}
+
+kretprobe:inet_csk_accept
+{
+	$sk = (struct sock *)retval;
+	$inet_family = $sk->__sk_common.skc_family;
+
+	if ($inet_family != AF_INET) {
+        return;
+	}
+
+    $daddr = ntop($sk->__sk_common.skc_daddr);
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = bswap($dport);
+
+    $qlen  = $sk->sk_ack_backlog;
+    $qmax  = $sk->sk_max_ack_backlog;
+
+    if (@socks[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
+        printf("%s\t%s\t%lld\n", 
+               "NewProcess", comm, pid);
+        @pids[pid] = 1;
+    }
+    printf("AcceptEnded\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\n", 
+           tid, comm, $saddr, $lport, $daddr, $dport, nsecs - @start_sock[tid]);
+    delete(@start_sock[tid]);
+}
+
+kfunc:vmlinux:sock_recvmsg
+{
+    if (!@pids[pid]) {
+        return;
+    }
+    
+    $inode = (struct inode *)args->sock->file->f_inode;
+	$sk = args->sock->sk;
+	$inet_family = $sk->__sk_common.skc_family;
+
+    if ($inet_family != AF_INET) {
+        return;
+    }
+
+    $daddr = ntop($sk->__sk_common.skc_daddr);
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = bswap($dport);
+
+    @start_sock[tid] = nsecs;
+    printf("%s\t%lld\t%s\t%s\t%d\t%s\t%d\n", 
+           "RecvStart", tid, comm, $saddr, $lport, $daddr, $dport);
+}
+
+kretfunc:vmlinux:sock_recvmsg
+/ @start_sock[tid] /
+{
+    printf("%s\t%lld\t%s\t%lld\n",
+           "RecvEnded", tid, comm, nsecs - @start_sock[tid]);
+    delete(@start_sock[tid]);
+}
+
+kfunc:vmlinux:inet_sendmsg
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $inode = (struct inode *)args->sock->file->f_inode;
+	$sk = args->sock->sk;
+	$inet_family = $sk->__sk_common.skc_family;
+
+    if ($inet_family != AF_INET) {
+        return;
+    }
+
+    $daddr = ntop($sk->__sk_common.skc_daddr);
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = bswap($dport);
+
+    @start_sock[tid] = nsecs;
+    printf("%s\t%lld\t%s\t%s\t%d\t%s\t%d\n", 
+           "SendStart", tid, comm, $saddr, $lport, $daddr, $dport);
+}
+
+kretfunc:vmlinux:inet_sendmsg
+/ @start_sock[tid] /
+{
+    printf("%s\t%lld\t%s\t%lld\n", 
+           "SendEnded", tid, comm, nsecs - @start_sock[tid]);
+    delete(@start_sock[tid]);
+}
+
+
+
 END 
 {
-    clear(@start_fifo);
-    clear(@pipes);
+    clear(@start_file);
+    clear(@start_sock);
+    clear(@files);
     clear(@pids);
+    clear(@socks);
 }
