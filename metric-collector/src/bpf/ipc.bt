@@ -6,6 +6,23 @@
 #include <linux/socket.h>
 #include <net/sock.h>
 
+struct epoll_filefd {
+	struct file *file;
+	int fd;
+};
+
+struct epitem {
+	union {
+		struct rb_node rbn;
+		struct rcu_head rcu;
+	};
+	struct list_head rdllink;
+	struct epitem *next;
+	struct epoll_filefd ffd;
+
+};
+
+
 BEGIN 
 / str($2) == "debug" /
 {
@@ -296,6 +313,51 @@ kretfunc:vmlinux:inet_sendmsg
 }
 
 
+
+/*
+ * EPOLL
+ */
+kfunc:vmlinux:do_epoll_wait
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    printf("EpollWaiting\t%lld\t%s\n", tid, comm);
+}
+
+kretfunc:vmlinux:do_epoll_wait
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    printf("RetEpollWait\t%lld\t%s\n", tid, comm);
+}
+
+kprobe:ep_send_events
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    @epoll_send[tid] = 1;
+}
+
+kretprobe:ep_send_events
+/ @epoll_send[tid] /
+{
+    delete(@epoll_send[tid]);
+}
+
+kprobe:ep_item_poll*
+/ @epoll_send[tid] /
+{
+    $epi = (struct epitem *) arg0;
+    $ffd = $epi->ffd;
+    $inode = $ffd.file->f_inode;
+    printf("EpiPolled\t%lld\t%s\t%d\t%lld\t%lld\n", tid, comm, $ffd.fd, $inode->i_sb->s_dev, $inode->i_ino);
+}
 
 END 
 {
