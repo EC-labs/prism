@@ -4,6 +4,7 @@ use std::{fs::File, os::unix::prelude::*, process, sync::RwLock};
 pub mod clone;
 pub mod futex;
 pub mod iowait;
+pub mod ipc;
 
 pub static BOOT_EPOCH_NS: RwLock<u128> = RwLock::new(0);
 
@@ -23,4 +24,18 @@ pub fn fcntl_setfd(file: &mut File, flags: c_int) {
     if res != 0 {
         println!("Non-zero fcntl return {:?}", res);
     }
+}
+
+pub fn bpf_pipe(buf_size: u32) -> (File, File) {
+    let (bpf_pipe_rx, bpf_pipe_tx) = pipe();
+    let res = unsafe { libc::fcntl(bpf_pipe_rx.as_raw_fd(), libc::F_SETPIPE_SZ, buf_size) };
+    let buf_size: i32 = buf_size.try_into().unwrap();
+    if res != buf_size {
+        println!("Could not change pipe rx buffer to {:?}", buf_size);
+    }
+    let res = unsafe { libc::fcntl(bpf_pipe_tx.as_raw_fd(), libc::F_SETPIPE_SZ, buf_size) };
+    if res != buf_size {
+        println!("Could not change pipe tx buffer to {:?}", buf_size);
+    }
+    (bpf_pipe_rx, bpf_pipe_tx)
 }

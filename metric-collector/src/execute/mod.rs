@@ -2,6 +2,7 @@ use eyre::Result;
 use nix::time::{self, ClockId};
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, rc::Rc};
 
@@ -10,6 +11,7 @@ pub mod programs;
 use programs::clone::Clone;
 use programs::futex::FutexProgram;
 use programs::iowait::IOWaitProgram;
+use programs::ipc::IpcProgram;
 use programs::BOOT_EPOCH_NS;
 
 pub struct Executor {
@@ -34,19 +36,22 @@ impl Executor {
         let pid = std::process::id();
         let mut clone = Clone::new(pid)?;
         let mut futex = FutexProgram::new(pid)?;
-        let mut io_wait = IOWaitProgram::new(terminate_flag)?;
+        let mut io_wait = IOWaitProgram::new(terminate_flag.clone())?;
+        let mut ipc = IpcProgram::new(terminate_flag)?;
 
-        while (true, true, true)
+        while (true, true, true, true)
             != (
                 clone.header_read(),
                 futex.header_read(),
                 io_wait.header_read(),
+                ipc.header_read(),
             )
         {
             clone.poll_events()?;
             futex.poll_events()?;
             io_wait.poll_events()?;
-            std::thread::sleep(std::time::Duration::from_millis(1000));
+            ipc.poll_events()?;
+            thread::sleep(std::time::Duration::from_millis(1000));
         }
 
         Ok(Executor {
