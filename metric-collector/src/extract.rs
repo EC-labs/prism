@@ -58,13 +58,14 @@ impl Extractor {
                     Target::new(
                         tid,
                         executor.futex.clone(),
+                        executor.ipc.clone(),
                         self.config.data_directory.clone(),
                         &format!("{}/{}", comm, tid),
                     ),
                 );
             });
 
-        let new_pids = executor.futex.borrow_mut().get_new_pid_events().unwrap();
+        let new_pids = executor.futex.borrow_mut().take_new_pid_events().unwrap();
         for (comm, pid) in new_pids {
             executor.monitor(pid);
             Target::get_threads(pid)
@@ -76,6 +77,7 @@ impl Extractor {
                         Target::new(
                             tid,
                             executor.futex.clone(),
+                            executor.ipc.clone(),
                             self.config.data_directory.clone(),
                             &format!("{}/{}", comm, tid),
                         ),
@@ -126,8 +128,8 @@ impl Extractor {
 
     pub fn run(mut self) -> Result<()> {
         self.register_sighandler();
-        self.start_timer_thread();
         let mut executor = Executor::new(self.terminate_flag.clone())?;
+        self.start_timer_thread();
 
         let targets = Target::search_targets_regex(
             "jbd2",

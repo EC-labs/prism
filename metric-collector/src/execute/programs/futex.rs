@@ -249,11 +249,11 @@ impl FutexProgram {
         Ok(())
     }
 
-    pub fn get_futex_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
+    pub fn take_futex_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
         Ok(self.events.remove(&tid).unwrap_or(Vec::new()))
     }
 
-    pub fn get_new_pid_events(&mut self) -> Result<Vec<(Rc<str>, usize)>> {
+    pub fn take_new_pid_events(&mut self) -> Result<Vec<(Rc<str>, usize)>> {
         self.poll_events()?;
         Ok(self.new_pids.take().unwrap_or(Vec::new()))
     }

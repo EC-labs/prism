@@ -1,5 +1,6 @@
 use eyre::Result;
 use std::{
+    collections::HashMap,
     io::Read,
     process::{Child, Command},
     rc::Rc,
@@ -22,7 +23,7 @@ pub enum IpcEvent {
         comm: Rc<str>,
         tid: usize,
         fs_type: Rc<str>,
-        super_id: u32,
+        sb_id: u32,
         inode_id: u64,
         ns_since_boot: u64,
     },
@@ -30,7 +31,7 @@ pub enum IpcEvent {
         comm: Rc<str>,
         tid: usize,
         fs_type: Rc<str>,
-        super_id: u32,
+        sb_id: u32,
         inode_id: u64,
         ns_since_boot: u64,
         ns_elapsed: u64,
@@ -39,7 +40,7 @@ pub enum IpcEvent {
         comm: Rc<str>,
         tid: usize,
         fs_type: Rc<str>,
-        super_id: u32,
+        sb_id: u32,
         inode_id: u64,
         ns_since_boot: u64,
     },
@@ -47,7 +48,7 @@ pub enum IpcEvent {
         comm: Rc<str>,
         tid: usize,
         fs_type: Rc<str>,
-        super_id: u32,
+        sb_id: u32,
         inode_id: u64,
         ns_since_boot: u64,
         ns_elapsed: u64,
@@ -67,7 +68,7 @@ impl From<Vec<u8>> for IpcEvent {
                 comm: Rc::from(elements.next().unwrap()),
                 tid: elements.next().unwrap().parse().unwrap(),
                 fs_type: Rc::from(elements.next().unwrap()),
-                super_id: elements.next().unwrap().parse().unwrap(),
+                sb_id: elements.next().unwrap().parse().unwrap(),
                 inode_id: elements.next().unwrap().parse().unwrap(),
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
             },
@@ -75,24 +76,24 @@ impl From<Vec<u8>> for IpcEvent {
                 comm: Rc::from(elements.next().unwrap()),
                 tid: elements.next().unwrap().parse().unwrap(),
                 fs_type: Rc::from(elements.next().unwrap()),
-                super_id: elements.next().unwrap().parse().unwrap(),
+                sb_id: elements.next().unwrap().parse().unwrap(),
                 inode_id: elements.next().unwrap().parse().unwrap(),
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
                 ns_elapsed: elements.next().unwrap().parse().unwrap(),
             },
-            "WriteStart" => Self::ReadStart {
+            "WriteStart" => Self::WriteStart {
                 comm: Rc::from(elements.next().unwrap()),
                 tid: elements.next().unwrap().parse().unwrap(),
                 fs_type: Rc::from(elements.next().unwrap()),
-                super_id: elements.next().unwrap().parse().unwrap(),
+                sb_id: elements.next().unwrap().parse().unwrap(),
                 inode_id: elements.next().unwrap().parse().unwrap(),
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
             },
-            "WriteEnd" => Self::ReadEnd {
+            "WriteEnd" => Self::WriteEnd {
                 comm: Rc::from(elements.next().unwrap()),
                 tid: elements.next().unwrap().parse().unwrap(),
                 fs_type: Rc::from(elements.next().unwrap()),
-                super_id: elements.next().unwrap().parse().unwrap(),
+                sb_id: elements.next().unwrap().parse().unwrap(),
                 inode_id: elements.next().unwrap().parse().unwrap(),
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
                 ns_elapsed: elements.next().unwrap().parse().unwrap(),
@@ -107,15 +108,15 @@ pub struct IpcProgram {
     current_event: Option<Vec<u8>>,
     child: Option<Child>,
     rx: Receiver<Arc<[u8]>>,
-    events: Option<Vec<IpcEvent>>,
+    events: HashMap<usize, Vec<IpcEvent>>,
 }
 
 impl IpcProgram {
-    pub fn new(terminate_flag: Arc<Mutex<bool>>) -> Result<Self> {
+    pub fn new(terminate_flag: Arc<Mutex<bool>>, pid: u32) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel();
         let (bpf_pipe_rx, bpf_pipe_tx) = super::bpf_pipe(1_048_576);
         let child = Command::new("bpftrace")
-            .args(["./metric-collector/src/bpf/ipc.bt"])
+            .args(["./metric-collector/src/bpf/ipc.bt", &format!("{:?}", pid)])
             .stdout(bpf_pipe_tx)
             .spawn()?;
         Self::start_bpf_reader(tx, bpf_pipe_rx, terminate_flag);
@@ -125,7 +126,7 @@ impl IpcProgram {
             child: Some(child),
             header_lines: 0,
             current_event: None,
-            events: None,
+            events: HashMap::new(),
         })
     }
 
@@ -172,30 +173,29 @@ impl IpcProgram {
             }
 
             while let Some(event) = self.handle_event(&mut iterator) {
-                if let None = self.events {
-                    self.events = Some(Vec::new());
-                }
-                let events = self.events.as_mut().unwrap();
                 let event = IpcEvent::from(event);
-                println!("{:?}", event);
-                events.push(event);
+                match event {
+                    IpcEvent::ReadStart { tid, .. }
+                    | IpcEvent::ReadEnd { tid, .. }
+                    | IpcEvent::WriteStart { tid, .. }
+                    | IpcEvent::WriteEnd { tid, .. } => {
+                        let events = self.events.entry(tid).or_insert(Vec::new());
+                        events.push(event);
+                    }
+                    _ => {}
+                }
             }
         }
-        Ok(self.events.as_ref().map_or(0, |events| events.len()))
+        Ok(self.events.len())
     }
 
-    pub fn take_events(&mut self) -> Result<Vec<IpcEvent>> {
+    pub fn take_tid_events(&mut self, tid: usize) -> Result<Vec<IpcEvent>> {
         let res = self.poll_events();
-        match res {
-            Ok(_) => Ok(self.events.take().unwrap_or(Vec::new())),
-            Err(e) => {
-                let events = self.events.take();
-                if events.is_some() {
-                    Ok(events.unwrap())
-                } else {
-                    Err(e)
-                }
-            }
+        let events = self.events.remove(&tid).unwrap_or(Vec::new());
+        match (res, events.len() > 0) {
+            (_, true) => Ok(events),
+            (Ok(_), false) => Ok(events),
+            (Err(e), false) => Err(e),
         }
     }
 }

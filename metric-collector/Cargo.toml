@@ -25,3 +25,4 @@ libc = "0.2.153"
 nix = { version = "0.28.0", features = ["time"] }
 lru = "0.12.3"
 tempdir = "0.3.7"
+lru_time_cache = "0.11.11"

@@ -17,6 +17,7 @@ use programs::BOOT_EPOCH_NS;
 pub struct Executor {
     pub clone: Clone,
     pub futex: Rc<RefCell<FutexProgram>>,
+    pub ipc: Rc<RefCell<IpcProgram>>,
     pub io_wait: Rc<RefCell<IOWaitProgram>>,
 }
 
@@ -37,7 +38,7 @@ impl Executor {
         let mut clone = Clone::new(pid)?;
         let mut futex = FutexProgram::new(pid)?;
         let mut io_wait = IOWaitProgram::new(terminate_flag.clone())?;
-        let mut ipc = IpcProgram::new(terminate_flag)?;
+        let mut ipc = IpcProgram::new(terminate_flag, pid)?;
 
         while (true, true, true, true)
             != (
@@ -58,6 +59,7 @@ impl Executor {
             clone,
             io_wait: Rc::new(RefCell::new(io_wait)),
             futex: Rc::new(RefCell::new(futex)),
+            ipc: Rc::new(RefCell::new(ipc)),
         })
     }
 }

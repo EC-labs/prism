@@ -155,7 +155,11 @@ impl Collect for Futex {
     fn sample(&mut self) -> Result<()> {
         let time_since_boot =
             Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME)?).as_nanos();
-        self.events = Some(self.futex_program.borrow_mut().get_futex_events(self.tid)?);
+        self.events = Some(
+            self.futex_program
+                .borrow_mut()
+                .take_futex_events(self.tid)?,
+        );
         for event in self.events.as_ref().unwrap() {
             match event {
                 FutexEvent::Start { ns_since_boot, .. } => {

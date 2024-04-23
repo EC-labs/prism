@@ -6,6 +6,7 @@ use std::{
 
 pub mod futex;
 pub mod iowait;
+pub mod ipc;
 pub mod scheduler;
 
 pub trait Collect {

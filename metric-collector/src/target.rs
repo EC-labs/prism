@@ -1,7 +1,11 @@
 use crate::{
-    execute::{programs::futex::FutexProgram, Executor},
+    execute::{
+        programs::{futex::FutexProgram, ipc::IpcProgram},
+        Executor,
+    },
     metrics::{
         futex::Futex,
+        ipc::Ipc,
         scheduler::{Sched, SchedStat},
         Collect,
     },
@@ -29,13 +33,14 @@ impl Error for NotFound {}
 
 pub struct Target {
     pub tid: usize,
-    collectors: [Box<dyn Collect>; 3],
+    collectors: [Box<dyn Collect>; 4],
 }
 
 impl Target {
     pub fn new(
         tid: usize,
         futex_program: Rc<RefCell<FutexProgram>>,
+        ipc_program: Rc<RefCell<IpcProgram>>,
         root_directory: Rc<str>,
         target_subdirectory: &str,
     ) -> Self {
@@ -53,6 +58,12 @@ impl Target {
                 )),
                 Box::new(Futex::new(
                     futex_program,
+                    tid,
+                    root_directory.clone(),
+                    target_subdirectory,
+                )),
+                Box::new(Ipc::new(
+                    ipc_program,
                     tid,
                     root_directory,
                     target_subdirectory,
@@ -104,6 +115,7 @@ impl Target {
             executor.monitor(pid);
 
             let futex_program = executor.futex.clone();
+            let ipc_program = executor.ipc.clone();
             targets.extend(
                 Self::get_threads(pid)?
                     .into_iter()
@@ -111,6 +123,7 @@ impl Target {
                         Ok(Target::new(
                             tid,
                             futex_program.clone(),
+                            ipc_program.clone(),
                             data_directory.clone(),
                             &format!("{}/{}", comm, tid),
                         ))
