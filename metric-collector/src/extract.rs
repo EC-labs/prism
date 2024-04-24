@@ -89,7 +89,7 @@ impl Extractor {
     fn sample_targets(&mut self) {
         let mut targets_remove = Vec::new();
         self.targets.iter_mut().for_each(|(tid, target)| {
-            if let Err(_) = target.sample() {
+            if let Err(_e) = target.sample() {
                 println!("Remove target {tid}");
                 targets_remove.push(*tid)
             }

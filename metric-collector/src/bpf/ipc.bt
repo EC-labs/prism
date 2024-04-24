@@ -272,15 +272,16 @@ kfunc:vmlinux:sock_recvmsg
     $dport = bswap($dport);
 
     @start_sock[tid] = nsecs;
-    printf("%s\t%lld\t%s\t%s\t%d\t%s\t%d\n", 
-           "RecvStart", tid, comm, $saddr, $lport, $daddr, $dport);
+    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%s\t%d\t%lld\n", 
+           "RecvStart", comm, tid, $saddr, $lport, $daddr, $dport, @start_sock[tid]);
 }
 
 kretfunc:vmlinux:sock_recvmsg
 / @start_sock[tid] /
 {
-    printf("%s\t%lld\t%s\t%lld\n",
-           "RecvEnded", tid, comm, nsecs - @start_sock[tid]);
+    $since_boot = nsecs;
+    printf("%-15s\t%-15s\t%lld\t%lld\t%lld\n",
+           "RecvEnd", comm, tid, $since_boot, $since_boot - @start_sock[tid]);
     delete(@start_sock[tid]);
 }
 
@@ -306,15 +307,16 @@ kfunc:vmlinux:inet_sendmsg
     $dport = bswap($dport);
 
     @start_sock[tid] = nsecs;
-    printf("%s\t%lld\t%s\t%s\t%d\t%s\t%d\n", 
-           "SendStart", tid, comm, $saddr, $lport, $daddr, $dport);
+    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%s\t%lld\t%lld\n", 
+           "SendStart", comm, tid, $saddr, $lport, $daddr, $dport, @start_sock[tid]);
 }
 
 kretfunc:vmlinux:inet_sendmsg
 / @start_sock[tid] /
 {
-    printf("%s\t%lld\t%s\t%lld\n", 
-           "SendEnded", tid, comm, nsecs - @start_sock[tid]);
+    $since_boot = nsecs;
+    printf("%-15s\t%-15s\t%lld\t%lld\t%lld\n", 
+           "SendEnd", comm, tid, $since_boot, $since_boot - @start_sock[tid]);
     delete(@start_sock[tid]);
 }
 

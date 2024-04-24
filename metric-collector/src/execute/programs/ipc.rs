@@ -2,8 +2,10 @@ use eyre::Result;
 use std::{
     collections::HashMap,
     io::Read,
+    net::{IpAddr, Ipv4Addr},
     process::{Child, Command},
     rc::Rc,
+    str::FromStr,
     sync::{
         mpsc::{Receiver, Sender, TryRecvError},
         Arc, Mutex,
@@ -53,6 +55,36 @@ pub enum IpcEvent {
         ns_since_boot: u64,
         ns_elapsed: u64,
     },
+    RecvStart {
+        comm: Rc<str>,
+        tid: usize,
+        src_host: Ipv4Addr,
+        src_port: u64,
+        dst_host: Ipv4Addr,
+        dst_port: u64,
+        ns_since_boot: u64,
+    },
+    RecvEnd {
+        comm: Rc<str>,
+        tid: usize,
+        ns_since_boot: u64,
+        ns_elapsed: u64,
+    },
+    SendStart {
+        comm: Rc<str>,
+        tid: usize,
+        src_host: Ipv4Addr,
+        src_port: u64,
+        dst_host: Ipv4Addr,
+        dst_port: u64,
+        ns_since_boot: u64,
+    },
+    SendEnd {
+        comm: Rc<str>,
+        tid: usize,
+        ns_since_boot: u64,
+        ns_elapsed: u64,
+    },
     Unexpected {
         data: String,
     },
@@ -95,6 +127,36 @@ impl From<Vec<u8>> for IpcEvent {
                 fs_type: Rc::from(elements.next().unwrap()),
                 sb_id: elements.next().unwrap().parse().unwrap(),
                 inode_id: elements.next().unwrap().parse().unwrap(),
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
+                ns_elapsed: elements.next().unwrap().parse().unwrap(),
+            },
+            "RecvStart" => Self::RecvStart {
+                comm: Rc::from(elements.next().unwrap()),
+                tid: elements.next().unwrap().parse().unwrap(),
+                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                src_port: elements.next().unwrap().parse().unwrap(),
+                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                dst_port: elements.next().unwrap().parse().unwrap(),
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
+            },
+            "RecvEnd" => Self::RecvEnd {
+                comm: Rc::from(elements.next().unwrap()),
+                tid: elements.next().unwrap().parse().unwrap(),
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
+                ns_elapsed: elements.next().unwrap().parse().unwrap(),
+            },
+            "SendStart" => Self::SendStart {
+                comm: Rc::from(elements.next().unwrap()),
+                tid: elements.next().unwrap().parse().unwrap(),
+                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                src_port: elements.next().unwrap().parse().unwrap(),
+                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                dst_port: elements.next().unwrap().parse().unwrap(),
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
+            },
+            "SendEnd" => Self::SendEnd {
+                comm: Rc::from(elements.next().unwrap()),
+                tid: elements.next().unwrap().parse().unwrap(),
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
                 ns_elapsed: elements.next().unwrap().parse().unwrap(),
             },
@@ -178,11 +240,17 @@ impl IpcProgram {
                     IpcEvent::ReadStart { tid, .. }
                     | IpcEvent::ReadEnd { tid, .. }
                     | IpcEvent::WriteStart { tid, .. }
-                    | IpcEvent::WriteEnd { tid, .. } => {
+                    | IpcEvent::WriteEnd { tid, .. }
+                    | IpcEvent::RecvStart { tid, .. }
+                    | IpcEvent::RecvEnd { tid, .. }
+                    | IpcEvent::SendStart { tid, .. }
+                    | IpcEvent::SendEnd { tid, .. } => {
                         let events = self.events.entry(tid).or_insert(Vec::new());
                         events.push(event);
                     }
-                    _ => {}
+                    _ => {
+                        println!("{:?}", event);
+                    }
                 }
             }
         }
