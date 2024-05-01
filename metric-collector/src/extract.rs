@@ -1,18 +1,23 @@
 use ctrlc;
 use eyre::Result;
 use std::{
+    cell::RefCell,
     collections::HashMap,
+    rc::Rc,
     sync::{mpsc::Receiver, Arc, Mutex},
     thread,
     time::Duration,
 };
 
-use crate::execute::Executor;
-use crate::target::Target;
 use crate::{
     configure::Config,
     metrics::{iowait::IOWait, Collect},
 };
+use crate::{
+    execute::Executor,
+    metrics::ipc::{KFile, Socket},
+};
+use crate::{metrics::ipc::EventPollCollection, target::Target};
 
 pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
@@ -20,6 +25,7 @@ pub struct Extractor {
     targets: HashMap<usize, Target>,
     system_metrics: Vec<Box<dyn Collect>>,
     rx_timer: Option<Receiver<bool>>,
+    kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
 }
 
 impl Extractor {
@@ -30,6 +36,7 @@ impl Extractor {
             targets: HashMap::new(),
             system_metrics: Vec::new(),
             rx_timer: None,
+            kfile_socket_map: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -61,6 +68,7 @@ impl Extractor {
                         executor.ipc.clone(),
                         self.config.data_directory.clone(),
                         &format!("{}/{}", comm, tid),
+                        self.kfile_socket_map.clone(),
                     ),
                 );
             });
@@ -80,6 +88,7 @@ impl Extractor {
                             executor.ipc.clone(),
                             self.config.data_directory.clone(),
                             &format!("{}/{}", comm, tid),
+                            self.kfile_socket_map.clone(),
                         ),
                     );
                 });
@@ -136,6 +145,7 @@ impl Extractor {
             true,
             self.config.data_directory.clone(),
             &mut executor,
+            self.kfile_socket_map.clone(),
         )?;
         targets.into_iter().for_each(|target| {
             self.targets.insert(target.tid, target);
@@ -146,6 +156,7 @@ impl Extractor {
             false,
             self.config.data_directory.clone(),
             &mut executor,
+            self.kfile_socket_map.clone(),
         )?;
         targets.into_iter().for_each(|target| {
             self.targets.insert(target.tid, target);
@@ -154,6 +165,11 @@ impl Extractor {
         self.system_metrics.push(Box::new(IOWait::new(
             executor.io_wait.clone(),
             Some(self.config.data_directory.clone()),
+        )));
+        self.system_metrics.push(Box::new(EventPollCollection::new(
+            executor.ipc.clone(),
+            self.kfile_socket_map.clone(),
+            self.config.data_directory.clone(),
         )));
 
         let rx_timer = self.rx_timer.take().unwrap();

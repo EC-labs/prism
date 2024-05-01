@@ -2,7 +2,7 @@ use eyre::Result;
 use std::{
     collections::HashMap,
     io::Read,
-    net::{IpAddr, Ipv4Addr},
+    net::Ipv4Addr,
     process::{Child, Command},
     rc::Rc,
     str::FromStr,
@@ -55,9 +55,34 @@ pub enum IpcEvent {
         ns_since_boot: u64,
         ns_elapsed: u64,
     },
+    AcceptEnd {
+        comm: Rc<str>,
+        tid: usize,
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        src_host: Ipv4Addr,
+        src_port: u64,
+        dst_host: Ipv4Addr,
+        dst_port: u64,
+    },
+    ConnectStart {
+        comm: Rc<str>,
+        tid: usize,
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        src_host: Ipv4Addr,
+        src_port: u64,
+        dst_host: Ipv4Addr,
+        dst_port: u64,
+    },
     RecvStart {
         comm: Rc<str>,
         tid: usize,
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
         src_host: Ipv4Addr,
         src_port: u64,
         dst_host: Ipv4Addr,
@@ -73,6 +98,9 @@ pub enum IpcEvent {
     SendStart {
         comm: Rc<str>,
         tid: usize,
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
         src_host: Ipv4Addr,
         src_port: u64,
         dst_host: Ipv4Addr,
@@ -85,9 +113,50 @@ pub enum IpcEvent {
         ns_since_boot: u64,
         ns_elapsed: u64,
     },
+    EpollItemAdd {
+        comm: Rc<str>,
+        tid: usize,
+        event_poll: u64,
+        fs: Rc<str>,
+        target_file: TargetFile,
+    },
+    EpollItemRemove {
+        comm: Rc<str>,
+        tid: usize,
+        event_poll: u64,
+        fs: Rc<str>,
+        target_file: TargetFile,
+    },
+    EpollItemReady {
+        comm: Rc<str>,
+        tid: usize,
+        event_poll: u64,
+        fs: Rc<str>,
+        target_file: TargetFile,
+        ns_since_boot: u64,
+    },
+    EpollWaitStart {
+        comm: Rc<str>,
+        tid: usize,
+        event_poll: u64,
+        ns_since_boot: u64,
+    },
+    EpollWaitEnd {
+        comm: Rc<str>,
+        tid: usize,
+        event_poll: u64,
+        ns_since_boot: u64,
+        ns_elapsed: u64,
+    },
     Unexpected {
         data: String,
     },
+}
+
+#[derive(Debug)]
+pub enum TargetFile {
+    AnonInode { name: Rc<str>, address: u64 },
+    Inode { device: u32, inode_id: u64 },
 }
 
 impl From<Vec<u8>> for IpcEvent {
@@ -130,9 +199,34 @@ impl From<Vec<u8>> for IpcEvent {
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
                 ns_elapsed: elements.next().unwrap().parse().unwrap(),
             },
+            "AcceptEnd" => Self::AcceptEnd {
+                comm: Rc::from(elements.next().unwrap()),
+                tid: elements.next().unwrap().parse().unwrap(),
+                fs_type: Rc::from(elements.next().unwrap()),
+                sb_id: elements.next().unwrap().parse().unwrap(),
+                inode_id: elements.next().unwrap().parse().unwrap(),
+                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                src_port: elements.next().unwrap().parse().unwrap(),
+                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                dst_port: elements.next().unwrap().parse().unwrap(),
+            },
+            "ConnectStart" => Self::ConnectStart {
+                comm: Rc::from(elements.next().unwrap()),
+                tid: elements.next().unwrap().parse().unwrap(),
+                fs_type: Rc::from(elements.next().unwrap()),
+                sb_id: elements.next().unwrap().parse().unwrap(),
+                inode_id: elements.next().unwrap().parse().unwrap(),
+                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                src_port: elements.next().unwrap().parse().unwrap(),
+                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                dst_port: elements.next().unwrap().parse().unwrap(),
+            },
             "RecvStart" => Self::RecvStart {
                 comm: Rc::from(elements.next().unwrap()),
                 tid: elements.next().unwrap().parse().unwrap(),
+                fs_type: Rc::from(elements.next().unwrap()),
+                sb_id: elements.next().unwrap().parse().unwrap(),
+                inode_id: elements.next().unwrap().parse().unwrap(),
                 src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
                 src_port: elements.next().unwrap().parse().unwrap(),
                 dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
@@ -148,6 +242,9 @@ impl From<Vec<u8>> for IpcEvent {
             "SendStart" => Self::SendStart {
                 comm: Rc::from(elements.next().unwrap()),
                 tid: elements.next().unwrap().parse().unwrap(),
+                fs_type: Rc::from(elements.next().unwrap()),
+                sb_id: elements.next().unwrap().parse().unwrap(),
+                inode_id: elements.next().unwrap().parse().unwrap(),
                 src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
                 src_port: elements.next().unwrap().parse().unwrap(),
                 dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
@@ -160,6 +257,107 @@ impl From<Vec<u8>> for IpcEvent {
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
                 ns_elapsed: elements.next().unwrap().parse().unwrap(),
             },
+            "EpollAdd" => {
+                let comm = Rc::from(elements.next().unwrap());
+                let tid = elements.next().unwrap().parse().unwrap();
+                let event_poll = elements.next().unwrap().trim_start_matches("0x");
+                let event_poll = u64::from_str_radix(event_poll, 16).unwrap();
+                let fs: Rc<str> = Rc::from(elements.next().unwrap());
+                let target_file = if &*fs == "anon_inodefs" {
+                    let name = Rc::from(elements.next().unwrap());
+                    let address = elements.next().unwrap().trim_start_matches("0x");
+                    let address = u64::from_str_radix(address, 16).unwrap();
+                    TargetFile::AnonInode { name, address }
+                } else {
+                    TargetFile::Inode {
+                        device: elements.next().unwrap().parse().unwrap(),
+                        inode_id: elements.next().unwrap().parse().unwrap(),
+                    }
+                };
+                Self::EpollItemAdd {
+                    comm,
+                    tid,
+                    event_poll,
+                    fs,
+                    target_file,
+                }
+            }
+            "EpollRemove" => {
+                let comm = Rc::from(elements.next().unwrap());
+                let tid = elements.next().unwrap().parse().unwrap();
+                let event_poll = elements.next().unwrap().trim_start_matches("0x");
+                let event_poll = u64::from_str_radix(event_poll, 16).unwrap();
+                let fs: Rc<str> = Rc::from(elements.next().unwrap());
+                let target_file = if &*fs == "anon_inodefs" {
+                    let name = Rc::from(elements.next().unwrap());
+                    let address = elements.next().unwrap().trim_start_matches("0x");
+                    let address = u64::from_str_radix(address, 16).unwrap();
+                    TargetFile::AnonInode { name, address }
+                } else {
+                    TargetFile::Inode {
+                        device: elements.next().unwrap().parse().unwrap(),
+                        inode_id: elements.next().unwrap().parse().unwrap(),
+                    }
+                };
+                Self::EpollItemRemove {
+                    comm,
+                    tid,
+                    event_poll,
+                    fs,
+                    target_file,
+                }
+            }
+            "EpiPoll" => {
+                let comm = Rc::from(elements.next().unwrap());
+                let tid = elements.next().unwrap().parse().unwrap();
+                let event_poll = elements.next().unwrap().trim_start_matches("0x");
+                let event_poll = u64::from_str_radix(event_poll, 16).unwrap();
+                let fs: Rc<str> = Rc::from(elements.next().unwrap());
+                let target_file = if &*fs == "anon_inodefs" {
+                    let name = Rc::from(elements.next().unwrap());
+                    let address = elements.next().unwrap().trim_start_matches("0x");
+                    let address = u64::from_str_radix(address, 16).unwrap();
+                    TargetFile::AnonInode { name, address }
+                } else {
+                    TargetFile::Inode {
+                        device: elements.next().unwrap().parse().unwrap(),
+                        inode_id: elements.next().unwrap().parse().unwrap(),
+                    }
+                };
+                Self::EpollItemReady {
+                    comm,
+                    tid,
+                    event_poll,
+                    fs,
+                    target_file,
+                    ns_since_boot: elements.next().unwrap().parse().unwrap(),
+                }
+            }
+            "EpollWaitStart" => {
+                let comm = Rc::from(elements.next().unwrap());
+                let tid = elements.next().unwrap().parse().unwrap();
+                let event_poll = elements.next().unwrap().trim_start_matches("0x");
+                let event_poll = u64::from_str_radix(event_poll, 16).unwrap();
+                Self::EpollWaitStart {
+                    comm,
+                    tid,
+                    event_poll,
+                    ns_since_boot: elements.next().unwrap().parse().unwrap(),
+                }
+            }
+            "EpollWaitEnd" => {
+                let comm = Rc::from(elements.next().unwrap());
+                let tid = elements.next().unwrap().parse().unwrap();
+                let event_poll = elements.next().unwrap().trim_start_matches("0x");
+                let event_poll = u64::from_str_radix(event_poll, 16).unwrap();
+                Self::EpollWaitEnd {
+                    comm,
+                    tid,
+                    event_poll,
+                    ns_since_boot: elements.next().unwrap().parse().unwrap(),
+                    ns_elapsed: elements.next().unwrap().parse().unwrap(),
+                }
+            }
             _ => Self::Unexpected { data: event_string },
         }
     }
@@ -171,6 +369,7 @@ pub struct IpcProgram {
     child: Option<Child>,
     rx: Receiver<Arc<[u8]>>,
     events: HashMap<usize, Vec<IpcEvent>>,
+    epoll_events: Option<Vec<IpcEvent>>,
 }
 
 impl IpcProgram {
@@ -189,6 +388,7 @@ impl IpcProgram {
             header_lines: 0,
             current_event: None,
             events: HashMap::new(),
+            epoll_events: None,
         })
     }
 
@@ -248,6 +448,14 @@ impl IpcProgram {
                         let events = self.events.entry(tid).or_insert(Vec::new());
                         events.push(event);
                     }
+                    IpcEvent::EpollItemAdd { .. }
+                    | IpcEvent::EpollItemRemove { .. }
+                    | IpcEvent::EpollItemReady { .. }
+                    | IpcEvent::EpollWaitStart { .. }
+                    | IpcEvent::EpollWaitEnd { .. } => {
+                        let epoll_events = self.epoll_events.get_or_insert_with(|| Vec::new());
+                        epoll_events.push(event);
+                    }
                     _ => {
                         println!("{:?}", event);
                     }
@@ -260,6 +468,16 @@ impl IpcProgram {
     pub fn take_tid_events(&mut self, tid: usize) -> Result<Vec<IpcEvent>> {
         let res = self.poll_events();
         let events = self.events.remove(&tid).unwrap_or(Vec::new());
+        match (res, events.len() > 0) {
+            (_, true) => Ok(events),
+            (Ok(_), false) => Ok(events),
+            (Err(e), false) => Err(e),
+        }
+    }
+
+    pub fn take_epoll_events(&mut self) -> Result<Vec<IpcEvent>> {
+        let res = self.poll_events();
+        let events = self.epoll_events.take().unwrap_or(Vec::new());
         match (res, events.len() > 0) {
             (_, true) => Ok(events),
             (Ok(_), false) => Ok(events),

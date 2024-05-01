@@ -5,7 +5,7 @@ use crate::{
     },
     metrics::{
         futex::Futex,
-        ipc::Ipc,
+        ipc::{Ipc, KFile, Socket},
         scheduler::{Sched, SchedStat},
         Collect,
     },
@@ -14,6 +14,7 @@ use eyre::Result;
 use regex::Regex;
 use std::{
     cell::RefCell,
+    collections::HashMap,
     error::Error,
     fmt::{self, Display},
     fs,
@@ -43,6 +44,7 @@ impl Target {
         ipc_program: Rc<RefCell<IpcProgram>>,
         root_directory: Rc<str>,
         target_subdirectory: &str,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
     ) -> Self {
         println!("Register new target {}", tid);
         Self {
@@ -67,6 +69,7 @@ impl Target {
                     tid,
                     root_directory,
                     target_subdirectory,
+                    kfile_socket_map,
                 )),
             ],
         }
@@ -77,6 +80,7 @@ impl Target {
         kthread: bool,
         data_directory: Rc<str>,
         executor: &mut Executor,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
     ) -> Result<Vec<Self>> {
         let mut targets = Vec::new();
 
@@ -126,6 +130,7 @@ impl Target {
                             ipc_program.clone(),
                             data_directory.clone(),
                             &format!("{}/{}", comm, tid),
+                            kfile_socket_map.clone(),
                         ))
                     })
                     .collect::<Result<Vec<Target>>>()?,

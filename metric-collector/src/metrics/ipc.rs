@@ -13,14 +13,14 @@ use std::{
 };
 
 use crate::execute::programs::{
-    ipc::{IpcEvent, IpcProgram},
+    ipc::{IpcEvent, IpcProgram, TargetFile},
     BOOT_EPOCH_NS,
 };
 
 use super::Collect;
 use super::ToCsv;
 
-type KFile = (u32, u64);
+pub type KFile = (u32, u64);
 
 pub struct Ipc {
     ipc_program: Rc<RefCell<IpcProgram>>,
@@ -41,6 +41,7 @@ impl Ipc {
         tid: usize,
         root_directory: Rc<str>,
         target_subdirectory: &str,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
     ) -> Self {
         Self {
             ipc_program,
@@ -52,12 +53,14 @@ impl Ipc {
             data_files: LruCache::with_expiry_duration(Duration::from_millis(1000 * 120)),
             sample_instant_ns: None,
             target_subdirectory: format!("{}/{}/ipc", root_directory, target_subdirectory),
-            sockets: Sockets::new(root_directory, target_subdirectory),
+            sockets: Sockets::new(
+                format!("{}/{}/ipc", root_directory, target_subdirectory),
+                kfile_socket_map,
+            ),
         }
     }
 
     fn process_event(&mut self, event: IpcEvent) -> Result<()> {
-        println!("{:?}", event);
         match event {
             IpcEvent::ReadStart {
                 sb_id,
@@ -224,34 +227,69 @@ impl Collect for Ipc {
 type Endpoint = (Ipv4Addr, u64);
 type SrcEndpoint = Endpoint;
 type DstEndpoint = Endpoint;
-type Socket = (SrcEndpoint, DstEndpoint);
+pub type Socket = (SrcEndpoint, Option<DstEndpoint>);
 
 struct Sockets {
-    pending: Option<(Socket, u64)>,
-    socket_map: HashMap<(SrcEndpoint, DstEndpoint), u64>,
-    last_terminated: HashSet<(SrcEndpoint, DstEndpoint)>,
+    kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+    pending: HashMap<KFile, u64>,
+    kfile_map: HashMap<KFile, u64>,
+    last_terminated: HashSet<KFile>,
+    active: HashSet<KFile>,
     data_files: LruCache<String, File>,
     target_subdirectory: String,
+    wait_depth: u32,
 }
 
 impl Sockets {
-    fn new(root_directory: Rc<str>, target_subdirectory: &str) -> Self {
+    fn new(
+        target_subdirectory: String,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+    ) -> Self {
         Self {
-            socket_map: HashMap::new(),
-            pending: None,
+            kfile_socket_map,
+            target_subdirectory,
+            kfile_map: HashMap::new(),
+            pending: HashMap::new(),
             last_terminated: HashSet::new(),
+            active: HashSet::new(),
             data_files: LruCache::with_expiry_duration(Duration::from_millis(1000 * 120)),
-            target_subdirectory: format!("{}/{}/ipc", root_directory, target_subdirectory),
+            wait_depth: 0,
         }
     }
 
     fn process_event(&mut self, event: IpcEvent) -> Result<()> {
         match event {
+            IpcEvent::ConnectStart {
+                inode_id,
+                sb_id,
+                src_host,
+                src_port,
+                dst_host,
+                dst_port,
+                ..
+            }
+            | IpcEvent::AcceptEnd {
+                inode_id,
+                sb_id,
+                src_host,
+                src_port,
+                dst_host,
+                dst_port,
+                ..
+            } => {
+                let kfile = (sb_id, inode_id);
+                self.kfile_socket_map
+                    .borrow_mut()
+                    .entry(kfile)
+                    .or_insert(((src_host, src_port), Some((dst_host, dst_port))));
+            }
             IpcEvent::RecvStart {
                 src_host,
                 src_port,
                 dst_host,
                 dst_port,
+                sb_id,
+                inode_id,
                 ns_since_boot,
                 ..
             }
@@ -260,19 +298,82 @@ impl Sockets {
                 src_port,
                 dst_host,
                 dst_port,
+                sb_id,
+                inode_id,
                 ns_since_boot,
                 ..
             } => {
-                self.pending = Some((((src_host, src_port), (dst_host, dst_port)), ns_since_boot));
+                let kfile = (sb_id, inode_id);
+                self.kfile_socket_map
+                    .borrow_mut()
+                    .entry(kfile)
+                    .or_insert(((src_host, src_port), Some((dst_host, dst_port))));
+                self.pending.insert(kfile, ns_since_boot);
             }
             IpcEvent::RecvEnd { ns_elapsed, .. } | IpcEvent::SendEnd { ns_elapsed, .. } => {
-                let (socket, _) = self.pending.take().ok_or_eyre("Invalid sockets state")?;
-                let entry = self.socket_map.entry(socket).or_insert(0);
-                self.last_terminated.insert(socket);
-                *entry += ns_elapsed;
+                let pending = mem::replace(&mut self.pending, HashMap::new());
+                for (kfile, _) in pending {
+                    let entry = self.kfile_map.entry(kfile).or_insert(0);
+                    *entry += ns_elapsed;
+                    self.last_terminated.insert(kfile);
+                }
+            }
+            IpcEvent::EpollItemAdd {
+                fs, target_file, ..
+            } => {
+                let kfile = match target_file {
+                    TargetFile::Inode { device, inode_id } => (device, inode_id),
+                    _ => {
+                        return Err(eyre!("Unexpected target file"));
+                    }
+                };
+                self.kfile_map.entry(kfile).or_insert(0);
+                self.active.insert(kfile);
+            }
+            IpcEvent::EpollItemRemove {
+                fs, target_file, ..
+            } => {
+                let kfile = match target_file {
+                    TargetFile::Inode { device, inode_id } => (device, inode_id),
+                    _ => {
+                        return Err(eyre!("Unexpected target file"));
+                    }
+                };
+                self.active.remove(&kfile);
+            }
+            IpcEvent::EpollWaitStart { ns_since_boot, .. } => {
+                self.wait_depth += 1;
+                for kfile in self.active.iter() {
+                    self.pending
+                        .entry(kfile.to_owned())
+                        .or_insert(ns_since_boot);
+                }
+            }
+            IpcEvent::EpollWaitEnd { ns_elapsed, .. } => {
+                self.wait_depth -= 1;
+                if self.wait_depth > 0 {
+                    return Ok(());
+                }
+
+                let pending = mem::replace(&mut self.pending, HashMap::new());
+                for (kfile, _) in pending {
+                    let entry = self.kfile_map.entry(kfile).or_insert(0);
+                    *entry += ns_elapsed;
+                    self.last_terminated.insert(kfile);
+                }
+            }
+            IpcEvent::EpollItemReady {
+                fs, target_file, ..
+            } => {
+                let kfile = match target_file {
+                    TargetFile::Inode { device, inode_id } => (device, inode_id),
+                    _ => {
+                        return Err(eyre!("Unexpected target file"));
+                    }
+                };
             }
             _ => {
-                return Err(eyre!(format!("Unexpected event {:?}", event)));
+                return Err(eyre!(format!("Expected socket event. Got {:?}", event)));
             }
         }
 
@@ -302,40 +403,167 @@ impl Sockets {
 
     fn store(&mut self, epoch_ns: u128) -> Result<()> {
         let epoch_ms = epoch_ns / 1_000_000;
-        let mut sockets = mem::replace(&mut self.last_terminated, HashSet::new());
-        self.pending.map(|(socket, _)| sockets.insert(socket));
+        let mut kfiles = mem::replace(&mut self.last_terminated, HashSet::new());
+        kfiles.union(&HashSet::from_iter(
+            self.pending.keys().map(|key| key.to_owned()),
+        ));
 
-        for socket in sockets {
+        for kfile in kfiles {
             let mut cumulative_wait = self
                 .pending
-                .map(|(pending_sock, ns_since_boot)| {
-                    if pending_sock == socket {
-                        epoch_ns - (*BOOT_EPOCH_NS.read().unwrap() + ns_since_boot as u128)
-                    } else {
-                        0
-                    }
+                .get(&kfile)
+                .map(|ns_since_boot| {
+                    epoch_ns - (*BOOT_EPOCH_NS.read().unwrap() + *ns_since_boot as u128)
                 })
                 .unwrap_or(0);
-            cumulative_wait += *self.socket_map.get(&socket).unwrap_or(&0) as u128;
+            cumulative_wait += *self.kfile_map.get(&kfile).unwrap_or(&0) as u128;
             let sample = SocketSample {
                 epoch_ms,
                 cumulative_wait,
             };
 
-            let file_path = format!(
-                "{}/sockets/{:?}/{}:{:?}_{}:{:?}.csv",
-                self.target_subdirectory,
-                (epoch_ms / (1000 * 60)) * 60,
-                socket.0 .0.octets().map(|elem| elem.to_string()).join("."),
-                socket.0 .1,
-                socket.1 .0.octets().map(|elem| elem.to_string()).join("."),
-                socket.1 .1,
-            );
+            let file_path =
+                if let Some((src, Some(dst))) = self.kfile_socket_map.borrow().get(&kfile) {
+                    format!(
+                        "{}/sockets/{:?}/{}:{:?}_{}:{:?}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        src.0.octets().map(|elem| elem.to_string()).join("."),
+                        src.1,
+                        dst.0.octets().map(|elem| elem.to_string()).join("."),
+                        dst.1,
+                    )
+                } else {
+                    continue;
+                };
             let mut file = self.get_or_create_file(Path::new(&file_path), sample.csv_headers())?;
             file.write_all(sample.to_csv_row().as_bytes())?;
             println!("{}", file_path);
         }
 
+        Ok(())
+    }
+}
+
+struct EventPoll {
+    sockets: Sockets,
+}
+
+impl EventPoll {
+    fn new(
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        data_directory: Rc<str>,
+        address: u64,
+    ) -> Self {
+        Self {
+            sockets: Sockets::new(
+                format!("{}/{:x}", data_directory, address),
+                kfile_socket_map,
+            ),
+        }
+    }
+
+    fn process_event(&mut self, event: IpcEvent) -> Result<()> {
+        match &event {
+            IpcEvent::EpollItemAdd { fs, .. }
+            | IpcEvent::EpollItemRemove { fs, .. }
+            | IpcEvent::EpollItemReady { fs, .. } => {
+                if &**fs == "sockfs" {
+                    self.sockets.process_event(event)?;
+                }
+            }
+            IpcEvent::EpollWaitStart { .. } | IpcEvent::EpollWaitEnd { .. } => {
+                self.sockets.process_event(event)?;
+            }
+            _ => {
+                return Err(eyre!(format!("Expected epoll event. Got {:?}", event)));
+            }
+        }
+        Ok(())
+    }
+
+    fn store(&mut self, sample_instant_ns: u128) -> Result<()> {
+        self.sockets.store(sample_instant_ns)
+    }
+}
+
+pub struct EventPollCollection {
+    event_poll_map: HashMap<u64, EventPoll>,
+    ipc_program: Rc<RefCell<IpcProgram>>,
+    kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+    root_directory: Rc<str>,
+    sample_instant_ns: Option<u128>,
+}
+
+impl EventPollCollection {
+    pub fn new(
+        ipc_program: Rc<RefCell<IpcProgram>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        root_directory: Rc<str>,
+    ) -> Self {
+        Self {
+            ipc_program,
+            kfile_socket_map,
+            root_directory: Rc::from(format!("{}/epoll", root_directory)),
+            event_poll_map: HashMap::new(),
+            sample_instant_ns: None,
+        }
+    }
+
+    pub fn process_event(&mut self, event: IpcEvent) -> Result<()> {
+        match event {
+            IpcEvent::EpollItemAdd { event_poll, .. }
+            | IpcEvent::EpollItemRemove { event_poll, .. }
+            | IpcEvent::EpollItemReady { event_poll, .. }
+            | IpcEvent::EpollWaitStart { event_poll, .. }
+            | IpcEvent::EpollWaitEnd { event_poll, .. } => {
+                let event_poll = self
+                    .event_poll_map
+                    .entry(event_poll)
+                    .or_insert(EventPoll::new(
+                        self.kfile_socket_map.clone(),
+                        self.root_directory.clone(),
+                        event_poll,
+                    ));
+                event_poll.process_event(event)?;
+            }
+            _ => {
+                return Err(eyre!(format!("Expected epoll event. Got {:?}", event)));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Collect for EventPollCollection {
+    fn sample(&mut self) -> Result<()> {
+        let events = self.ipc_program.borrow_mut().take_epoll_events()?;
+
+        let sample_instant = SystemTime::now();
+        self.sample_instant_ns = Some(
+            sample_instant
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_nanos(),
+        );
+
+        for event in events {
+            self.process_event(event)?;
+        }
+
+        Ok(())
+    }
+
+    fn store(&mut self) -> Result<()> {
+        let epoch_ns = self
+            .sample_instant_ns
+            .take()
+            .ok_or_eyre("Missing sample instant")?;
+
+        for (_, epoll) in self.event_poll_map.iter_mut() {
+            epoll.store(epoch_ns)?
+        }
         Ok(())
     }
 }
