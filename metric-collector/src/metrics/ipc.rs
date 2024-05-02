@@ -24,15 +24,10 @@ pub type KFile = (u32, u64);
 
 pub struct Ipc {
     ipc_program: Rc<RefCell<IpcProgram>>,
-    stream_map: HashMap<KFile, u64>,
-    sum_stream_wait_ns: u64,
-    pending: HashMap<KFile, u64>,
-    last_terminated: HashSet<KFile>,
     tid: usize,
-    data_files: LruCache<String, File>,
     sample_instant_ns: Option<u128>,
-    target_subdirectory: String,
     sockets: Sockets,
+    pipes: Pipes,
 }
 
 impl Ipc {
@@ -46,17 +41,88 @@ impl Ipc {
         Self {
             ipc_program,
             tid,
-            stream_map: HashMap::new(),
-            sum_stream_wait_ns: 0,
-            pending: HashMap::new(),
-            last_terminated: HashSet::new(),
-            data_files: LruCache::with_expiry_duration(Duration::from_millis(1000 * 120)),
             sample_instant_ns: None,
-            target_subdirectory: format!("{}/{}/ipc", root_directory, target_subdirectory),
             sockets: Sockets::new(
                 format!("{}/{}/ipc", root_directory, target_subdirectory),
                 kfile_socket_map,
             ),
+            pipes: Pipes::new(root_directory, target_subdirectory),
+        }
+    }
+
+    fn process_event(&mut self, event: IpcEvent) -> Result<()> {
+        match event {
+            IpcEvent::ReadStart { .. }
+            | IpcEvent::ReadEnd { .. }
+            | IpcEvent::WriteStart { .. }
+            | IpcEvent::WriteEnd { .. } => {
+                self.pipes.process_event(event)?;
+            }
+            IpcEvent::RecvStart { .. }
+            | IpcEvent::RecvEnd { .. }
+            | IpcEvent::SendStart { .. }
+            | IpcEvent::SendEnd { .. } => {
+                self.sockets.process_event(event)?;
+            }
+            _ => {
+                return Err(eyre!(format!("Expected ipc event. Got {:?}", event)));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Collect for Ipc {
+    fn sample(&mut self) -> Result<()> {
+        let events = self.ipc_program.borrow_mut().take_tid_events(self.tid)?;
+
+        let sample_instant = SystemTime::now();
+        self.sample_instant_ns = Some(
+            sample_instant
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_nanos(),
+        );
+
+        for event in events {
+            self.process_event(event)?;
+        }
+
+        Ok(())
+    }
+
+    fn store(&mut self) -> Result<()> {
+        let epoch_ns = self
+            .sample_instant_ns
+            .take()
+            .ok_or_eyre("Missing sample instant")?;
+
+        self.sockets.store(epoch_ns)?;
+        self.pipes.store(epoch_ns)?;
+
+        Ok(())
+    }
+}
+
+struct Pipes {
+    stream_map: HashMap<KFile, u64>,
+    sum_stream_wait_ns: u64,
+    pending: HashMap<KFile, u64>,
+    last_terminated: HashSet<KFile>,
+    data_files: LruCache<String, File>,
+    target_subdirectory: String,
+}
+
+impl Pipes {
+    fn new(root_directory: Rc<str>, target_subdirectory: &str) -> Self {
+        Self {
+            stream_map: HashMap::new(),
+            sum_stream_wait_ns: 0,
+            pending: HashMap::new(),
+            last_terminated: HashSet::new(),
+            target_subdirectory: format!("{}/{}/ipc", root_directory, target_subdirectory),
+            data_files: LruCache::with_expiry_duration(Duration::from_millis(1000 * 120)),
         }
     }
 
@@ -95,39 +161,21 @@ impl Ipc {
                 *entry += ns_elapsed;
                 self.sum_stream_wait_ns += ns_elapsed;
             }
-            IpcEvent::RecvStart { .. }
-            | IpcEvent::RecvEnd { .. }
-            | IpcEvent::SendStart { .. }
-            | IpcEvent::SendEnd { .. } => {
-                self.sockets.process_event(event)?;
-            }
             _ => {
-                println!("{:?}", event);
+                return Err(eyre!(format!("Expected pipe event. Got {:?}", event)));
             }
         }
-
         Ok(())
     }
 
-    fn get_or_create_file(&mut self, filepath: &Path, headers: &str) -> Result<&File> {
-        let file = self.data_files.get(filepath.to_str().unwrap());
-        if let None = file {
-            let file = File::options().append(true).open(filepath);
-            let file = match file {
-                Err(_) => {
-                    fs::create_dir_all(filepath.parent().unwrap())?;
-                    let mut file = File::options().append(true).create(true).open(filepath)?;
-                    file.write_all(headers.as_bytes())?;
-                    file
-                }
-                Ok(file) => file,
-            };
-            self.data_files
-                .insert(filepath.to_str().unwrap().into(), file);
+    fn store(&mut self, epoch_ns: u128) -> Result<()> {
+        if self.last_terminated.len() == 0 && self.pending.len() == 0 {
+            return Ok(());
         }
 
-        let file = self.data_files.get(filepath.to_str().unwrap());
-        Ok(file.unwrap())
+        self.store_streams(epoch_ns)?;
+        self.store_aggregated_stream(epoch_ns)?;
+        Ok(())
     }
 
     fn store_streams(&mut self, epoch_ns: u128) -> Result<()> {
@@ -184,43 +232,26 @@ impl Ipc {
         file.write_all(sample.to_csv_row().as_bytes())?;
         Ok(())
     }
-}
 
-impl Collect for Ipc {
-    fn sample(&mut self) -> Result<()> {
-        let events = self.ipc_program.borrow_mut().take_tid_events(self.tid)?;
-
-        let sample_instant = SystemTime::now();
-        self.sample_instant_ns = Some(
-            sample_instant
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_nanos(),
-        );
-
-        for event in events {
-            self.process_event(event)?;
+    fn get_or_create_file(&mut self, filepath: &Path, headers: &str) -> Result<&File> {
+        let file = self.data_files.get(filepath.to_str().unwrap());
+        if let None = file {
+            let file = File::options().append(true).open(filepath);
+            let file = match file {
+                Err(_) => {
+                    fs::create_dir_all(filepath.parent().unwrap())?;
+                    let mut file = File::options().append(true).create(true).open(filepath)?;
+                    file.write_all(headers.as_bytes())?;
+                    file
+                }
+                Ok(file) => file,
+            };
+            self.data_files
+                .insert(filepath.to_str().unwrap().into(), file);
         }
 
-        Ok(())
-    }
-
-    fn store(&mut self) -> Result<()> {
-        let epoch_ns = self
-            .sample_instant_ns
-            .take()
-            .ok_or_eyre("Missing sample instant")?;
-
-        self.sockets.store(epoch_ns)?;
-
-        if self.last_terminated.len() == 0 && self.pending.len() == 0 {
-            return Ok(());
-        }
-
-        self.store_streams(epoch_ns)?;
-        self.store_aggregated_stream(epoch_ns)?;
-
-        Ok(())
+        let file = self.data_files.get(filepath.to_str().unwrap());
+        Ok(file.unwrap())
     }
 }
 
@@ -318,9 +349,7 @@ impl Sockets {
                     self.last_terminated.insert(kfile);
                 }
             }
-            IpcEvent::EpollItemAdd {
-                fs, target_file, ..
-            } => {
+            IpcEvent::EpollItemAdd { target_file, .. } => {
                 let kfile = match target_file {
                     TargetFile::Inode { device, inode_id } => (device, inode_id),
                     _ => {
@@ -330,9 +359,7 @@ impl Sockets {
                 self.kfile_map.entry(kfile).or_insert(0);
                 self.active.insert(kfile);
             }
-            IpcEvent::EpollItemRemove {
-                fs, target_file, ..
-            } => {
+            IpcEvent::EpollItemRemove { target_file, .. } => {
                 let kfile = match target_file {
                     TargetFile::Inode { device, inode_id } => (device, inode_id),
                     _ => {
@@ -362,10 +389,8 @@ impl Sockets {
                     self.last_terminated.insert(kfile);
                 }
             }
-            IpcEvent::EpollItemReady {
-                fs, target_file, ..
-            } => {
-                let kfile = match target_file {
+            IpcEvent::EpollItemReady { target_file, .. } => {
+                match target_file {
                     TargetFile::Inode { device, inode_id } => (device, inode_id),
                     _ => {
                         return Err(eyre!("Unexpected target file"));
@@ -403,10 +428,9 @@ impl Sockets {
 
     fn store(&mut self, epoch_ns: u128) -> Result<()> {
         let epoch_ms = epoch_ns / 1_000_000;
-        let mut kfiles = mem::replace(&mut self.last_terminated, HashSet::new());
-        kfiles.union(&HashSet::from_iter(
-            self.pending.keys().map(|key| key.to_owned()),
-        ));
+        let kfiles = mem::replace(&mut self.last_terminated, HashSet::new());
+        let keys = HashSet::from_iter(self.pending.keys().map(|key| key.to_owned()));
+        let kfiles = kfiles.union(&keys);
 
         for kfile in kfiles {
             let mut cumulative_wait = self
