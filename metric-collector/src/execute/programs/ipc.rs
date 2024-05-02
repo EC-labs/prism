@@ -153,7 +153,7 @@ pub enum IpcEvent {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum TargetFile {
     AnonInode { name: Rc<str>, address: u64 },
     Inode { device: u32, inode_id: u64 },

@@ -46,7 +46,7 @@ impl Ipc {
                 format!("{}/{}/ipc", root_directory, target_subdirectory),
                 kfile_socket_map,
             ),
-            pipes: Pipes::new(root_directory, target_subdirectory),
+            pipes: Pipes::new(format!("{}/{}/ipc", root_directory, target_subdirectory)),
         }
     }
 
@@ -106,22 +106,22 @@ impl Collect for Ipc {
 }
 
 struct Pipes {
-    stream_map: HashMap<KFile, u64>,
+    stream_map: HashMap<TargetFile, u64>,
     sum_stream_wait_ns: u64,
-    pending: HashMap<KFile, u64>,
-    last_terminated: HashSet<KFile>,
+    pending: HashMap<TargetFile, u64>,
+    last_terminated: HashSet<TargetFile>,
     data_files: LruCache<String, File>,
     target_subdirectory: String,
 }
 
 impl Pipes {
-    fn new(root_directory: Rc<str>, target_subdirectory: &str) -> Self {
+    fn new(target_subdirectory: String) -> Self {
         Self {
+            target_subdirectory,
             stream_map: HashMap::new(),
             sum_stream_wait_ns: 0,
             pending: HashMap::new(),
             last_terminated: HashSet::new(),
-            target_subdirectory: format!("{}/{}/ipc", root_directory, target_subdirectory),
             data_files: LruCache::with_expiry_duration(Duration::from_millis(1000 * 120)),
         }
     }
@@ -140,7 +140,11 @@ impl Pipes {
                 ns_since_boot,
                 ..
             } => {
-                self.pending.insert((sb_id, inode_id), ns_since_boot);
+                let target_file = TargetFile::Inode {
+                    device: sb_id,
+                    inode_id,
+                };
+                self.pending.insert(target_file, ns_since_boot);
             }
             IpcEvent::ReadEnd {
                 sb_id,
@@ -154,10 +158,13 @@ impl Pipes {
                 ns_elapsed,
                 ..
             } => {
-                let kfile = (sb_id, inode_id);
-                let entry = self.stream_map.entry(kfile).or_insert(0);
-                self.last_terminated.insert(kfile);
-                self.pending.remove(&kfile);
+                let target_file = TargetFile::Inode {
+                    device: sb_id,
+                    inode_id,
+                };
+                self.pending.remove(&target_file);
+                let entry = self.stream_map.entry(target_file.clone()).or_insert(0);
+                self.last_terminated.insert(target_file);
                 *entry += ns_elapsed;
                 self.sum_stream_wait_ns += ns_elapsed;
             }
@@ -180,18 +187,18 @@ impl Pipes {
 
     fn store_streams(&mut self, epoch_ns: u128) -> Result<()> {
         let last_terminated = mem::replace(&mut self.last_terminated, HashSet::new());
-        let keys = self.pending.keys().into_iter().map(|key| (key.0, key.1));
-        let kfiles: HashSet<KFile> = HashSet::from_iter(keys);
-        let kfiles = kfiles.union(&last_terminated);
+        let keys = self.pending.keys().into_iter().map(|key| key.clone());
+        let target_files = HashSet::from_iter(keys);
+        let target_files = target_files.union(&last_terminated);
 
-        for kfile in kfiles {
+        for target_file in target_files {
             let epoch_ms = epoch_ns / 1_000_000;
-            let pending = if let Some(ns_since_boot) = self.pending.get(&kfile) {
+            let pending = if let Some(ns_since_boot) = self.pending.get(target_file) {
                 epoch_ns - (*BOOT_EPOCH_NS.read().unwrap() + *ns_since_boot as u128)
             } else {
                 0
             };
-            let cached_wait = *self.stream_map.get(&kfile).unwrap_or(&0);
+            let cached_wait = *self.stream_map.get(&target_file).unwrap_or(&0);
             let cumulative_wait = pending as u64 + cached_wait;
 
             let sample = StreamFileSample {
@@ -199,13 +206,27 @@ impl Pipes {
                 cumulative_wait,
             };
 
-            let file_path = format!(
-                "{}/streams/{:?}/{:?}_{:?}.csv",
-                self.target_subdirectory,
-                (epoch_ms / (1000 * 60)) * 60,
-                kfile.0,
-                kfile.1,
-            );
+            let file_path = match target_file {
+                TargetFile::Inode { device, inode_id } => {
+                    format!(
+                        "{}/streams/{:?}/{:?}_{:?}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        device,
+                        inode_id,
+                    )
+                }
+                TargetFile::AnonInode { name, address } => {
+                    format!(
+                        "{}/streams/{:?}/{}_{:x}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        name,
+                        address,
+                    )
+                }
+            };
+
             let mut file = self.get_or_create_file(Path::new(&file_path), sample.csv_headers())?;
             file.write_all(sample.to_csv_row().as_bytes())?;
         }
@@ -471,6 +492,7 @@ impl Sockets {
 
 struct EventPoll {
     sockets: Sockets,
+    pipes: Pipes,
 }
 
 impl EventPoll {
@@ -484,6 +506,7 @@ impl EventPoll {
                 format!("{}/{:x}", data_directory, address),
                 kfile_socket_map,
             ),
+            pipes: Pipes::new(format!("{}/{:x}", data_directory, address)),
         }
     }
 
