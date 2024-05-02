@@ -405,11 +405,11 @@ kfunc:vmlinux:ep_insert
     $fs_id = $inode->i_sb->s_id;
     if ($fs_id == "anon_inodefs") {
         $name = str(args->tfile->f_path.dentry->d_name.name);
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t\n",
-               "EpollAdd", comm, tid, args->ep, $fs_id, $name, args->tfile->private_data);
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\n",
+               "EpollAdd", comm, tid, args->ep, $fs_id, $name, args->tfile->private_data, nsecs);
     } else {
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t\n",
-               "EpollAdd", comm, tid, args->ep, $fs_id, $s_dev, $i_id);
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\n",
+               "EpollAdd", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs);
     }
 }
 
@@ -428,11 +428,11 @@ kfunc:vmlinux:__ep_remove
 
     if ($fs_id == "anon_inodefs") {
         $name = str($ffd.file->f_path.dentry->d_name.name);
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\n",
-               "EpollRemove", comm, tid, args->ep, $fs_id, $name, $ffd.file->private_data);
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\n",
+               "EpollRemove", comm, tid, args->ep, $fs_id, $name, $ffd.file->private_data, nsecs);
     } else {
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t\n",
-               "EpollRemove", comm, tid, args->ep, $fs_id, $s_dev, $i_id);
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\n",
+               "EpollRemove", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs);
     }
 }
 

@@ -1,3 +1,4 @@
+use chrono;
 use ctrlc;
 use eyre::Result;
 use std::{
@@ -179,9 +180,11 @@ impl Extractor {
                 break;
             }
 
+            println!("{:?} - Start collect", chrono::offset::Utc::now());
             self.sample_targets();
             self.sample_system_metrics()?;
             self.register_new_targets(&mut executor);
+            println!("{:?} - End collect", chrono::offset::Utc::now());
         }
 
         Ok(())

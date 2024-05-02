@@ -31,6 +31,7 @@ kfunc:vmlinux:bio_endio
            nsecs, $part0, $bdev, $bi_iter.bi_sector, $bi_iter.bi_size/512, $is_write, $op, $status, tid, comm);
 }
 
+/*
 tracepoint:block:block_io_start
 {
     printf("t_s\t%lld\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
@@ -55,3 +56,4 @@ kretfunc:vmlinux:io_schedule
     printf("io_e\t%lld\t%lld\t%s\n", 
            nsecs, tid, comm);
 }
+*/

@@ -112,6 +112,8 @@ struct Pipes {
     last_terminated: HashSet<TargetFile>,
     data_files: LruCache<String, File>,
     target_subdirectory: String,
+    active: HashSet<TargetFile>,
+    wait_depth: u32,
 }
 
 impl Pipes {
@@ -123,6 +125,8 @@ impl Pipes {
             pending: HashMap::new(),
             last_terminated: HashSet::new(),
             data_files: LruCache::with_expiry_duration(Duration::from_millis(1000 * 120)),
+            active: HashSet::new(),
+            wait_depth: 0,
         }
     }
 
@@ -167,6 +171,57 @@ impl Pipes {
                 self.last_terminated.insert(target_file);
                 *entry += ns_elapsed;
                 self.sum_stream_wait_ns += ns_elapsed;
+            }
+            IpcEvent::EpollItemAdd {
+                target_file,
+                ns_since_boot,
+                ..
+            } => {
+                if self.wait_depth > 0 {
+                    self.pending
+                        .entry(target_file.clone())
+                        .or_insert(ns_since_boot);
+                }
+                self.stream_map.entry(target_file.clone()).or_insert(0);
+                self.active.insert(target_file);
+            }
+            IpcEvent::EpollItemRemove {
+                target_file,
+                ns_since_boot,
+                ..
+            } => {
+                if let Some(start_ns_since_boot) = self.pending.remove(&target_file) {
+                    self.stream_map
+                        .entry(target_file.clone())
+                        .or_insert(ns_since_boot - start_ns_since_boot);
+                }
+                self.active.remove(&target_file);
+            }
+            IpcEvent::EpollWaitStart { ns_since_boot, .. } => {
+                self.wait_depth += 1;
+                for target_file in self.active.iter() {
+                    self.pending
+                        .entry(target_file.to_owned())
+                        .or_insert(ns_since_boot);
+                }
+            }
+            IpcEvent::EpollWaitEnd { ns_since_boot, .. } => {
+                self.wait_depth = i64::max(self.wait_depth as i64 - 1, 0) as u32;
+                if self.wait_depth > 0 {
+                    return Ok(());
+                }
+
+                let pending = mem::replace(&mut self.pending, HashMap::new());
+                for (target_file, start_ns_since_boot) in pending {
+                    let entry = self.stream_map.entry(target_file.clone()).or_insert(0);
+                    *entry += ns_since_boot - start_ns_since_boot;
+                    self.sum_stream_wait_ns += ns_since_boot - start_ns_since_boot;
+                    self.last_terminated.insert(target_file);
+                }
+            }
+            IpcEvent::EpollItemReady { target_file, .. } => {
+                self.stream_map.entry(target_file.clone()).or_insert(0);
+                self.active.insert(target_file);
             }
             _ => {
                 return Err(eyre!(format!("Expected pipe event. Got {:?}", event)));
@@ -370,23 +425,39 @@ impl Sockets {
                     self.last_terminated.insert(kfile);
                 }
             }
-            IpcEvent::EpollItemAdd { target_file, .. } => {
+            IpcEvent::EpollItemAdd {
+                target_file,
+                ns_since_boot,
+                ..
+            } => {
                 let kfile = match target_file {
                     TargetFile::Inode { device, inode_id } => (device, inode_id),
                     _ => {
                         return Err(eyre!("Unexpected target file"));
                     }
                 };
+                if self.wait_depth > 0 {
+                    self.pending.entry(kfile).or_insert(ns_since_boot);
+                }
                 self.kfile_map.entry(kfile).or_insert(0);
                 self.active.insert(kfile);
             }
-            IpcEvent::EpollItemRemove { target_file, .. } => {
+            IpcEvent::EpollItemRemove {
+                target_file,
+                ns_since_boot,
+                ..
+            } => {
                 let kfile = match target_file {
                     TargetFile::Inode { device, inode_id } => (device, inode_id),
                     _ => {
                         return Err(eyre!("Unexpected target file"));
                     }
                 };
+                if let Some(start_ns_since_boot) = self.pending.remove(&kfile) {
+                    self.kfile_map
+                        .entry(kfile.clone())
+                        .or_insert(ns_since_boot - start_ns_since_boot);
+                }
                 self.active.remove(&kfile);
             }
             IpcEvent::EpollWaitStart { ns_since_boot, .. } => {
@@ -397,22 +468,26 @@ impl Sockets {
                         .or_insert(ns_since_boot);
                 }
             }
-            IpcEvent::EpollWaitEnd { ns_elapsed, .. } => {
-                self.wait_depth -= 1;
+            IpcEvent::EpollWaitEnd { ns_since_boot, .. } => {
+                self.wait_depth = i64::max(self.wait_depth as i64 - 1, 0) as u32;
                 if self.wait_depth > 0 {
                     return Ok(());
                 }
 
                 let pending = mem::replace(&mut self.pending, HashMap::new());
-                for (kfile, _) in pending {
+                for (kfile, start_ns_since_boot) in pending {
                     let entry = self.kfile_map.entry(kfile).or_insert(0);
-                    *entry += ns_elapsed;
+                    *entry += ns_since_boot - start_ns_since_boot;
                     self.last_terminated.insert(kfile);
                 }
             }
             IpcEvent::EpollItemReady { target_file, .. } => {
                 match target_file {
-                    TargetFile::Inode { device, inode_id } => (device, inode_id),
+                    TargetFile::Inode { device, inode_id } => {
+                        let kfile = (device, inode_id);
+                        self.kfile_map.entry(kfile).or_insert(0);
+                        self.active.insert(kfile);
+                    }
                     _ => {
                         return Err(eyre!("Unexpected target file"));
                     }
@@ -483,7 +558,6 @@ impl Sockets {
                 };
             let mut file = self.get_or_create_file(Path::new(&file_path), sample.csv_headers())?;
             file.write_all(sample.to_csv_row().as_bytes())?;
-            println!("{}", file_path);
         }
 
         Ok(())
@@ -517,10 +591,13 @@ impl EventPoll {
             | IpcEvent::EpollItemReady { fs, .. } => {
                 if &**fs == "sockfs" {
                     self.sockets.process_event(event)?;
+                } else {
+                    self.pipes.process_event(event)?;
                 }
             }
             IpcEvent::EpollWaitStart { .. } | IpcEvent::EpollWaitEnd { .. } => {
-                self.sockets.process_event(event)?;
+                self.sockets.process_event(event.clone())?;
+                self.pipes.process_event(event)?;
             }
             _ => {
                 return Err(eyre!(format!("Expected epoll event. Got {:?}", event)));
@@ -530,7 +607,8 @@ impl EventPoll {
     }
 
     fn store(&mut self, sample_instant_ns: u128) -> Result<()> {
-        self.sockets.store(sample_instant_ns)
+        self.sockets.store(sample_instant_ns)?;
+        self.pipes.store(sample_instant_ns)
     }
 }
 

@@ -15,7 +15,7 @@ use std::{
 
 use crate::execute::BpfReader;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum IpcEvent {
     NewProcess {
         comm: Rc<str>,
@@ -119,6 +119,7 @@ pub enum IpcEvent {
         event_poll: u64,
         fs: Rc<str>,
         target_file: TargetFile,
+        ns_since_boot: u64,
     },
     EpollItemRemove {
         comm: Rc<str>,
@@ -126,6 +127,7 @@ pub enum IpcEvent {
         event_poll: u64,
         fs: Rc<str>,
         target_file: TargetFile,
+        ns_since_boot: u64,
     },
     EpollItemReady {
         comm: Rc<str>,
@@ -280,6 +282,7 @@ impl From<Vec<u8>> for IpcEvent {
                     event_poll,
                     fs,
                     target_file,
+                    ns_since_boot: elements.next().unwrap().parse().unwrap(),
                 }
             }
             "EpollRemove" => {
@@ -305,6 +308,7 @@ impl From<Vec<u8>> for IpcEvent {
                     event_poll,
                     fs,
                     target_file,
+                    ns_since_boot: elements.next().unwrap().parse().unwrap(),
                 }
             }
             "EpiPoll" => {
@@ -457,7 +461,7 @@ impl IpcProgram {
                         epoll_events.push(event);
                     }
                     _ => {
-                        println!("{:?}", event);
+                        println!("Unexpected ipc event {:?}", event);
                     }
                 }
             }

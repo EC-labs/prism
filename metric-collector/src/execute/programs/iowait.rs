@@ -255,7 +255,14 @@ impl IOWaitProgram {
                 }
                 let events = self.events.as_mut().unwrap();
                 let event = IOWaitEvent::from(event);
-                events.push(event);
+                match event {
+                    IOWaitEvent::Unexpected { .. } => {
+                        println!("Unexpected iowait event. {:?}", event)
+                    }
+                    _ => {
+                        events.push(event);
+                    }
+                }
             }
         }
         Ok(self.events.as_ref().map_or(0, |events| events.len()))
