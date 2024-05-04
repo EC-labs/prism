@@ -17,12 +17,33 @@ tracepoint:syscalls:sys_enter_access
 tracepoint:syscalls:sys_enter_clone*
 / @pids[pid] / 
 {
-    @enter[tid] = 1
+    @enter[tid] = 1;
 }
 
 tracepoint:syscalls:sys_exit_clone*
 / @enter[tid] /
 {
-    printf("%s\t%ld\n", comm, args->ret);
-    @enter[tid] = 0;
+    printf("%-15s\t%-15s\t%ld\n", "NewThread", comm, args->ret);
+    delete(@enter[tid]);
+}
+
+tracepoint:syscalls:sys_enter_*fork
+/ @pids[pid] / 
+{
+    @enter[tid] = 1
+}
+
+tracepoint:syscalls:sys_exit_*fork
+/ @enter[tid] /
+{
+    @pids[args->ret] = 1;
+    printf("%-15s\t%-15s\t%ld\n", "NewProcess", comm, args->ret);
+    delete(@enter[tid]);
+}
+
+tracepoint:syscalls:sys_enter_execve*
+/ @pids[pid] / 
+{
+    printf("%-15s\t%ld\n", "RemoveProcess", pid);
+    delete(@pids[pid])
 }

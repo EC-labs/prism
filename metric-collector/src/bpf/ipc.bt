@@ -93,9 +93,7 @@ kfunc:vmlinux:vfs_read
             @pids[pid] = 1
         }
 
-        @start_file[tid, $s_dev, $i_id] = nsecs;
-        printf("%-15s\t%-15s\t%lld\t%s\t%lld\t%lld\t%lld\n", 
-               "ReadStart", comm, tid, $fs_id, $s_dev, $i_id, @start_file[tid, $s_dev, $i_id]);
+        @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
     } else if ((($mode & S_IFMT) == S_IFBLK) || (($mode & S_IFMT) == S_IFSOCK) || (($mode & S_IFMT) == S_IFREG)) {
         return; 
     } else {
@@ -121,14 +119,14 @@ kretfunc:vmlinux:vfs_read
         $i_id = $inode->i_ino;
         $s_dev = $inode->i_sb->s_dev;
 
-        if (!@start_file[tid, $s_dev, $i_id]) {
+        if (!@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]) {
             return;
         }
 
-        $since_boot = nsecs;
-        printf("%-15s\t%-15s\t%lld\t%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "ReadEnd", comm, tid, $fs_id, $s_dev, $i_id, $since_boot, $since_boot - @start_file[tid, $s_dev, $i_id]);
-        delete(@start_file[tid, $s_dev, $i_id]);
+        $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
+        $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+        delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
     }    
 }
 
@@ -158,9 +156,7 @@ kfunc:vmlinux:vfs_write
             @pids[pid] = 1
         }
 
-        @start_file[tid, $s_dev, $i_id] = nsecs;
-        printf("%-15s\t%-15s\t%lld\t%s\t%lld\t%lld\t%lld\n", 
-               "WriteStart", comm, tid, $fs_id, $s_dev, $i_id, @start_file[tid, $s_dev, $i_id]);
+        @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
     } else if ((($mode & S_IFMT) == S_IFBLK) || (($mode & S_IFMT) == S_IFSOCK) || (($mode & S_IFMT) == S_IFREG)) {
         return; 
     } else {
@@ -186,14 +182,14 @@ kretfunc:vmlinux:vfs_write
         $s_dev = $inode->i_sb->s_dev;
         $fs_id = $inode->i_sb->s_id;
 
-        if (!@start_file[tid, $s_dev, $i_id]) {
+        if (!@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]) {
             return;
         }
 
-        $since_boot = nsecs;
-        printf("%-15s\t%-15s\t%lld\t%s\t%lld\t%lld\t%lld\t%lld\n", 
-               "WriteEnd", comm, tid, $fs_id, $s_dev, $i_id, $since_boot, $since_boot - @start_file[tid, $s_dev, $i_id]);
-        delete(@start_file[tid, $s_dev, $i_id]);
+        $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
+        $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+        delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
     }
 }
 
@@ -222,13 +218,19 @@ kfunc:vmlinux:tcp_connect
 
     $daddr = ntop($sk->__sk_common.skc_daddr);
     $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+
     $lport = $sk->__sk_common.skc_num;
     $dport = $sk->__sk_common.skc_dport;
     $dport = bswap($dport);
 
-    if (!@socks[$saddr, $lport, $daddr, $dport]) {
-        @socks[$saddr, $lport, $daddr, $dport] = 1;
+    @socks[$saddr, $lport, $daddr, $dport] = 1;
+
+    if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+        printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
+               "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+        @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
     }
+
     @start_sock[tid] = nsecs;
     printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\n", 
            "ConnectStart", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
@@ -265,20 +267,21 @@ kfunc:vmlinux:do_accept
            "AcceptStart", comm, tid, $saddr, $lport);
 }
 
-kretprobe:inet_csk_accept
+kretfunc:vmlinux:do_accept
 {
     if (!@pids[pid]) {
         return;
     }
 
-	$sk = (struct sock *)retval;
+    $sock = (struct socket *) retval->private_data;
+    $sk = $sock->sk;
 	$inet_family = $sk->__sk_common.skc_family;
 
 	if ($inet_family != AF_INET) {
         return;
 	}
 
-    $inode = $sk->sk_socket->file->f_inode;
+    $inode = retval->f_inode;
     $i_id = $inode->i_ino;
     $s_dev = $inode->i_sb->s_dev;
     $fs_id = $inode->i_sb->s_id;
@@ -290,30 +293,23 @@ kretprobe:inet_csk_accept
     $dport = $sk->__sk_common.skc_dport;
     $dport = bswap($dport);
 
-    $qlen  = $sk->sk_ack_backlog;
-    $qmax  = $sk->sk_max_ack_backlog;
+    @socks[$saddr, $lport, $daddr, $dport] = 1;
 
-    if (@socks[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
-        printf("%s\t%s\t%lld\n", 
-               "NewProcess", comm, pid);
-        @pids[pid] = 1;
+    if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+        printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
+               "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+        @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
     }
+
     printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n", 
-           "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, nsecs - @start_sock[tid]);
+           "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, nsecs);
     delete(@start_sock[tid]);
+
 }
+
 
 kfunc:vmlinux:sock_recvmsg
 {
-    if (!@pids[pid]) {
-        return;
-    }
-    
-    $inode = (struct inode *)args->sock->file->f_inode;
-    $i_id = $inode->i_ino;
-    $s_dev = $inode->i_sb->s_dev;
-    $fs_id = $inode->i_sb->s_id;
-
 	$sk = args->sock->sk;
 	$inet_family = $sk->__sk_common.skc_family;
 
@@ -327,19 +323,66 @@ kfunc:vmlinux:sock_recvmsg
     $lport = $sk->__sk_common.skc_num;
     $dport = $sk->__sk_common.skc_dport;
     $dport = bswap($dport);
+    
+    /* 
+     * If the current socket is not tracked and this process belongs to the
+     * list of processes of interest, start tracking the socket.
+     */ 
+    if (!@socks[$saddr, $lport, $daddr, $dport]) {
+        if (@pids[pid]) {
+            @socks[$saddr, $lport, $daddr, $dport] = 1;
+        }
+    }
 
-    @start_sock[tid] = nsecs;
-    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n", 
-           "RecvStart", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, @start_sock[tid]);
+    /*
+     * If the conjugate socket is currently in the tracked list, but the
+     * current pid is not, we should add this process group to the list of
+     * interest.
+     */
+    if (@socks[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
+        printf("%s\t%s\t%lld\n", 
+               "NewProcess", comm, pid);
+        @pids[pid] = 1
+    }
+
+    /* 
+     * If with the previous statements, the current pid still isn't in the
+     * tracked list of processes, then we can safely assume this is not an
+     * event of interest.
+     */
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
+
+    if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+        printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
+               "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+        @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+    }
 }
 
 kretfunc:vmlinux:sock_recvmsg
-/ @start_sock[tid] /
 {
-    $since_boot = nsecs;
-    printf("%-15s\t%-15s\t%lld\t%lld\t%lld\n",
-           "RecvEnd", comm, tid, $since_boot, $since_boot - @start_sock[tid]);
-    delete(@start_sock[tid]);
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    if (!@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]) {
+        return;
+    }
+
+    $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
+    $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+    delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
 }
 
 kfunc:vmlinux:inet_sendmsg
@@ -348,11 +391,6 @@ kfunc:vmlinux:inet_sendmsg
         return;
     }
 
-    $inode = (struct inode *)args->sock->file->f_inode;
-    $i_id = $inode->i_ino;
-    $s_dev = $inode->i_sb->s_dev;
-    $fs_id = $inode->i_sb->s_id;
-
 	$sk = args->sock->sk;
 	$inet_family = $sk->__sk_common.skc_family;
 
@@ -367,18 +405,65 @@ kfunc:vmlinux:inet_sendmsg
     $dport = $sk->__sk_common.skc_dport;
     $dport = bswap($dport);
 
-    @start_sock[tid] = nsecs;
-    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%lld\t%lld\n", 
-           "SendStart", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, @start_sock[tid]);
+    /* 
+     * If the current socket is not tracked and this process belongs to the
+     * list of processes of interest, start tracking the socket.
+     */ 
+    if (!@socks[$saddr, $lport, $daddr, $dport]) {
+        if (@pids[pid]) {
+            @socks[$saddr, $lport, $daddr, $dport] = 1;
+        }
+    }
+
+    /*
+     * If the conjugate socket is currently in the tracked list, but the
+     * current pid is not, we should add this process group to the list of
+     * interest.
+     */
+    if (@socks[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
+        printf("%s\t%s\t%lld\n", 
+               "NewProcess", comm, pid);
+        @pids[pid] = 1
+    }
+
+    /* 
+     * If with the previous adjustments, the current pid still isn't in the
+     * tracked list of processes, then we can safely assume this is not an
+     * event of interest.
+     */
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
+
+    if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+        printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
+               "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+        @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+    }
 }
 
 kretfunc:vmlinux:inet_sendmsg
-/ @start_sock[tid] /
 {
-    $since_boot = nsecs;
-    printf("%-15s\t%-15s\t%lld\t%lld\t%lld\n", 
-           "SendEnd", comm, tid, $since_boot, $since_boot - @start_sock[tid]);
-    delete(@start_sock[tid]);
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    if (!@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]) {
+        return;
+    }
+
+    $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
+    $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+    delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
 }
 
 
@@ -393,23 +478,35 @@ kfunc:vmlinux:ep_insert
         return;
     }
 
-    $ep = (struct eventpoll *) args->ep;
-    $ep_inode = (struct inode *) $ep->file->f_inode;
-    $ep_i_id = $ep_inode->i_ino;
-    $ep_s_dev = $ep_inode->i_sb->s_dev;
-    $ep_fs_id = $ep_inode->i_sb->s_id;
-
     $inode = (struct inode *)args->tfile->f_inode;
-    $i_id = $inode->i_ino;
-    $s_dev = $inode->i_sb->s_dev;
     $fs_id = $inode->i_sb->s_id;
+
     if ($fs_id == "anon_inodefs") {
         $name = str(args->tfile->f_path.dentry->d_name.name);
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\n",
-               "EpollAdd", comm, tid, args->ep, $fs_id, $name, args->tfile->private_data, nsecs);
+        $priv_data = args->tfile->private_data;
+
+        if (!@epoll_anon_inode_map[args->ep, $fs_id, $name, $priv_data]) {
+            @epoll_anon_inode_map[args->ep, $fs_id, $name, $priv_data] = 1;
+            $epoll_cached = @epoll_map[args->ep];
+            $start = @epoll_pending[args->ep];
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+
+            printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\t%lld\n",
+                   "EpollAdd", comm, tid, args->ep, $fs_id, $name, args->tfile->private_data, nsecs, $epoll_cached + $pending_contrib);
+        }
     } else {
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\n",
-               "EpollAdd", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs);
+        $s_dev = $inode->i_sb->s_dev;
+        $i_id = $inode->i_ino;
+
+        if (!@epoll_inode_map[args->ep, $fs_id, $s_dev, $i_id]) {
+            @epoll_inode_map[args->ep, $fs_id, $s_dev, $i_id] = 1;
+            $epoll_cached = @epoll_map[args->ep];
+            $start = @epoll_pending[args->ep];
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+
+            printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\t%lld\n",
+                   "EpollAdd", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs, $epoll_cached + $pending_contrib);
+        }
     }
 }
 
@@ -422,17 +519,36 @@ kfunc:vmlinux:__ep_remove
     $epi = (struct epitem *) args->epi;
     $ffd = $epi->ffd;
     $inode = $ffd.file->f_inode;
-    $i_id = $inode->i_ino;
-    $s_dev = $inode->i_sb->s_dev;
     $fs_id = $inode->i_sb->s_id;
 
     if ($fs_id == "anon_inodefs") {
         $name = str($ffd.file->f_path.dentry->d_name.name);
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\n",
-               "EpollRemove", comm, tid, args->ep, $fs_id, $name, $ffd.file->private_data, nsecs);
+        $priv_data = $ffd.file->private_data;
+
+        if (@epoll_anon_inode_map[args->ep, $fs_id, $name, $priv_data]) {
+            @epoll_anon_inode_map[args->ep, $fs_id, $name, $priv_data] = 1;
+            $epoll_cached = @epoll_map[args->ep];
+            $start = @epoll_pending[args->ep];
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+
+            printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\t%lld\n",
+                   "EpollRemove", comm, tid, args->ep, $fs_id, $name, $ffd.file->private_data, nsecs, $epoll_cached + $pending_contrib);
+            delete(@epoll_anon_inode_map[args->ep, $fs_id, $name, $priv_data]);
+        }
     } else {
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\n",
-               "EpollRemove", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs);
+        $i_id = $inode->i_ino;
+        $s_dev = $inode->i_sb->s_dev;
+
+        if (@epoll_inode_map[args->ep, $fs_id, $s_dev, $i_id]) {
+            @epoll_inode_map[args->ep, $fs_id, $s_dev, $i_id] = 1;
+            $epoll_cached = @epoll_map[args->ep];
+            $start = @epoll_pending[args->ep];
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+
+            printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\t%lld\n",
+                   "EpollRemove", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs, $epoll_cached + $pending_contrib);
+            delete(@epoll_inode_map[args->ep, $fs_id, $s_dev, $i_id]);
+        }
     }
 }
 
@@ -442,26 +558,34 @@ kfunc:vmlinux:ep_poll
         return;
     }
 
-    $ep = (struct eventpoll *) args->ep;
-    $inode = (struct inode *) $ep->file->f_inode;
-    $i_id = $inode->i_ino;
-    $s_dev = $inode->i_sb->s_dev;
-    $fs_id = $inode->i_sb->s_id;
-
-    @epoll_wait[tid] = nsecs;
-    printf("%-15s\t%-15s\t%lld\t%p\t%lld\n", 
-           "EpollWaitStart", comm, tid, args->ep, @epoll_wait[tid]);
+    if (@epoll_wait_depth[args->ep] == 0) {
+        @epoll_pending[args->ep] = nsecs;
+    }
+    @epoll_wait_depth[args->ep] += 1;
 }
 
 kretfunc:vmlinux:ep_poll
 {
-    if (!@pids[pid]) {
+    if (!@pids[pid] || !@epoll_pending[args->ep]) {
         return;
     }
 
-    $since_boot = nsecs;
-    printf("%-15s\t%-15s\t%lld\t%p\t%lld\t%lld\n", 
-           "EpollWaitEnd", comm, tid, args->ep, $since_boot, $since_boot - @epoll_wait[tid]);
+    $depth = @epoll_wait_depth[args->ep];
+    @epoll_wait_depth[args->ep] = ($depth == 0) ? 0 : $depth - 1;
+
+    if (@epoll_wait_depth[args->ep] > 0) {
+        return;
+    }
+
+    /*
+     * We are accounting for the total time waiting within this sample
+     * interval. If pending was initiated before the last sample interval we do
+     * not want to account for the time spent waiting before the current interval.
+     */
+    $start = @epoll_pending[args->ep];
+    $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    @epoll_map[args->ep] = @epoll_map[args->ep] + $pending_contrib;
+    delete(@epoll_pending[args->ep]);
 }
 
 kfunc:vmlinux:ep_send_events
@@ -486,23 +610,66 @@ kprobe:ep_item_poll*
     $ffd = $epi->ffd;
     $inode = $ffd.file->f_inode;
     $fs_id = $inode->i_sb->s_id;
+
     if ($fs_id == "anon_inodefs") {
+        $epoll = @epoll_send[tid];
         $name = str($ffd.file->f_path.dentry->d_name.name);
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\n", 
-               "EpiPoll", comm, tid, @epoll_send[tid], $fs_id, $name, $ffd.file->private_data, nsecs);
+        $priv_data = $ffd.file->private_data;
+
+        if(@epoll_anon_inode_map[$epoll, $fs_id, $name, $priv_data]) {
+            return;
+        }
+
+        @epoll_anon_inode_map[$epoll, $fs_id, $name, $priv_data] = 1;
+        $epoll_cached = @epoll_map[$epoll];
+        $start = @epoll_pending[$epoll];
+        $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\t%lld\n", 
+               "EpiPoll", comm, tid, @epoll_send[tid], $fs_id, $name, $ffd.file->private_data, nsecs, $epoll_cached + $pending_contrib);
     } else {
         $i_id = $inode->i_ino;
         $s_dev = $inode->i_sb->s_dev;
-        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%lld\t%lld\t%lld\n", 
-               "EpiPoll", comm, tid, @epoll_send[tid], $fs_id, $s_dev, $i_id, nsecs);
+        $epoll = @epoll_send[tid];
+
+        if(@epoll_inode_map[$epoll, $fs_id, $s_dev, $i_id]) {
+            return;
+        }
+
+        @epoll_anon_inode_map[$epoll, $fs_id, $name, $priv_data] = 1;
+        $epoll_cached = @epoll_map[$epoll];
+        $start = @epoll_pending[$epoll];
+        $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+        @epoll_inode_map[$epoll, $fs_id, $s_dev, $i_id] = 1;
+
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%lld\t%lld\t%lld\t%lld\n", 
+               "EpiPoll", comm, tid, @epoll_send[tid], $fs_id, $s_dev, $i_id, nsecs, $epoll_cached + $pending_contrib);
     }
+}
+
+interval:s:1
+{
+    printf("=> start map statistics\n");
+
+    print(@inode_map);
+    print(@inode_pending);
+    print(@epoll_map);
+    print(@epoll_pending);
+
+    @sample_instant = nsecs; 
+    printf("%-15s\t%lld\n", "SampleInstant", @sample_instant);
+
+    printf("=> end map statistics\n");
+
+    clear(@inode_map);
+    clear(@epoll_map);
 }
 
 END 
 {
-    clear(@start_file);
     clear(@start_sock);
     clear(@files);
     clear(@pids);
     clear(@socks);
+    clear(@kfile_socket)
 }
