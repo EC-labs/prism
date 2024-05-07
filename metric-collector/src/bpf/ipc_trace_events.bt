@@ -1,0 +1,508 @@
+#!/home/diogo/.local/bin/bpftrace
+
+#include <linux/stat.h>
+#include <linux/fs.h>
+#include <linux/net.h>
+#include <linux/socket.h>
+#include <net/sock.h>
+
+struct epoll_filefd {
+	struct file *file;
+	int fd;
+};
+
+struct epitem {
+	union {
+		struct rb_node rbn;
+		struct rcu_head rcu;
+	};
+	struct list_head rdllink;
+	struct epitem *next;
+	struct epoll_filefd ffd;
+};
+
+
+struct eventpoll {
+	struct mutex mtx;
+	wait_queue_head_t wq;
+	wait_queue_head_t poll_wait;
+	struct list_head rdllist;
+	rwlock_t lock;
+	struct rb_root_cached rbr;
+	struct epitem *ovflist;
+	struct wakeup_source *ws;
+	struct user_struct *user;
+	struct file *file;
+}
+
+
+BEGIN 
+/ str($2) == "debug" /
+{
+    @pids[$1] = 1;
+}
+
+/* This probe is used to register new pids. 
+ * 
+ * The first argument is the pid of the metric collector sending the event. The
+ * new pid is extracted from the mode argument passed in via the mode system *
+ * call parameter.
+ */
+tracepoint:syscalls:sys_enter_access
+/ pid == $1 /
+{
+    $filename = str(args->filename);
+    if ($filename != "metric-collector-new-pid") {
+        return;
+    }
+
+    $new_pid = (uint32) args->mode;
+    if (!@pids[$new_pid]) {
+        @pids[$new_pid] = 1;
+    }
+}
+
+
+
+/* 
+ * STREAMS
+ */
+kfunc:vmlinux:vfs_read
+{
+    $inode = (struct inode *)args->file->f_inode;
+    $mode = $inode->i_mode;
+
+    if ((($mode & S_IFMT) == S_IFIFO) || (($mode & S_IFMT) == S_IFCHR)) {
+        $i_id = $inode->i_ino;
+        $s_dev = $inode->i_sb->s_dev;
+        $fs_id = $inode->i_sb->s_id;
+
+        if (!@files[$s_dev, $i_id]) {
+            if (@pids[pid]) {
+                @files[$s_dev, $i_id] = 1;
+            }
+        } 
+
+        if (!@files[$s_dev, $i_id]) {
+            return;
+        }
+
+        if (!@pids[pid]) {
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
+            @pids[pid] = 1
+        }
+
+        @start_file[tid, $s_dev, $i_id] = nsecs;
+        printf("%-15s\t%-15s\t%lld\t%s\t%lld\t%lld\t%lld\n", 
+               "ReadStart", comm, tid, $fs_id, $s_dev, $i_id, @start_file[tid, $s_dev, $i_id]);
+    } else if ((($mode & S_IFMT) == S_IFBLK) || (($mode & S_IFMT) == S_IFSOCK) || (($mode & S_IFMT) == S_IFREG)) {
+        return; 
+    } else {
+        if (!@pids[pid]) {
+            return;
+        }
+        $i_id = $inode->i_ino;
+        $s_dev = $inode->i_sb->s_dev;
+        $fs_id = $inode->i_sb->s_id;
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
+               "ReadUnknown", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+    }
+}
+
+kretfunc:vmlinux:vfs_read 
+{
+    $inode = (struct inode *)args->file->f_inode;
+    $mode = $inode->i_mode;
+    $fs_id = $inode->i_sb->s_id;
+
+    if ((($mode & S_IFMT) == S_IFIFO) || (($mode & S_IFMT) == S_IFCHR)) {
+        $i_id = $inode->i_ino;
+        $s_dev = $inode->i_sb->s_dev;
+
+        if (!@start_file[tid, $s_dev, $i_id]) {
+            return;
+        }
+
+        $since_boot = nsecs;
+        printf("%-15s\t%-15s\t%lld\t%s\t%lld\t%lld\t%lld\t%lld\n", 
+               "ReadEnd", comm, tid, $fs_id, $s_dev, $i_id, $since_boot, $since_boot - @start_file[tid, $s_dev, $i_id]);
+        delete(@start_file[tid, $s_dev, $i_id]);
+    }    
+}
+
+kfunc:vmlinux:vfs_write
+{
+    $inode = (struct inode *)args->file->f_inode;
+    $mode = $inode->i_mode;
+
+    if ((($mode & S_IFMT) == S_IFIFO) || (($mode & S_IFMT) == S_IFCHR)) {
+        $i_id = $inode->i_ino;
+        $s_dev = $inode->i_sb->s_dev;
+        $fs_id = $inode->i_sb->s_id;
+
+        if (!@files[$s_dev, $i_id]) {
+            if (@pids[pid]) {
+                @files[$s_dev, $i_id] = 1;
+            }
+        } 
+
+        if (!@files[$s_dev, $i_id]) {
+            return;
+        }
+
+        if (!@pids[pid]) {
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
+            @pids[pid] = 1
+        }
+
+        @start_file[tid, $s_dev, $i_id] = nsecs;
+        printf("%-15s\t%-15s\t%lld\t%s\t%lld\t%lld\t%lld\n", 
+               "WriteStart", comm, tid, $fs_id, $s_dev, $i_id, @start_file[tid, $s_dev, $i_id]);
+    } else if ((($mode & S_IFMT) == S_IFBLK) || (($mode & S_IFMT) == S_IFSOCK) || (($mode & S_IFMT) == S_IFREG)) {
+        return; 
+    } else {
+        if (!@pids[pid]) {
+            return;
+        }
+        $i_id = $inode->i_ino;
+        $s_dev = $inode->i_sb->s_dev;
+        $fs_id = $inode->i_sb->s_id;
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
+               "WriteUnknown", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+    }
+}
+
+kretfunc:vmlinux:vfs_write 
+{
+    $inode = (struct inode *)args->file->f_inode;
+    $mode = $inode->i_mode;
+
+    if ((($mode & S_IFMT) == S_IFIFO) || (($mode & S_IFMT) == S_IFCHR)) {
+        $i_id = $inode->i_ino;
+        $s_dev = $inode->i_sb->s_dev;
+        $fs_id = $inode->i_sb->s_id;
+
+        if (!@start_file[tid, $s_dev, $i_id]) {
+            return;
+        }
+
+        $since_boot = nsecs;
+        printf("%-15s\t%-15s\t%lld\t%s\t%lld\t%lld\t%lld\t%lld\n", 
+               "WriteEnd", comm, tid, $fs_id, $s_dev, $i_id, $since_boot, $since_boot - @start_file[tid, $s_dev, $i_id]);
+        delete(@start_file[tid, $s_dev, $i_id]);
+    }
+}
+
+
+
+/*
+ * SOCKETS
+ */
+kfunc:vmlinux:tcp_connect
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $sk = args->sk;
+    $inet_family = $sk->__sk_common.skc_family;
+
+    if ($inet_family != AF_INET) {
+        return;
+    }
+
+    $inode = $sk->sk_socket->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    $daddr = ntop($sk->__sk_common.skc_daddr);
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = bswap($dport);
+
+    if (!@socks[$saddr, $lport, $daddr, $dport]) {
+        @socks[$saddr, $lport, $daddr, $dport] = 1;
+    }
+    @start_sock[tid] = nsecs;
+    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\n", 
+           "ConnectStart", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+}
+
+
+kretfunc:vmlinux:tcp_connect
+/ @start_sock[tid] /
+{
+    printf("%-15s\t%s\t%lld\t%lld\n",
+           "ConnectEnded", comm, tid, nsecs - @start_sock[tid]);
+    delete(@start_sock[tid]);
+}
+
+kfunc:vmlinux:do_accept 
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $socket = (struct socket *)args->file->private_data;
+    $sk = $socket->sk;
+	$inet_family = $sk->__sk_common.skc_family;
+    
+    if ($inet_family != AF_INET) {
+        return;
+    }
+
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+    $lport = $sk->__sk_common.skc_num;
+
+    @start_sock[tid] = nsecs;
+    printf("%-15s\t%s\t%lld\t%s\t%d\n", 
+           "AcceptStart", comm, tid, $saddr, $lport);
+}
+
+kretprobe:inet_csk_accept
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+	$sk = (struct sock *)retval;
+	$inet_family = $sk->__sk_common.skc_family;
+
+	if ($inet_family != AF_INET) {
+        return;
+	}
+
+    $inode = $sk->sk_socket->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    $daddr = ntop($sk->__sk_common.skc_daddr);
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = bswap($dport);
+
+    $qlen  = $sk->sk_ack_backlog;
+    $qmax  = $sk->sk_max_ack_backlog;
+
+    if (@socks[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
+        printf("%s\t%s\t%lld\n", 
+               "NewProcess", comm, pid);
+        @pids[pid] = 1;
+    }
+    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n", 
+           "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, nsecs - @start_sock[tid]);
+    delete(@start_sock[tid]);
+}
+
+kfunc:vmlinux:sock_recvmsg
+{
+    if (!@pids[pid]) {
+        return;
+    }
+    
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+	$sk = args->sock->sk;
+	$inet_family = $sk->__sk_common.skc_family;
+
+    if ($inet_family != AF_INET) {
+        return;
+    }
+
+    $daddr = ntop($sk->__sk_common.skc_daddr);
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = bswap($dport);
+
+    @start_sock[tid] = nsecs;
+    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n", 
+           "RecvStart", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, @start_sock[tid]);
+}
+
+kretfunc:vmlinux:sock_recvmsg
+/ @start_sock[tid] /
+{
+    $since_boot = nsecs;
+    printf("%-15s\t%-15s\t%lld\t%lld\t%lld\n",
+           "RecvEnd", comm, tid, $since_boot, $since_boot - @start_sock[tid]);
+    delete(@start_sock[tid]);
+}
+
+kfunc:vmlinux:inet_sendmsg
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+	$sk = args->sock->sk;
+	$inet_family = $sk->__sk_common.skc_family;
+
+    if ($inet_family != AF_INET) {
+        return;
+    }
+
+    $daddr = ntop($sk->__sk_common.skc_daddr);
+    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = bswap($dport);
+
+    @start_sock[tid] = nsecs;
+    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%lld\t%lld\n", 
+           "SendStart", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, @start_sock[tid]);
+}
+
+kretfunc:vmlinux:inet_sendmsg
+/ @start_sock[tid] /
+{
+    $since_boot = nsecs;
+    printf("%-15s\t%-15s\t%lld\t%lld\t%lld\n", 
+           "SendEnd", comm, tid, $since_boot, $since_boot - @start_sock[tid]);
+    delete(@start_sock[tid]);
+}
+
+
+
+/*
+ * EPOLL
+ */
+
+kfunc:vmlinux:ep_insert 
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $ep = (struct eventpoll *) args->ep;
+    $ep_inode = (struct inode *) $ep->file->f_inode;
+    $ep_i_id = $ep_inode->i_ino;
+    $ep_s_dev = $ep_inode->i_sb->s_dev;
+    $ep_fs_id = $ep_inode->i_sb->s_id;
+
+    $inode = (struct inode *)args->tfile->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+    if ($fs_id == "anon_inodefs") {
+        $name = str(args->tfile->f_path.dentry->d_name.name);
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\n",
+               "EpollAdd", comm, tid, args->ep, $fs_id, $name, args->tfile->private_data, nsecs);
+    } else {
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\n",
+               "EpollAdd", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs);
+    }
+}
+
+kfunc:vmlinux:__ep_remove 
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $epi = (struct epitem *) args->epi;
+    $ffd = $epi->ffd;
+    $inode = $ffd.file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    if ($fs_id == "anon_inodefs") {
+        $name = str($ffd.file->f_path.dentry->d_name.name);
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\n",
+               "EpollRemove", comm, tid, args->ep, $fs_id, $name, $ffd.file->private_data, nsecs);
+    } else {
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\n",
+               "EpollRemove", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs);
+    }
+}
+
+kfunc:vmlinux:ep_poll
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $ep = (struct eventpoll *) args->ep;
+    $inode = (struct inode *) $ep->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    @epoll_wait[tid] = nsecs;
+    printf("%-15s\t%-15s\t%lld\t%p\t%lld\n", 
+           "EpollWaitStart", comm, tid, args->ep, @epoll_wait[tid]);
+}
+
+kretfunc:vmlinux:ep_poll
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    $since_boot = nsecs;
+    printf("%-15s\t%-15s\t%lld\t%p\t%lld\t%lld\n", 
+           "EpollWaitEnd", comm, tid, args->ep, $since_boot, $since_boot - @epoll_wait[tid]);
+}
+
+kfunc:vmlinux:ep_send_events
+{
+    if (!@pids[pid]) {
+        return;
+    }
+
+    @epoll_send[tid] = args->ep;
+}
+
+kretprobe:ep_send_events
+/ @epoll_send[tid] /
+{
+    delete(@epoll_send[tid]);
+}
+
+kprobe:ep_item_poll*
+/ @epoll_send[tid] /
+{
+    $epi = (struct epitem *) arg0;
+    $ffd = $epi->ffd;
+    $inode = $ffd.file->f_inode;
+    $fs_id = $inode->i_sb->s_id;
+    if ($fs_id == "anon_inodefs") {
+        $name = str($ffd.file->f_path.dentry->d_name.name);
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\n", 
+               "EpiPoll", comm, tid, @epoll_send[tid], $fs_id, $name, $ffd.file->private_data, nsecs);
+    } else {
+        $i_id = $inode->i_ino;
+        $s_dev = $inode->i_sb->s_dev;
+        printf("%-15s\t%-15s\t%lld\t%p\t%s\t%lld\t%lld\t%lld\n", 
+               "EpiPoll", comm, tid, @epoll_send[tid], $fs_id, $s_dev, $i_id, nsecs);
+    }
+}
+
+END 
+{
+    clear(@start_file);
+    clear(@start_sock);
+    clear(@files);
+    clear(@pids);
+    clear(@socks);
+}
