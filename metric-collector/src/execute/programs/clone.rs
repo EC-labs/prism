@@ -4,14 +4,40 @@ use std::process::{Child, Command};
 use std::rc::Rc;
 use std::{fs::File, io::prelude::*};
 
-pub struct Clone {
+pub enum CloneEvent {
+    NewThread(Rc<str>, usize),
+    NewProcess(Rc<str>, usize),
+    RemoveProcess(usize),
+    Unexpected { data: String },
+}
+
+impl From<Vec<u8>> for CloneEvent {
+    fn from(value: Vec<u8>) -> Self {
+        let event_string = String::from_utf8(value).unwrap();
+        let mut elements = event_string.split_whitespace();
+        match elements.next().unwrap() {
+            "NewThread" => Self::NewThread(
+                Rc::from(elements.next().unwrap()),
+                elements.next().unwrap().parse().unwrap(),
+            ),
+            "NewProcess" => Self::NewProcess(
+                Rc::from(elements.next().unwrap()),
+                elements.next().unwrap().parse().unwrap(),
+            ),
+            "RemoveProcess" => Self::RemoveProcess(elements.next().unwrap().parse().unwrap()),
+            _ => Self::Unexpected { data: event_string },
+        }
+    }
+}
+
+pub struct CloneProgram {
     reader: File,
     child: Child,
     header_lines: u8,
     current_event: Option<Vec<u8>>,
 }
 
-impl Clone {
+impl CloneProgram {
     pub fn new(pid: u32) -> Result<Self> {
         let (mut reader, writer) = super::pipe();
         super::fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
@@ -57,7 +83,7 @@ impl Clone {
         self.header_lines == 1
     }
 
-    pub fn poll_events(&mut self) -> Result<Vec<(Rc<str>, usize)>> {
+    pub fn poll_events(&mut self) -> Result<Vec<CloneEvent>> {
         let mut res = Vec::new();
         loop {
             let mut buf: [u8; 256] = [0; 256];
@@ -85,18 +111,15 @@ impl Clone {
                 self.handle_header(&mut iterator);
             }
             while let Some(event) = self.handle_event(&mut iterator) {
-                let event = String::from_utf8(event)?;
-                let mut elements = event.split("\t");
-                let comm = Rc::from(elements.next().unwrap());
-                let tid: usize = elements.next().unwrap().parse()?;
-                res.push((comm, tid));
+                let event = CloneEvent::from(event);
+                res.push(event);
             }
         }
         Ok(res)
     }
 }
 
-impl Drop for Clone {
+impl Drop for CloneProgram {
     fn drop(&mut self) {
         if let Err(why) = self.child.kill() {
             println!("Failed to kill futex {}", why);

@@ -139,11 +139,11 @@ struct ThreadIOStats {
 }
 
 impl ThreadIOStats {
-    fn new(tid: usize, parent: Rc<str>) -> Self {
+    fn new(tid: usize, comm: Rc<str>, parent: Rc<str>) -> Self {
         Self {
             tid,
             device_map: HashMap::new(),
-            dir: Rc::from(format!("{}/{:?}", parent, tid)),
+            dir: Rc::from(format!("{}/{}/{:?}", parent, comm, tid)),
         }
     }
 
@@ -188,6 +188,7 @@ struct Bio {
     tid: usize,
     epoch_ns: u64,
     last_instant_accounted: Option<u64>,
+    comm: Rc<str>,
 }
 
 impl Bio {
@@ -245,10 +246,11 @@ impl IOWait {
         for (_, bios) in pending_requests {
             for (_, mut bio) in bios {
                 if bio.first_instant_s() <= self.current_sample_instant_s.unwrap() {
-                    let thread_acc = self
-                        .thread_map
-                        .entry(bio.tid)
-                        .or_insert(ThreadIOStats::new(bio.tid, self.dir.clone()));
+                    let thread_acc = self.thread_map.entry(bio.tid).or_insert(ThreadIOStats::new(
+                        bio.tid,
+                        bio.comm.clone(),
+                        self.dir.clone(),
+                    ));
                     thread_acc.account(&mut bio, self.current_sample_instant_s.unwrap());
                 }
             }
@@ -257,10 +259,11 @@ impl IOWait {
 
     fn process_submit_bio(&mut self, mut bio: Bio) {
         if bio.first_instant_s() <= self.current_sample_instant_s.unwrap() {
-            let thread_acc = self
-                .thread_map
-                .entry(bio.tid)
-                .or_insert(ThreadIOStats::new(bio.tid, self.dir.clone()));
+            let thread_acc = self.thread_map.entry(bio.tid).or_insert(ThreadIOStats::new(
+                bio.tid,
+                bio.comm.clone(),
+                self.dir.clone(),
+            ));
             thread_acc.account(&mut bio, self.current_sample_instant_s.unwrap());
         }
 
@@ -284,10 +287,11 @@ impl IOWait {
         let mut bio = bio.unwrap();
 
         let last_instant = (boot_to_epoch(ns_since_boot) / 1_000_000_000 + 1) as u64;
-        let thread_acc = self
-            .thread_map
-            .entry(bio.tid)
-            .or_insert(ThreadIOStats::new(bio.tid, self.dir.clone()));
+        let thread_acc = self.thread_map.entry(bio.tid).or_insert(ThreadIOStats::new(
+            bio.tid,
+            bio.comm.clone(),
+            self.dir.clone(),
+        ));
         thread_acc.account(&mut bio, last_instant);
     }
 
@@ -299,6 +303,7 @@ impl IOWait {
                 sector_cnt,
                 tid,
                 ns_since_boot,
+                comm,
                 ..
             } => {
                 let bio = Bio {
@@ -307,6 +312,7 @@ impl IOWait {
                     sector_cnt,
                     epoch_ns: boot_to_epoch(ns_since_boot) as u64,
                     tid,
+                    comm,
                     last_instant_accounted: None,
                 };
                 self.process_submit_bio(bio);
@@ -656,6 +662,7 @@ mod tests {
                 sector: 0,
                 last_instant_accounted: None,
                 tid: 0,
+                comm: Rc::from("test"),
                 device: 1,
             }
         }
@@ -688,6 +695,7 @@ mod tests {
                 epoch_ns: millis * 1_000_000,
                 sector: 0,
                 last_instant_accounted: None,
+                comm: Rc::from("test"),
                 tid: 0,
                 device: 1,
             }
@@ -785,7 +793,7 @@ mod tests {
 
         iowait.store()?;
         let file_path = format!(
-            "{}/iowait/3/0/264241153.csv",
+            "{}/iowait/LSThread/3/0/264241153.csv",
             tmp_dir.path().to_str().unwrap()
         );
         let content = fs::read_to_string(file_path)?;
@@ -800,7 +808,7 @@ mod tests {
         }
 
         let file_path = format!(
-            "{}/iowait/4/60/264241154.csv",
+            "{}/iowait/LSThread/4/60/264241154.csv",
             tmp_dir.path().to_str().unwrap()
         );
         let content = fs::read_to_string(file_path)?;

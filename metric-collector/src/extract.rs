@@ -12,6 +12,7 @@ use std::{
 
 use crate::{
     configure::Config,
+    execute::programs::clone::CloneEvent,
     metrics::{iowait::IOWait, Collect},
 };
 use crate::{
@@ -51,28 +52,28 @@ impl Extractor {
     }
 
     fn register_new_targets(&mut self, executor: &mut Executor) {
-        executor
-            .clone
-            .poll_events()
-            .unwrap()
-            .into_iter()
-            .for_each(|(comm, tid)| {
-                if let Some(_) = self.targets.get(&tid) {
-                    return;
-                }
+        executor.clone.poll_events().unwrap().into_iter().for_each(
+            |clone_event| match clone_event {
+                CloneEvent::NewThread(comm, tid) => {
+                    if let Some(_) = self.targets.get(&tid) {
+                        return;
+                    }
 
-                self.targets.insert(
-                    tid,
-                    Target::new(
+                    self.targets.insert(
                         tid,
-                        executor.futex.clone(),
-                        executor.ipc.clone(),
-                        self.config.data_directory.clone(),
-                        &format!("{}/{}", comm, tid),
-                        self.kfile_socket_map.clone(),
-                    ),
-                );
-            });
+                        Target::new(
+                            tid,
+                            executor.futex.clone(),
+                            executor.ipc.clone(),
+                            self.config.data_directory.clone(),
+                            &format!("{}/{}", comm, tid),
+                            self.kfile_socket_map.clone(),
+                        ),
+                    );
+                }
+                _ => {}
+            },
+        );
 
         let new_pids = executor.futex.borrow_mut().take_new_pid_events().unwrap();
         for (comm, pid) in new_pids {

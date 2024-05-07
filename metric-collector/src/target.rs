@@ -153,7 +153,8 @@ impl Target {
     }
 
     pub fn sample(&mut self) -> Result<()> {
-        for collector in self.collectors.iter_mut() {
+        for (i, collector) in self.collectors.iter_mut().enumerate() {
+            println!("[{:?}]: Sample collector - {:?}", self.tid, i);
             collector.sample()?;
             collector.store()?;
         }

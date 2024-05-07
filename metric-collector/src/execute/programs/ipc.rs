@@ -1,7 +1,9 @@
-use eyre::Result;
+use eyre::{eyre, Result};
+use regex::Regex;
 use std::{
     collections::HashMap,
     io::Read,
+    mem,
     net::Ipv4Addr,
     process::{Child, Command},
     rc::Rc,
@@ -16,44 +18,20 @@ use std::{
 use crate::execute::BpfReader;
 
 #[derive(Debug, Clone)]
-pub enum IpcEvent {
+pub enum IpcBpfEvent {
+    NoOp,
     NewProcess {
         comm: Rc<str>,
         pid: usize,
     },
-    ReadStart {
-        comm: Rc<str>,
-        tid: usize,
+    NewSocketMap {
         fs_type: Rc<str>,
         sb_id: u32,
         inode_id: u64,
-        ns_since_boot: u64,
-    },
-    ReadEnd {
-        comm: Rc<str>,
-        tid: usize,
-        fs_type: Rc<str>,
-        sb_id: u32,
-        inode_id: u64,
-        ns_since_boot: u64,
-        ns_elapsed: u64,
-    },
-    WriteStart {
-        comm: Rc<str>,
-        tid: usize,
-        fs_type: Rc<str>,
-        sb_id: u32,
-        inode_id: u64,
-        ns_since_boot: u64,
-    },
-    WriteEnd {
-        comm: Rc<str>,
-        tid: usize,
-        fs_type: Rc<str>,
-        sb_id: u32,
-        inode_id: u64,
-        ns_since_boot: u64,
-        ns_elapsed: u64,
+        src_host: Ipv4Addr,
+        src_port: u64,
+        dst_host: Ipv4Addr,
+        dst_port: u64,
     },
     AcceptEnd {
         comm: Rc<str>,
@@ -77,42 +55,6 @@ pub enum IpcEvent {
         dst_host: Ipv4Addr,
         dst_port: u64,
     },
-    RecvStart {
-        comm: Rc<str>,
-        tid: usize,
-        fs_type: Rc<str>,
-        sb_id: u32,
-        inode_id: u64,
-        src_host: Ipv4Addr,
-        src_port: u64,
-        dst_host: Ipv4Addr,
-        dst_port: u64,
-        ns_since_boot: u64,
-    },
-    RecvEnd {
-        comm: Rc<str>,
-        tid: usize,
-        ns_since_boot: u64,
-        ns_elapsed: u64,
-    },
-    SendStart {
-        comm: Rc<str>,
-        tid: usize,
-        fs_type: Rc<str>,
-        sb_id: u32,
-        inode_id: u64,
-        src_host: Ipv4Addr,
-        src_port: u64,
-        dst_host: Ipv4Addr,
-        dst_port: u64,
-        ns_since_boot: u64,
-    },
-    SendEnd {
-        comm: Rc<str>,
-        tid: usize,
-        ns_since_boot: u64,
-        ns_elapsed: u64,
-    },
     EpollItemAdd {
         comm: Rc<str>,
         tid: usize,
@@ -120,6 +62,7 @@ pub enum IpcEvent {
         fs: Rc<str>,
         target_file: TargetFile,
         ns_since_boot: u64,
+        contrib_snapshot: u64,
     },
     EpollItemRemove {
         comm: Rc<str>,
@@ -128,27 +71,47 @@ pub enum IpcEvent {
         fs: Rc<str>,
         target_file: TargetFile,
         ns_since_boot: u64,
+        contrib_snapshot: u64,
     },
-    EpollItemReady {
+    EpollItem {
         comm: Rc<str>,
         tid: usize,
         event_poll: u64,
         fs: Rc<str>,
         target_file: TargetFile,
         ns_since_boot: u64,
+        contrib_snapshot: u64,
     },
-    EpollWaitStart {
-        comm: Rc<str>,
-        tid: usize,
-        event_poll: u64,
+    MapStatsStart,
+    SampleInstant {
         ns_since_boot: u64,
     },
-    EpollWaitEnd {
+    MapStatsEnd,
+    InodeMapCached {
         comm: Rc<str>,
         tid: usize,
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        count: u64,
+        average_ns: u64,
+        total_ns: u64,
+    },
+    InodeMapPending {
+        comm: Rc<str>,
+        tid: usize,
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        ns_since_boot: u64,
+    },
+    EpollMapCached {
+        event_poll: u64,
+        total_ns: u64,
+    },
+    EpollMapPending {
         event_poll: u64,
         ns_since_boot: u64,
-        ns_elapsed: u64,
     },
     Unexpected {
         data: String,
@@ -161,46 +124,107 @@ pub enum TargetFile {
     Inode { device: u32, inode_id: u64 },
 }
 
-impl From<Vec<u8>> for IpcEvent {
-    fn from(value: Vec<u8>) -> Self {
-        let event_string = String::from_utf8(value).unwrap();
-        let event_string = event_string.replace(" ", "");
-        let mut elements = event_string.split("\t");
-        match elements.next().unwrap() {
-            "ReadStart" => Self::ReadStart {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                fs_type: Rc::from(elements.next().unwrap()),
-                sb_id: elements.next().unwrap().parse().unwrap(),
-                inode_id: elements.next().unwrap().parse().unwrap(),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-            },
-            "ReadEnd" => Self::ReadEnd {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                fs_type: Rc::from(elements.next().unwrap()),
-                sb_id: elements.next().unwrap().parse().unwrap(),
-                inode_id: elements.next().unwrap().parse().unwrap(),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                ns_elapsed: elements.next().unwrap().parse().unwrap(),
-            },
-            "WriteStart" => Self::WriteStart {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                fs_type: Rc::from(elements.next().unwrap()),
-                sb_id: elements.next().unwrap().parse().unwrap(),
-                inode_id: elements.next().unwrap().parse().unwrap(),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-            },
-            "WriteEnd" => Self::WriteEnd {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                fs_type: Rc::from(elements.next().unwrap()),
-                sb_id: elements.next().unwrap().parse().unwrap(),
-                inode_id: elements.next().unwrap().parse().unwrap(),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                ns_elapsed: elements.next().unwrap().parse().unwrap(),
-            },
+impl IpcBpfEvent {
+    fn parse_line(event_string: &str) -> Result<Self> {
+        if event_string.starts_with("@") {
+            Self::from_summary_stats_string(event_string)
+        } else if event_string.starts_with("=>") {
+            Self::from_stats_closure_string(event_string)
+        } else {
+            Self::from_trace_string(event_string)
+        }
+    }
+
+    fn from_summary_stats_string(event_string: &str) -> Result<Self> {
+        let re = Regex::new(r"^@(\w+)\[(.*)\]: (.*)$").unwrap();
+        let captures = re
+            .captures(&event_string)
+            .ok_or(eyre!("Unexpected event string"))?;
+        let mut cap_iter = captures.iter();
+        cap_iter.next();
+
+        let map_type = cap_iter.next().unwrap().unwrap().as_str();
+        match map_type {
+            "inode_map" => {
+                let key = cap_iter.next().unwrap().unwrap().as_str();
+                let mut key_elements = key.split(", ");
+
+                fn stat_value_to_u64(value: &str) -> u64 {
+                    value.split(" ").nth(1).unwrap().parse().unwrap()
+                }
+                let value = cap_iter.next().unwrap().unwrap().as_str();
+                let mut value_elements = value.split(", ");
+
+                let count_ns = stat_value_to_u64(value_elements.next().unwrap());
+                let average_ns = stat_value_to_u64(value_elements.next().unwrap());
+                let total_ns = stat_value_to_u64(value_elements.next().unwrap());
+
+                Ok(Self::InodeMapCached {
+                    comm: Rc::from(key_elements.next().unwrap()),
+                    tid: key_elements.next().unwrap().parse().unwrap(),
+                    fs_type: Rc::from(key_elements.next().unwrap()),
+                    sb_id: key_elements.next().unwrap().parse().unwrap(),
+                    inode_id: key_elements.next().unwrap().parse().unwrap(),
+                    count: count_ns,
+                    average_ns,
+                    total_ns,
+                })
+            }
+            "inode_pending" => {
+                let key = cap_iter.next().unwrap().unwrap().as_str();
+                let value = cap_iter.next().unwrap().unwrap().as_str();
+                let mut key_elements = key.split(", ");
+
+                Ok(Self::InodeMapPending {
+                    comm: Rc::from(key_elements.next().unwrap()),
+                    tid: key_elements.next().unwrap().parse().unwrap(),
+                    fs_type: Rc::from(key_elements.next().unwrap()),
+                    sb_id: key_elements.next().unwrap().parse().unwrap(),
+                    inode_id: key_elements.next().unwrap().parse().unwrap(),
+                    ns_since_boot: value.parse().unwrap(),
+                })
+            }
+            "epoll_map" => {
+                let key = cap_iter.next().unwrap().unwrap().as_str();
+                let value = cap_iter.next().unwrap().unwrap().as_str();
+
+                let event_poll = key.trim_start_matches("0x");
+                let event_poll = u64::from_str_radix(event_poll, 16).unwrap();
+
+                Ok(Self::EpollMapCached {
+                    event_poll,
+                    total_ns: value.parse().unwrap(),
+                })
+            }
+            "epoll_pending" => {
+                let key = cap_iter.next().unwrap().unwrap().as_str();
+                let value = cap_iter.next().unwrap().unwrap().as_str();
+
+                let event_poll = key.trim_start_matches("0x");
+                let event_poll = u64::from_str_radix(event_poll, 16).unwrap();
+
+                Ok(Self::EpollMapPending {
+                    event_poll,
+                    ns_since_boot: value.parse().unwrap(),
+                })
+            }
+            _ => Err(eyre!("Invalid map type")),
+        }
+    }
+
+    fn from_stats_closure_string(event_string: &str) -> Result<Self> {
+        if event_string.starts_with("=> start") {
+            Ok(Self::MapStatsStart {})
+        } else if event_string.starts_with("=> end") {
+            Ok(Self::MapStatsEnd {})
+        } else {
+            Err(eyre!(""))
+        }
+    }
+
+    fn from_trace_string(event_string: &str) -> Result<Self> {
+        let mut elements = event_string.split_whitespace();
+        let event = match elements.next().unwrap() {
             "AcceptEnd" => Self::AcceptEnd {
                 comm: Rc::from(elements.next().unwrap()),
                 tid: elements.next().unwrap().parse().unwrap(),
@@ -222,42 +246,6 @@ impl From<Vec<u8>> for IpcEvent {
                 src_port: elements.next().unwrap().parse().unwrap(),
                 dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
                 dst_port: elements.next().unwrap().parse().unwrap(),
-            },
-            "RecvStart" => Self::RecvStart {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                fs_type: Rc::from(elements.next().unwrap()),
-                sb_id: elements.next().unwrap().parse().unwrap(),
-                inode_id: elements.next().unwrap().parse().unwrap(),
-                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                src_port: elements.next().unwrap().parse().unwrap(),
-                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                dst_port: elements.next().unwrap().parse().unwrap(),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-            },
-            "RecvEnd" => Self::RecvEnd {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                ns_elapsed: elements.next().unwrap().parse().unwrap(),
-            },
-            "SendStart" => Self::SendStart {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                fs_type: Rc::from(elements.next().unwrap()),
-                sb_id: elements.next().unwrap().parse().unwrap(),
-                inode_id: elements.next().unwrap().parse().unwrap(),
-                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                src_port: elements.next().unwrap().parse().unwrap(),
-                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                dst_port: elements.next().unwrap().parse().unwrap(),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-            },
-            "SendEnd" => Self::SendEnd {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                ns_elapsed: elements.next().unwrap().parse().unwrap(),
             },
             "EpollAdd" => {
                 let comm = Rc::from(elements.next().unwrap());
@@ -283,6 +271,7 @@ impl From<Vec<u8>> for IpcEvent {
                     fs,
                     target_file,
                     ns_since_boot: elements.next().unwrap().parse().unwrap(),
+                    contrib_snapshot: elements.next().unwrap().parse().unwrap(),
                 }
             }
             "EpollRemove" => {
@@ -309,6 +298,7 @@ impl From<Vec<u8>> for IpcEvent {
                     fs,
                     target_file,
                     ns_since_boot: elements.next().unwrap().parse().unwrap(),
+                    contrib_snapshot: elements.next().unwrap().parse().unwrap(),
                 }
             }
             "EpiPoll" => {
@@ -328,43 +318,433 @@ impl From<Vec<u8>> for IpcEvent {
                         inode_id: elements.next().unwrap().parse().unwrap(),
                     }
                 };
-                Self::EpollItemReady {
+                Self::EpollItem {
                     comm,
                     tid,
                     event_poll,
                     fs,
                     target_file,
                     ns_since_boot: elements.next().unwrap().parse().unwrap(),
+                    contrib_snapshot: elements.next().unwrap().parse().unwrap(),
                 }
             }
-            "EpollWaitStart" => {
-                let comm = Rc::from(elements.next().unwrap());
-                let tid = elements.next().unwrap().parse().unwrap();
-                let event_poll = elements.next().unwrap().trim_start_matches("0x");
-                let event_poll = u64::from_str_radix(event_poll, 16).unwrap();
-                Self::EpollWaitStart {
-                    comm,
-                    tid,
-                    event_poll,
-                    ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                }
+            "NewSocketMap" => Self::NewSocketMap {
+                fs_type: Rc::from(elements.next().unwrap()),
+                sb_id: elements.next().unwrap().parse().unwrap(),
+                inode_id: elements.next().unwrap().parse().unwrap(),
+                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                src_port: elements.next().unwrap().parse().unwrap(),
+                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                dst_port: elements.next().unwrap().parse().unwrap(),
+            },
+            "NewProcess" => Self::NewProcess {
+                comm: Rc::from(elements.next().unwrap()),
+                pid: elements.next().unwrap().parse().unwrap(),
+            },
+            "SampleInstant" => Self::SampleInstant {
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
+            },
+            _ => {
+                return Err(eyre!("Invalid trace data"));
             }
-            "EpollWaitEnd" => {
-                let comm = Rc::from(elements.next().unwrap());
-                let tid = elements.next().unwrap().parse().unwrap();
-                let event_poll = elements.next().unwrap().trim_start_matches("0x");
-                let event_poll = u64::from_str_radix(event_poll, 16).unwrap();
-                Self::EpollWaitEnd {
-                    comm,
-                    tid,
-                    event_poll,
-                    ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                    ns_elapsed: elements.next().unwrap().parse().unwrap(),
-                }
-            }
-            _ => Self::Unexpected { data: event_string },
+        };
+
+        Ok(event)
+    }
+}
+
+impl From<Vec<u8>> for IpcBpfEvent {
+    fn from(value: Vec<u8>) -> Self {
+        let event_string = String::from_utf8(value).unwrap();
+        if event_string.len() == 0 {
+            return Self::NoOp {};
+        }
+        Self::parse_line(&event_string).unwrap_or(Self::Unexpected { data: event_string })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum IpcEvent {
+    NewProcess {
+        comm: Rc<str>,
+        pid: usize,
+    },
+    NewSocketMap {
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        src_host: Ipv4Addr,
+        src_port: u64,
+        dst_host: Ipv4Addr,
+        dst_port: u64,
+    },
+    AcceptEnd {
+        comm: Rc<str>,
+        tid: usize,
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        src_host: Ipv4Addr,
+        src_port: u64,
+        dst_host: Ipv4Addr,
+        dst_port: u64,
+    },
+    ConnectStart {
+        comm: Rc<str>,
+        tid: usize,
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        src_host: Ipv4Addr,
+        src_port: u64,
+        dst_host: Ipv4Addr,
+        dst_port: u64,
+    },
+    EpollItemAdd {
+        comm: Rc<str>,
+        tid: usize,
+        event_poll: u64,
+        fs: Rc<str>,
+        target_file: TargetFile,
+        ns_since_boot: u64,
+        contrib_snapshot: u64,
+    },
+    EpollItemRemove {
+        comm: Rc<str>,
+        tid: usize,
+        event_poll: u64,
+        fs: Rc<str>,
+        target_file: TargetFile,
+        ns_since_boot: u64,
+        contrib_snapshot: u64,
+    },
+    EpollItem {
+        comm: Rc<str>,
+        tid: usize,
+        event_poll: u64,
+        fs: Rc<str>,
+        target_file: TargetFile,
+        ns_since_boot: u64,
+        contrib_snapshot: u64,
+    },
+    InodeWait {
+        comm: Rc<str>,
+        tid: usize,
+        fs_type: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        total_interval_wait_ns: u64,
+        average_wait_ns: Option<u64>,
+        count_wait: Option<u64>,
+    },
+    EpollWait {
+        event_poll: u64,
+        total_interval_wait_ns: u64,
+    },
+}
+
+impl IpcEvent {
+    fn is_global(&self) -> bool {
+        match self {
+            Self::EpollItemRemove { .. }
+            | Self::EpollItemAdd { .. }
+            | Self::EpollItem { .. }
+            | Self::EpollWait { .. }
+            | Self::NewSocketMap { .. } => true,
+            _ => false,
         }
     }
+
+    fn get_inode_wait_tid(&self) -> Result<usize> {
+        match self {
+            Self::InodeWait { tid, .. } => Ok(*tid),
+            _ => Err(eyre!("Not IpcEvent::InodeWait.")),
+        }
+    }
+
+    fn from_stats_closure_entry(
+        entry: (Option<IpcBpfEvent>, Option<IpcBpfEvent>),
+        current_instant_ns: u64,
+        previous_instant_ns: Option<u64>,
+    ) -> Result<Self> {
+        match entry {
+            (
+                Some(IpcBpfEvent::InodeMapCached {
+                    comm,
+                    tid,
+                    fs_type,
+                    sb_id,
+                    inode_id,
+                    total_ns,
+                    average_ns,
+                    count,
+                }),
+                Some(IpcBpfEvent::InodeMapPending { ns_since_boot, .. }),
+            ) => {
+                let pending = if let Some(prev) = previous_instant_ns {
+                    if ns_since_boot > prev {
+                        current_instant_ns - ns_since_boot
+                    } else {
+                        current_instant_ns - prev
+                    }
+                } else {
+                    current_instant_ns - ns_since_boot
+                };
+
+                let cached = total_ns;
+
+                Ok(IpcEvent::InodeWait {
+                    comm,
+                    tid,
+                    fs_type,
+                    sb_id,
+                    inode_id,
+                    total_interval_wait_ns: cached + pending,
+                    average_wait_ns: Some(average_ns),
+                    count_wait: Some(count),
+                })
+            }
+            (
+                Some(IpcBpfEvent::InodeMapCached {
+                    comm,
+                    tid,
+                    fs_type,
+                    sb_id,
+                    inode_id,
+                    total_ns,
+                    average_ns,
+                    count,
+                }),
+                None,
+            ) => Ok(IpcEvent::InodeWait {
+                comm,
+                tid,
+                fs_type,
+                sb_id,
+                inode_id,
+                total_interval_wait_ns: total_ns,
+                average_wait_ns: Some(average_ns),
+                count_wait: Some(count),
+            }),
+            (
+                None,
+                Some(IpcBpfEvent::InodeMapPending {
+                    comm,
+                    tid,
+                    fs_type,
+                    sb_id,
+                    inode_id,
+                    ns_since_boot,
+                }),
+            ) => {
+                let pending = if let Some(prev) = previous_instant_ns {
+                    if ns_since_boot > prev {
+                        current_instant_ns - ns_since_boot
+                    } else {
+                        current_instant_ns - prev
+                    }
+                } else {
+                    current_instant_ns - ns_since_boot
+                };
+
+                Ok(IpcEvent::InodeWait {
+                    comm,
+                    tid,
+                    fs_type,
+                    sb_id,
+                    inode_id,
+                    total_interval_wait_ns: pending,
+                    average_wait_ns: None,
+                    count_wait: None,
+                })
+            }
+            (
+                Some(IpcBpfEvent::EpollMapCached {
+                    event_poll,
+                    total_ns,
+                }),
+                Some(IpcBpfEvent::EpollMapPending { ns_since_boot, .. }),
+            ) => {
+                let pending = if let Some(prev) = previous_instant_ns {
+                    if ns_since_boot > prev {
+                        current_instant_ns - ns_since_boot
+                    } else {
+                        current_instant_ns - prev
+                    }
+                } else {
+                    current_instant_ns - ns_since_boot
+                };
+
+                let cached = total_ns;
+
+                Ok(IpcEvent::EpollWait {
+                    event_poll,
+                    total_interval_wait_ns: cached + pending,
+                })
+            }
+            (
+                Some(IpcBpfEvent::EpollMapCached {
+                    event_poll,
+                    total_ns,
+                }),
+                None,
+            ) => Ok(IpcEvent::EpollWait {
+                event_poll,
+                total_interval_wait_ns: total_ns,
+            }),
+            (
+                None,
+                Some(IpcBpfEvent::EpollMapPending {
+                    event_poll,
+                    ns_since_boot,
+                }),
+            ) => {
+                let pending = if let Some(prev) = previous_instant_ns {
+                    if ns_since_boot > prev {
+                        current_instant_ns - ns_since_boot
+                    } else {
+                        current_instant_ns - prev
+                    }
+                } else {
+                    current_instant_ns - ns_since_boot
+                };
+                Ok(IpcEvent::EpollWait {
+                    event_poll,
+                    total_interval_wait_ns: pending,
+                })
+            }
+            _ => Err(eyre!("Inconsistent stats closure entry state")),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct NoMapping;
+
+impl std::fmt::Display for NoMapping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "No mapping")
+    }
+}
+
+impl std::error::Error for NoMapping {}
+
+impl TryFrom<IpcBpfEvent> for IpcEvent {
+    type Error = NoMapping;
+
+    fn try_from(event: IpcBpfEvent) -> Result<Self, Self::Error> {
+        match event {
+            IpcBpfEvent::NewProcess { comm, pid } => Ok(Self::NewProcess { comm, pid }),
+            IpcBpfEvent::AcceptEnd {
+                comm,
+                tid,
+                fs_type,
+                sb_id,
+                inode_id,
+                src_host,
+                src_port,
+                dst_host,
+                dst_port,
+            } => Ok(IpcEvent::AcceptEnd {
+                comm,
+                tid,
+                fs_type,
+                sb_id,
+                inode_id,
+                src_host,
+                src_port,
+                dst_host,
+                dst_port,
+            }),
+            IpcBpfEvent::NewSocketMap {
+                fs_type,
+                sb_id,
+                inode_id,
+                src_host,
+                src_port,
+                dst_host,
+                dst_port,
+            } => Ok(IpcEvent::NewSocketMap {
+                fs_type,
+                sb_id,
+                inode_id,
+                src_host,
+                src_port,
+                dst_host,
+                dst_port,
+            }),
+            IpcBpfEvent::EpollItemAdd {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            } => Ok(IpcEvent::EpollItemAdd {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            }),
+            IpcBpfEvent::EpollItemRemove {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            } => Ok(IpcEvent::EpollItemRemove {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            }),
+            IpcBpfEvent::EpollItem {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            } => Ok(IpcEvent::EpollItem {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            }),
+            _ => Err(NoMapping {}),
+        }
+    }
+}
+
+enum IpcProgramState {
+    OutStatClosure,
+    InStatClosure(Option<u64>),
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum StatsClosureKey {
+    Inode {
+        comm: Rc<str>,
+        tid: usize,
+        device: u32,
+        inode_id: u64,
+    },
+    EventPoll {
+        address: u64,
+    },
 }
 
 pub struct IpcProgram {
@@ -373,7 +753,11 @@ pub struct IpcProgram {
     child: Option<Child>,
     rx: Receiver<Arc<[u8]>>,
     events: HashMap<usize, Vec<IpcEvent>>,
-    epoll_events: Option<Vec<IpcEvent>>,
+    global_events: Option<Vec<IpcEvent>>,
+    new_process_events: Option<Vec<IpcEvent>>,
+    state: IpcProgramState,
+    stats_closure_events: HashMap<StatsClosureKey, (Option<IpcBpfEvent>, Option<IpcBpfEvent>)>,
+    prev_instant_ns: Option<u64>,
 }
 
 impl IpcProgram {
@@ -392,7 +776,11 @@ impl IpcProgram {
             header_lines: 0,
             current_event: None,
             events: HashMap::new(),
-            epoll_events: None,
+            global_events: None,
+            new_process_events: None,
+            stats_closure_events: HashMap::new(),
+            state: IpcProgramState::OutStatClosure,
+            prev_instant_ns: None,
         })
     }
 
@@ -439,27 +827,128 @@ impl IpcProgram {
             }
 
             while let Some(event) = self.handle_event(&mut iterator) {
-                let event = IpcEvent::from(event);
+                let event = IpcBpfEvent::from(event);
                 match event {
-                    IpcEvent::ReadStart { tid, .. }
-                    | IpcEvent::ReadEnd { tid, .. }
-                    | IpcEvent::WriteStart { tid, .. }
-                    | IpcEvent::WriteEnd { tid, .. }
-                    | IpcEvent::RecvStart { tid, .. }
-                    | IpcEvent::RecvEnd { tid, .. }
-                    | IpcEvent::SendStart { tid, .. }
-                    | IpcEvent::SendEnd { tid, .. } => {
-                        let events = self.events.entry(tid).or_insert(Vec::new());
+                    IpcBpfEvent::NewProcess { .. } => {
+                        let events = self.new_process_events.get_or_insert_with(|| Vec::new());
+                        events.push(IpcEvent::try_from(event)?);
+                    }
+                    IpcBpfEvent::NewSocketMap { .. } => {
+                        let event = IpcEvent::try_from(event)?;
+                        let events = self.global_events.get_or_insert_with(|| Vec::new());
                         events.push(event);
                     }
-                    IpcEvent::EpollItemAdd { .. }
-                    | IpcEvent::EpollItemRemove { .. }
-                    | IpcEvent::EpollItemReady { .. }
-                    | IpcEvent::EpollWaitStart { .. }
-                    | IpcEvent::EpollWaitEnd { .. } => {
-                        let epoll_events = self.epoll_events.get_or_insert_with(|| Vec::new());
-                        epoll_events.push(event);
+                    IpcBpfEvent::AcceptEnd { tid, .. } | IpcBpfEvent::ConnectStart { tid, .. } => {
+                        let event = IpcEvent::try_from(event)?;
+                        let entry = self.events.entry(tid).or_insert(Vec::new());
+                        entry.push(event);
                     }
+                    IpcBpfEvent::EpollItemAdd { .. }
+                    | IpcBpfEvent::EpollItemRemove { .. }
+                    | IpcBpfEvent::EpollItem { .. } => {
+                        let event = IpcEvent::try_from(event)?;
+                        let events = self.global_events.get_or_insert_with(|| Vec::new());
+                        events.push(event);
+                    }
+                    IpcBpfEvent::MapStatsStart => {
+                        self.state = IpcProgramState::InStatClosure(None);
+                    }
+                    IpcBpfEvent::SampleInstant { ns_since_boot } => {
+                        if let IpcProgramState::InStatClosure(sample_interval) = &mut self.state {
+                            sample_interval
+                                .replace(ns_since_boot)
+                                .map_or(Ok(()), |_| Err(eyre!("Unexpected state.\nUpon receiving a 'SampleInstant' event InStatClosure should not have a sample interval measurement.")))?;
+                        } else {
+                            return Err(eyre!("Ipc program should be in state InStatClosure. In state OutStatClosure"));
+                        }
+                    }
+                    IpcBpfEvent::MapStatsEnd => {
+                        let ns_since_boot =
+                            if let IpcProgramState::InStatClosure(Some(ns_since_boot)) = self.state
+                            {
+                                ns_since_boot
+                            } else {
+                                return Err(eyre!("Inconsistent ipc program state"));
+                            };
+                        self.state = IpcProgramState::OutStatClosure;
+
+                        let closure_events =
+                            mem::replace(&mut self.stats_closure_events, HashMap::new());
+                        closure_events
+                            .into_iter()
+                            .map(|(_, entry)| {
+                                let event = IpcEvent::from_stats_closure_entry(
+                                    entry,
+                                    ns_since_boot,
+                                    self.prev_instant_ns,
+                                )?;
+
+                                if event.is_global() {
+                                    self.global_events
+                                        .get_or_insert_with(|| Vec::new())
+                                        .push(event);
+                                } else {
+                                    self.events
+                                        .entry(event.get_inode_wait_tid()?)
+                                        .or_insert(Vec::new())
+                                        .push(event);
+                                }
+
+                                Ok(())
+                            })
+                            .collect::<Result<Vec<()>>>()?;
+                    }
+                    IpcBpfEvent::InodeMapCached {
+                        ref comm,
+                        ref tid,
+                        ref sb_id,
+                        ref inode_id,
+                        ..
+                    } => {
+                        let key = StatsClosureKey::Inode {
+                            comm: comm.clone(),
+                            tid: *tid,
+                            inode_id: *inode_id,
+                            device: *sb_id,
+                        };
+                        self.stats_closure_events
+                            .entry(key)
+                            .or_insert((Some(event), None));
+                    }
+                    IpcBpfEvent::InodeMapPending {
+                        ref comm,
+                        ref tid,
+                        ref sb_id,
+                        ref inode_id,
+                        ..
+                    } => {
+                        let key = StatsClosureKey::Inode {
+                            comm: comm.clone(),
+                            tid: *tid,
+                            inode_id: *inode_id,
+                            device: *sb_id,
+                        };
+                        self.stats_closure_events
+                            .entry(key)
+                            .or_insert((None, Some(event)));
+                    }
+                    IpcBpfEvent::EpollMapCached { event_poll, .. } => {
+                        let key = StatsClosureKey::EventPoll {
+                            address: event_poll,
+                        };
+                        self.stats_closure_events
+                            .entry(key)
+                            .or_insert((Some(event), None));
+                    }
+                    IpcBpfEvent::EpollMapPending { event_poll, .. } => {
+                        let key = StatsClosureKey::EventPoll {
+                            address: event_poll,
+                        };
+                        self.stats_closure_events
+                            .entry(key)
+                            .or_insert((None, Some(event)));
+                    }
+                    IpcBpfEvent::NoOp => {}
                     _ => {
                         println!("Unexpected ipc event {:?}", event);
                     }
@@ -479,9 +968,19 @@ impl IpcProgram {
         }
     }
 
-    pub fn take_epoll_events(&mut self) -> Result<Vec<IpcEvent>> {
+    pub fn take_global_events(&mut self) -> Result<Vec<IpcEvent>> {
         let res = self.poll_events();
-        let events = self.epoll_events.take().unwrap_or(Vec::new());
+        let events = self.global_events.take().unwrap_or(Vec::new());
+        match (res, events.len() > 0) {
+            (_, true) => Ok(events),
+            (Ok(_), false) => Ok(events),
+            (Err(e), false) => Err(e),
+        }
+    }
+
+    pub fn take_process_events(&mut self) -> Result<Vec<IpcEvent>> {
+        let res = self.poll_events();
+        let events = self.new_process_events.take().unwrap_or(Vec::new());
         match (res, events.len() > 0) {
             (_, true) => Ok(events),
             (Ok(_), false) => Ok(events),
@@ -520,6 +1019,391 @@ impl Drop for IpcProgram {
 
         if let Err(why) = self.child.as_mut().unwrap().kill() {
             println!("Failed to kill futex {}", why);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    mod ipcbpfevent {
+        use std::{net::Ipv4Addr, rc::Rc};
+
+        use eyre::{eyre, Result};
+
+        use crate::execute::programs::ipc::TargetFile;
+
+        use super::super::IpcBpfEvent;
+        #[test]
+        fn inode_map() -> Result<()> {
+            let line = "@inode_map[tokio-runtime-w, 1257489, devpts, 24, 8]: count 1, average 25617349, total 25617349";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::InodeMapCached {
+                comm,
+                tid,
+                fs_type,
+                sb_id,
+                inode_id,
+                count: count_ns,
+                average_ns,
+                total_ns,
+            } = event
+            {
+                assert_eq!(comm, Rc::from("tokio-runtime-w"));
+                assert_eq!(tid, 1257489);
+                assert_eq!(fs_type, Rc::from("devpts"));
+                assert_eq!(sb_id, 24);
+                assert_eq!(inode_id, 8);
+                assert_eq!(count_ns, 1);
+                assert_eq!(average_ns, 25617349);
+                assert_eq!(total_ns, 25617349);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn inode_pending() -> Result<()> {
+            let line = "@inode_pending[tokio-runtime-w, 1257489, devpts, 24, 8]: 1234";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::InodeMapPending {
+                comm,
+                tid,
+                fs_type,
+                sb_id,
+                inode_id,
+                ns_since_boot,
+            } = event
+            {
+                assert_eq!(comm, Rc::from("tokio-runtime-w"));
+                assert_eq!(tid, 1257489);
+                assert_eq!(fs_type, Rc::from("devpts"));
+                assert_eq!(sb_id, 24);
+                assert_eq!(inode_id, 8);
+                assert_eq!(ns_since_boot, 1234);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn epoll_map() -> Result<()> {
+            let line = "@epoll_map[0xffff8b2c5b49c000]: 25721222";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::EpollMapCached {
+                event_poll,
+                total_ns,
+            } = event
+            {
+                assert_eq!(&format!("{:x}", event_poll), "ffff8b2c5b49c000");
+                assert_eq!(total_ns, 25721222);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn epoll_pending() -> Result<()> {
+            let line = "@epoll_pending[0xffff8b2c5b49c000]: 25721222";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::EpollMapPending {
+                event_poll,
+                ns_since_boot,
+            } = event
+            {
+                assert_eq!(&format!("{:x}", event_poll), "ffff8b2c5b49c000");
+                assert_eq!(ns_since_boot, 25721222);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn map_stats_start() -> Result<()> {
+            let line = "=> start map statistics";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::MapStatsStart {} = event {
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn map_stats_end() -> Result<()> {
+            let line = "=> end map statistics";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::MapStatsEnd {} = event {
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn accept_end() -> Result<()> {
+            let line = "AcceptEnd       epoll_server    339840  sockfs  8       16067228        127.0.0.1       3001    127.0.0.1   53520   535862448460614";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::AcceptEnd {
+                comm,
+                tid,
+                fs_type,
+                sb_id,
+                inode_id,
+                src_host,
+                src_port,
+                dst_host,
+                dst_port,
+            } = event
+            {
+                assert_eq!(&*comm, "epoll_server");
+                assert_eq!(tid, 339840);
+                assert_eq!(&*fs_type, "sockfs");
+                assert_eq!(sb_id, 8);
+                assert_eq!(inode_id, 16067228);
+                assert_eq!(src_host, Ipv4Addr::new(127, 0, 0, 1));
+                assert_eq!(src_port, 3001);
+                assert_eq!(dst_host, Ipv4Addr::new(127, 0, 0, 1));
+                assert_eq!(dst_port, 53520);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn connect_start() -> Result<()> {
+            let line =
+                "ConnectStart   	epoll_server   	339840	sockfs	8	16052952	127.0.0.1	39432	127.0.0.1	7878";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::ConnectStart {
+                comm,
+                tid,
+                fs_type,
+                sb_id,
+                inode_id,
+                src_host,
+                src_port,
+                dst_host,
+                dst_port,
+            } = event
+            {
+                assert_eq!(&*comm, "epoll_server");
+                assert_eq!(tid, 339840);
+                assert_eq!(&*fs_type, "sockfs");
+                assert_eq!(sb_id, 8);
+                assert_eq!(inode_id, 16052952);
+                assert_eq!(src_host, Ipv4Addr::new(127, 0, 0, 1));
+                assert_eq!(src_port, 39432);
+                assert_eq!(dst_host, Ipv4Addr::new(127, 0, 0, 1));
+                assert_eq!(dst_port, 7878);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn new_socket_map() -> Result<()> {
+            let line = "NewSocketMap   	sockfs	8	16052952	127.0.0.1	39432	127.0.0.1	7878";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::NewSocketMap {
+                fs_type,
+                sb_id,
+                inode_id,
+                src_host,
+                src_port,
+                dst_host,
+                dst_port,
+            } = event
+            {
+                assert_eq!(&*fs_type, "sockfs");
+                assert_eq!(sb_id, 8);
+                assert_eq!(inode_id, 16052952);
+                assert_eq!(src_host, Ipv4Addr::new(127, 0, 0, 1));
+                assert_eq!(src_port, 39432);
+                assert_eq!(dst_host, Ipv4Addr::new(127, 0, 0, 1));
+                assert_eq!(dst_port, 7878);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn new_process() -> Result<()> {
+            let line = "NewProcess	example-applica	334444";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+            if let IpcBpfEvent::NewProcess { comm, pid } = event {
+                assert_eq!(&*comm, "example-applica");
+                assert_eq!(pid, 334444);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn epoll_add() -> Result<()> {
+            let line = "EpollAdd       	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	16052950	534439341112792	600572454";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::EpollItemAdd {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            } = event
+            {
+                assert_eq!(&*comm, "epoll_server");
+                assert_eq!(tid, 339840);
+                assert_eq!(&format!("{:x}", event_poll), "ffff8b2c5b49c000");
+                assert_eq!(&*fs, "sockfs");
+                assert_eq!(
+                    target_file,
+                    TargetFile::Inode {
+                        device: 8,
+                        inode_id: 16052950
+                    }
+                );
+                assert_eq!(ns_since_boot, 534439341112792);
+                assert_eq!(contrib_snapshot, 600572454);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn epoll_remove() -> Result<()> {
+            let line = "EpollRemove    	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	16052952	534439657922636	1206546100";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::EpollItemRemove {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            } = event
+            {
+                assert_eq!(&*comm, "epoll_server");
+                assert_eq!(tid, 339840);
+                assert_eq!(&format!("{:x}", event_poll), "ffff8b2c5b49c000");
+                assert_eq!(&*fs, "sockfs");
+                assert_eq!(
+                    target_file,
+                    TargetFile::Inode {
+                        device: 8,
+                        inode_id: 16052952
+                    }
+                );
+                assert_eq!(ns_since_boot, 534439657922636);
+                assert_eq!(contrib_snapshot, 1206546100);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn epoll_item_inode() -> Result<()> {
+            let line = "EpiPoll        	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	3754233	538189292768153	948293676";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::EpollItem {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            } = event
+            {
+                assert_eq!(&*comm, "epoll_server");
+                assert_eq!(tid, 339840);
+                assert_eq!(&format!("{:x}", event_poll), "ffff8b2c5b49c000");
+                assert_eq!(&*fs, "sockfs");
+                assert_eq!(
+                    target_file,
+                    TargetFile::Inode {
+                        device: 8,
+                        inode_id: 3754233
+                    }
+                );
+                assert_eq!(ns_since_boot, 538189292768153);
+                assert_eq!(contrib_snapshot, 948293676);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn epoll_item_anon_inode() -> Result<()> {
+            let line = "EpiPoll        	epoll_server   	339840	0xffff8b2c5b49c000	anon_inodefs	[eventfd]	0xffff8b2c5fb38000	538285701874848	159578";
+            let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            if let IpcBpfEvent::EpollItem {
+                comm,
+                tid,
+                event_poll,
+                fs,
+                target_file,
+                ns_since_boot,
+                contrib_snapshot,
+            } = event
+            {
+                assert_eq!(&*comm, "epoll_server");
+                assert_eq!(tid, 339840);
+                assert_eq!(&format!("{:x}", event_poll), "ffff8b2c5b49c000");
+                assert_eq!(&*fs, "anon_inodefs");
+                assert_eq!(
+                    target_file,
+                    TargetFile::AnonInode {
+                        name: "[eventfd]".into(),
+                        address: 0xffff8b2c5fb38000
+                    }
+                );
+                assert_eq!(ns_since_boot, 538285701874848);
+                assert_eq!(contrib_snapshot, 159578);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+
+            Ok(())
         }
     }
 }
