@@ -199,7 +199,7 @@ impl From<String> for SchedSample {
         .unwrap();
         let captures = re.captures(&content).unwrap();
         let time_since_boot =
-            Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_nanos();
+            Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_millis();
         let time_since_boot = (time_since_boot / 1_000_000) as f64;
 
         let wait_start = &captures[7];

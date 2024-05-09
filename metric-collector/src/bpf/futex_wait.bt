@@ -5,6 +5,14 @@
 
 #include <linux/futex.h>
 
+
+BEGIN 
+/ str($2) == "debug" /
+{
+    @pids[$1] = 1;
+}
+
+
 tracepoint:syscalls:sys_enter_access
 / pid == $1 /
 {
@@ -27,7 +35,7 @@ tracepoint:syscalls:sys_enter_futex
     $root_pid = 0;
     $i = 0;
     while(($root_pid == 0) && ($i < 100)) {
-        if(!($task->flags & PF_FORKNOEXEC)) {
+        if(!(($task->flags & PF_FORKNOEXEC) && ($task->parent->pid != 1))) {
             $root_pid = $task->pid;
             break;
         }
