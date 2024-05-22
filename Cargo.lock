@@ -403,11 +403,16 @@ name = "example-application"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "chrono",
  "clap",
  "core_affinity",
+ "csv",
+ "eyre",
  "http 1.1.0",
  "httparse",
  "libc",
+ "reqwest",
+ "tokio",
 ]
 
 [[package]]
@@ -1069,6 +1074,7 @@ checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 name = "poc"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "poem",
  "reqwest",
  "tokio",
@@ -1523,10 +1529,6 @@ dependencies = [
  "quote",
  "syn",
 ]
-
-[[package]]
-name = "thread-sync"
-version = "0.1.0"
 
 [[package]]
 name = "tinyvec"

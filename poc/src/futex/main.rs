@@ -30,7 +30,7 @@ fn main() {
         let counter = counter.clone();
         handlers.push(thread::spawn(move || {
             println!("Starting thread {:?}", thread_id);
-            for _ in 0..20 {
+            for _ in 0..1000 {
                 let mut counter = counter.lock().unwrap();
                 *counter += 1;
                 thread::sleep(Duration::from_millis(500));

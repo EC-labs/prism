@@ -1,0 +1,30 @@
+[package]
+name = "poc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "epoll_server"
+path = "src/epoll_server/main.rs"
+
+[[bin]]
+name = "stdin"
+path = "src/stdin/main.rs"
+
+[[bin]]
+name = "futex"
+path = "src/futex/main.rs"
+
+[[bin]]
+name = "pipe"
+path = "src/pipe/main.rs"
+
+[[bin]]
+name = "fs-sync"
+path = "src/fs-sync/src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"]}
+poem = "1.2"
+reqwest = { version = "0.11", features = ["json"] }
+libc = "0.2.153"

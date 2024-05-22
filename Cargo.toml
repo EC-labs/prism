@@ -6,6 +6,5 @@ members = [
     "metric-collector",
     "example-application",
     "workload-generator",
-    "thread-sync",
     "poc", "percentile-ps",
 ]
