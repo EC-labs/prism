@@ -2004,17 +2004,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "workload-generator"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "csv",
- "eyre",
- "reqwest",
- "tokio",
-]
-
-[[package]]
 name = "zerocopy"
 version = "0.7.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"

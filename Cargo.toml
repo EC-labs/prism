@@ -5,6 +5,5 @@ resolver = "2"
 members = [
     "metric-collector",
     "example-application",
-    "workload-generator",
     "poc", "percentile-ps",
 ]
