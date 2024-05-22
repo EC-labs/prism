@@ -11,8 +11,7 @@ kfunc:vmlinux:__submit_bio
     $status = $bio->bi_status;
     $is_write = $op & 1;
     
-    printf("bio_s\t%lld\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
-           nsecs, $part0, $bdev, $bi_iter.bi_sector, $bi_iter.bi_size/512, $is_write, $op, $status, tid, comm);
+    @pending[$part0, $bdev, $bi_iter.bi_sector, $is_write, $op, $status] = (nsecs, tid, comm, $bi_iter.bi_size/512);
 }
 
 kfunc:vmlinux:bio_endio
@@ -27,33 +26,24 @@ kfunc:vmlinux:bio_endio
     $status = $bio->bi_status;
     $is_write = $op & 1;
    
-    printf("bio_e\t%lld\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
-           nsecs, $part0, $bdev, $bi_iter.bi_sector, $bi_iter.bi_size/512, $is_write, $op, $status, tid, comm);
+    $start = @pending[$part0, $bdev, $bi_iter.bi_sector, $is_write, $op, $status];
+    if (!$start.0) {
+        return;
+    }
+    @completed[$part0, $bdev, $start.1, $start.2] += $start.3;
+    delete(@pending[$part0, $bdev, $bi_iter.bi_sector, $is_write, $op, $status])
 }
 
-/*
-tracepoint:block:block_io_start
+interval:s:1
 {
-    printf("t_s\t%lld\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
-           nsecs, args->dev, args->sector, args->nr_sector, args->bytes, tid, comm);
-}
+    printf("=> start map statistics\n");
+    print(@completed);
+    print(@pending);
 
-tracepoint:block:block_io_done
-{
-    printf("t_e\t%lld\t%d\t%d\t%d\t%d\t%lld\t%s\n", 
-           nsecs, args->dev, args->sector, args->nr_sector, args->bytes, tid, comm);
-}
+    @sample_instant = nsecs; 
+    printf("%-15s\t%lld\n", "SampleInstant", @sample_instant);
+    
+    printf("=> end map statistics\n");
 
-
-kfunc:vmlinux:io_schedule
-{
-    printf("io_s\t%lld\t%lld\t%s\n", 
-           nsecs, tid, comm);
+    clear(@completed);
 }
-
-kretfunc:vmlinux:io_schedule
-{
-    printf("io_e\t%lld\t%lld\t%s\n", 
-           nsecs, tid, comm);
-}
-*/

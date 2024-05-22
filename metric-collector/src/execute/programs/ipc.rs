@@ -911,9 +911,8 @@ impl IpcProgram {
                             inode_id: *inode_id,
                             device: *sb_id,
                         };
-                        self.stats_closure_events
-                            .entry(key)
-                            .or_insert((Some(event), None));
+                        let entry = self.stats_closure_events.entry(key).or_insert((None, None));
+                        entry.0 = Some(event);
                     }
                     IpcBpfEvent::InodeMapPending {
                         ref comm,
@@ -928,25 +927,22 @@ impl IpcProgram {
                             inode_id: *inode_id,
                             device: *sb_id,
                         };
-                        self.stats_closure_events
-                            .entry(key)
-                            .or_insert((None, Some(event)));
+                        let entry = self.stats_closure_events.entry(key).or_insert((None, None));
+                        entry.1 = Some(event);
                     }
                     IpcBpfEvent::EpollMapCached { event_poll, .. } => {
                         let key = StatsClosureKey::EventPoll {
                             address: event_poll,
                         };
-                        self.stats_closure_events
-                            .entry(key)
-                            .or_insert((Some(event), None));
+                        let entry = self.stats_closure_events.entry(key).or_insert((None, None));
+                        entry.0 = Some(event);
                     }
                     IpcBpfEvent::EpollMapPending { event_poll, .. } => {
                         let key = StatsClosureKey::EventPoll {
                             address: event_poll,
                         };
-                        self.stats_closure_events
-                            .entry(key)
-                            .or_insert((None, Some(event)));
+                        let entry = self.stats_closure_events.entry(key).or_insert((None, None));
+                        entry.1 = Some(event)
                     }
                     IpcBpfEvent::NoOp => {}
                     _ => {

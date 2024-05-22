@@ -1,9 +1,12 @@
-use eyre::Result;
+use eyre::{eyre, Result};
+use regex::Regex;
+use std::collections::HashMap;
 use std::os::unix::prelude::*;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::{
     io::prelude::*,
+    mem,
     process::{Child, Command},
     rc::Rc,
     thread,
@@ -12,11 +15,50 @@ use std::{
 use crate::execute::BpfReader;
 
 #[derive(Debug)]
-pub enum IOWaitEvent {
-    SubmitBio {
-        ns_since_boot: u128,
-        device: u32,
+pub enum IowaitEvent {
+    Requests {
+        ns_since_boot: u64,
         part0: u32,
+        device: u32,
+        tid: usize,
+        comm: Rc<str>,
+        sector_cnt: usize,
+    },
+}
+
+impl IowaitEvent {
+    fn from_stats_closure_entry(
+        key: StatsClosureKey,
+        value: usize,
+        sample_instant_ns: u64,
+    ) -> Self {
+        Self::Requests {
+            ns_since_boot: sample_instant_ns,
+            part0: key.part0,
+            device: key.device,
+            tid: key.tid,
+            comm: key.comm,
+            sector_cnt: value,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum IowaitBpfEvent {
+    NoOp,
+    MapStatsStart,
+    MapStatsEnd,
+    MapCompleted {
+        part0: u32,
+        device: u32,
+        tid: usize,
+        comm: Rc<str>,
+        sector_cnt: usize,
+    },
+    MapPending {
+        ns_since_boot: u64,
+        part0: u32,
+        device: u32,
         sector: u64,
         sector_cnt: usize,
         is_write: bool,
@@ -25,119 +67,123 @@ pub enum IOWaitEvent {
         tid: usize,
         comm: Rc<str>,
     },
-    BioEndIO {
-        ns_since_boot: u128,
-        device: u32,
-        part0: u32,
-        sector: u64,
-        sector_cnt: usize,
-        is_write: bool,
-        op: u8,
-        status: u32,
-        tid: usize,
-        comm: Rc<str>,
-    },
-    TracepointBioStart {
-        ns_since_boot: u128,
-        device: u32,
-        sector: u64,
-        sector_cnt: usize,
-        bytes: usize,
-        tid: usize,
-        comm: Rc<str>,
-    },
-    TracepointBioDone {
-        ns_since_boot: u128,
-        device: u32,
-        sector: u64,
-        sector_cnt: usize,
-        bytes: usize,
-        tid: usize,
-        comm: Rc<str>,
-    },
-    IOScheduleEnter {
-        ns_since_boot: u128,
-        tid: usize,
-        comm: Rc<str>,
-    },
-    IOScheduleExit {
-        ns_since_boot: u128,
-        tid: usize,
-        comm: Rc<str>,
+    SampleInstant {
+        ns_since_boot: u64,
     },
     Unexpected {
         data: String,
     },
 }
 
-impl From<Vec<u8>> for IOWaitEvent {
-    fn from(value: Vec<u8>) -> Self {
-        let event_string = String::from_utf8(value).unwrap();
-        let event_string = event_string.replace(" ", "");
-        let mut elements = event_string.split("\t");
-        match elements.next().unwrap() {
-            "bio_s" => Self::SubmitBio {
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                part0: elements.next().unwrap().parse().unwrap(),
-                device: elements.next().unwrap().parse().unwrap(),
-                sector: elements.next().unwrap().parse().unwrap(),
-                sector_cnt: elements.next().unwrap().parse().unwrap(),
-                is_write: elements.next().unwrap() == "1",
-                op: elements.next().unwrap().parse().unwrap(),
-                status: elements.next().unwrap().parse().unwrap(),
-                tid: elements.next().unwrap().parse().unwrap(),
-                comm: Rc::from(elements.next().unwrap()),
-            },
-            "bio_e" => Self::BioEndIO {
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                part0: elements.next().unwrap().parse().unwrap(),
-                device: elements.next().unwrap().parse().unwrap(),
-                sector: elements.next().unwrap().parse().unwrap(),
-                sector_cnt: elements.next().unwrap().parse().unwrap(),
-                is_write: elements.next().unwrap() == "1",
-                op: elements.next().unwrap().parse().unwrap(),
-                status: elements.next().unwrap().parse().unwrap(),
-                tid: elements.next().unwrap().parse().unwrap(),
-                comm: Rc::from(elements.next().unwrap()),
-            },
-            "io_s" => Self::IOScheduleEnter {
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                tid: elements.next().unwrap().parse().unwrap(),
-                comm: Rc::from(elements.next().unwrap()),
-            },
-            "io_e" => Self::IOScheduleExit {
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                tid: elements.next().unwrap().parse().unwrap(),
-                comm: Rc::from(elements.next().unwrap()),
-            },
-            "t_s" => Self::TracepointBioDone {
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                device: elements.next().unwrap().parse().unwrap(),
-                sector: elements.next().unwrap().parse().unwrap(),
-                sector_cnt: elements.next().unwrap().parse().unwrap(),
-                bytes: elements.next().unwrap().parse().unwrap(),
-                tid: elements.next().unwrap().parse().unwrap(),
-                comm: Rc::from(elements.next().unwrap()),
-            },
-            "t_e" => Self::TracepointBioStart {
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                device: elements.next().unwrap().parse().unwrap(),
-                sector: elements.next().unwrap().parse().unwrap(),
-                sector_cnt: elements.next().unwrap().parse().unwrap(),
-                bytes: elements.next().unwrap().parse().unwrap(),
-                tid: elements.next().unwrap().parse().unwrap(),
-                comm: Rc::from(elements.next().unwrap()),
-            },
-            _ => Self::Unexpected { data: event_string },
+impl IowaitBpfEvent {
+    fn parse_line(event_string: &str) -> Result<Self> {
+        if event_string.starts_with("@") {
+            Self::from_summary_stats_string(event_string)
+        } else if event_string.starts_with("=>") {
+            Self::from_stats_closure_string(event_string)
+        } else {
+            Self::from_trace_string(event_string)
         }
     }
+
+    fn from_stats_closure_string(event_string: &str) -> Result<Self> {
+        if event_string.starts_with("=> start") {
+            Ok(Self::MapStatsStart {})
+        } else if event_string.starts_with("=> end") {
+            Ok(Self::MapStatsEnd {})
+        } else {
+            Err(eyre!(""))
+        }
+    }
+
+    fn from_trace_string(event_string: &str) -> Result<Self> {
+        let mut elements = event_string.split_whitespace();
+        let event = match elements.next().unwrap() {
+            "SampleInstant" => Self::SampleInstant {
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
+            },
+            _ => {
+                return Err(eyre!("Invalid trace data"));
+            }
+        };
+
+        Ok(event)
+    }
+
+    fn from_summary_stats_string(event_string: &str) -> Result<Self> {
+        let re = Regex::new(r"^@(\w+)\[(.*)\]: (.*)$").unwrap();
+        let captures = re
+            .captures(&event_string)
+            .ok_or(eyre!("Unexpected event string"))?;
+        let mut cap_iter = captures.iter();
+        cap_iter.next();
+
+        let map_type = cap_iter.next().unwrap().unwrap().as_str();
+        match map_type {
+            "completed" => {
+                let key = cap_iter.next().unwrap().unwrap().as_str();
+                let mut key_elements = key.split(", ");
+
+                let value = cap_iter.next().unwrap().unwrap().as_str();
+
+                Ok(Self::MapCompleted {
+                    part0: key_elements.next().unwrap().parse().unwrap(),
+                    device: key_elements.next().unwrap().parse().unwrap(),
+                    tid: key_elements.next().unwrap().parse().unwrap(),
+                    comm: Rc::from(key_elements.next().unwrap()),
+                    sector_cnt: value.parse().unwrap(),
+                })
+            }
+            "pending" => {
+                let key = cap_iter.next().unwrap().unwrap().as_str();
+                let mut key_elements = key.split(", ");
+                let value = cap_iter.next().unwrap().unwrap().as_str();
+                let value = &value[1..value.len() - 1];
+                let mut value_elements = value.split(", ");
+
+                Ok(Self::MapPending {
+                    part0: key_elements.next().unwrap().parse().unwrap(),
+                    device: key_elements.next().unwrap().parse().unwrap(),
+                    sector: key_elements.next().unwrap().parse().unwrap(),
+                    is_write: key_elements.next().unwrap().parse::<i8>().unwrap() > 0,
+                    op: key_elements.next().unwrap().parse().unwrap(),
+                    status: key_elements.next().unwrap().parse().unwrap(),
+                    ns_since_boot: value_elements.next().unwrap().parse().unwrap(),
+                    tid: value_elements.next().unwrap().parse().unwrap(),
+                    comm: Rc::from(value_elements.next().unwrap()),
+                    sector_cnt: value_elements.next().unwrap().parse().unwrap(),
+                })
+            }
+            _ => Err(eyre!("Invalid map type")),
+        }
+    }
+}
+
+impl From<Vec<u8>> for IowaitBpfEvent {
+    fn from(value: Vec<u8>) -> Self {
+        let event_string = String::from_utf8(value).unwrap();
+        if event_string.len() == 0 {
+            return Self::NoOp {};
+        }
+        Self::parse_line(&event_string).unwrap_or(Self::Unexpected { data: event_string })
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct StatsClosureKey {
+    part0: u32,
+    device: u32,
+    comm: Rc<str>,
+    tid: usize,
 }
 
 pub struct IOWaitProgram {
     child: Option<Child>,
     header_lines: u8,
     current_event: Option<Vec<u8>>,
-    events: Option<Vec<IOWaitEvent>>,
+    events: Option<Vec<IowaitEvent>>,
+    stats_closure_events: HashMap<StatsClosureKey, usize>,
+    sample_instant_ns: Option<u64>,
     rx: Receiver<Arc<[u8]>>,
 }
 
@@ -164,6 +210,8 @@ impl IOWaitProgram {
             child: Some(child),
             header_lines: 0,
             current_event: None,
+            stats_closure_events: HashMap::new(),
+            sample_instant_ns: None,
             events: None,
         })
     }
@@ -228,6 +276,8 @@ impl IOWaitProgram {
             child: None,
             header_lines: 0,
             current_event: None,
+            stats_closure_events: HashMap::new(),
+            sample_instant_ns: None,
             events: None,
         }
     }
@@ -250,17 +300,61 @@ impl IOWaitProgram {
             }
 
             while let Some(event) = self.handle_event(&mut iterator) {
-                if let None = self.events {
-                    self.events = Some(Vec::new());
-                }
-                let events = self.events.as_mut().unwrap();
-                let event = IOWaitEvent::from(event);
+                let event = IowaitBpfEvent::from(event);
                 match event {
-                    IOWaitEvent::Unexpected { .. } => {
-                        println!("Unexpected iowait event. {:?}", event)
+                    IowaitBpfEvent::NoOp {} => {}
+                    IowaitBpfEvent::MapStatsStart {} => {}
+                    IowaitBpfEvent::MapStatsEnd {} => {
+                        let sample_instant_ns = self.sample_instant_ns.take().unwrap();
+                        let closure_events =
+                            mem::replace(&mut self.stats_closure_events, HashMap::new());
+                        closure_events.into_iter().for_each(|(key, value)| {
+                            let events = self.events.get_or_insert_with(|| Vec::new());
+                            events.push(IowaitEvent::from_stats_closure_entry(
+                                key,
+                                value,
+                                sample_instant_ns,
+                            ));
+                        });
                     }
-                    _ => {
-                        events.push(event);
+                    IowaitBpfEvent::MapPending {
+                        comm,
+                        tid,
+                        part0,
+                        device,
+                        sector_cnt,
+                        ..
+                    } => {
+                        let key = StatsClosureKey {
+                            comm,
+                            tid,
+                            part0,
+                            device,
+                        };
+                        let entry = self.stats_closure_events.entry(key).or_insert(0);
+                        *entry += sector_cnt;
+                    }
+                    IowaitBpfEvent::MapCompleted {
+                        comm,
+                        tid,
+                        part0,
+                        device,
+                        sector_cnt,
+                    } => {
+                        let key = StatsClosureKey {
+                            comm,
+                            tid,
+                            part0,
+                            device,
+                        };
+                        let entry = self.stats_closure_events.entry(key).or_insert(0);
+                        *entry += sector_cnt;
+                    }
+                    IowaitBpfEvent::SampleInstant { ns_since_boot } => {
+                        self.sample_instant_ns = Some(ns_since_boot);
+                    }
+                    IowaitBpfEvent::Unexpected { data } => {
+                        println!("Unexpected iowait event. {:?}", data)
                     }
                 }
             }
@@ -268,7 +362,7 @@ impl IOWaitProgram {
         Ok(self.events.as_ref().map_or(0, |events| events.len()))
     }
 
-    pub fn take_events(&mut self) -> Result<Vec<IOWaitEvent>> {
+    pub fn take_events(&mut self) -> Result<Vec<IowaitEvent>> {
         let res = self.poll_events();
         match res {
             Ok(_) => Ok(self.events.take().unwrap_or(Vec::new())),
@@ -292,6 +386,103 @@ impl Drop for IOWaitProgram {
 
         if let Err(why) = self.child.as_mut().unwrap().kill() {
             println!("Failed to kill futex {}", why);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    mod iowaitbpfevents {
+        use super::super::IowaitBpfEvent;
+        use eyre::{eyre, Result};
+
+        #[test]
+        fn no_op() {
+            let line = "";
+            let event = IowaitBpfEvent::from(Vec::from(line.as_bytes()));
+            assert_eq!(event, IowaitBpfEvent::NoOp {})
+        }
+
+        #[test]
+        fn map_completed() -> Result<()> {
+            let line = "@completed[271581184, 271581187, 632, dmcrypt_write/2]: 22616";
+            let event = IowaitBpfEvent::from(Vec::from(line.as_bytes()));
+            if let IowaitBpfEvent::MapCompleted {
+                part0,
+                device,
+                tid,
+                comm,
+                sector_cnt,
+            } = event
+            {
+                assert_eq!(part0, 271581184);
+                assert_eq!(device, 271581187);
+                assert_eq!(tid, 632);
+                assert_eq!(&*comm, "dmcrypt_write/2");
+                assert_eq!(sector_cnt, 22616);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn map_pending() -> Result<()> {
+            let line = "@pending[271581184, 271581187, 1649015544, 1, 1, 0]: (1421282887324, 632, dmcrypt_write/2, 8)";
+            let event = IowaitBpfEvent::from(Vec::from(line.as_bytes()));
+            if let IowaitBpfEvent::MapPending {
+                ns_since_boot,
+                part0,
+                device,
+                sector,
+                sector_cnt,
+                is_write,
+                op,
+                status,
+                tid,
+                comm,
+            } = event
+            {
+                assert_eq!(part0, 271581184);
+                assert_eq!(device, 271581187);
+                assert_eq!(sector, 1649015544);
+                assert_eq!(is_write, true);
+                assert_eq!(op, 1);
+                assert_eq!(status, 0);
+                assert_eq!(ns_since_boot, 1421282887324);
+                assert_eq!(tid, 632);
+                assert_eq!(&*comm, "dmcrypt_write/2");
+                assert_eq!(sector_cnt, 8);
+            } else {
+                return Err(eyre!("Incorrect bpf event"));
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn map_stats_start() {
+            let line = "=> start map statistics";
+            let event = IowaitBpfEvent::from(Vec::from(line.as_bytes()));
+            assert_eq!(event, IowaitBpfEvent::MapStatsStart {});
+        }
+
+        #[test]
+        fn map_stats_end() {
+            let line = "=> end map statistics";
+            let event = IowaitBpfEvent::from(Vec::from(line.as_bytes()));
+            assert_eq!(event, IowaitBpfEvent::MapStatsEnd {});
+        }
+
+        #[test]
+        fn sample_instant() {
+            let line = "SampleInstant   1421348499285";
+            let event = IowaitBpfEvent::from(Vec::from(line.as_bytes()));
+            assert_eq!(
+                event,
+                IowaitBpfEvent::SampleInstant {
+                    ns_since_boot: 1421348499285
+                }
+            );
         }
     }
 }
