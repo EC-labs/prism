@@ -59,6 +59,7 @@ impl Extractor {
                         return;
                     }
 
+                    let comm = comm.replace("/", "|");
                     self.targets.insert(
                         tid,
                         Target::new(
@@ -77,6 +78,7 @@ impl Extractor {
 
         let new_pids = executor.futex.borrow_mut().take_new_pid_events().unwrap();
         for (comm, pid) in new_pids {
+            let comm = comm.replace("/", "|");
             executor.monitor(pid);
             Target::get_threads(pid)
                 .unwrap()

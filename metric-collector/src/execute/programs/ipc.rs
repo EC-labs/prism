@@ -572,7 +572,7 @@ impl IpcEvent {
                         current_instant_ns - prev
                     }
                 } else {
-                    current_instant_ns - ns_since_boot
+                    i64::max(current_instant_ns as i64 - ns_since_boot as i64, 0) as u64
                 };
 
                 let cached = total_ns;
@@ -606,7 +606,7 @@ impl IpcEvent {
                         current_instant_ns - prev
                     }
                 } else {
-                    current_instant_ns - ns_since_boot
+                    i64::max(current_instant_ns as i64 - ns_since_boot as i64, 0) as u64
                 };
                 Ok(IpcEvent::EpollWait {
                     event_poll,

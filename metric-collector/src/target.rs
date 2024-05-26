@@ -112,6 +112,7 @@ impl Target {
 
             let re = Regex::new(name)?;
             let re_match = re.captures(&comm);
+            let comm = comm.replace("/", "|");
             if let None = re_match {
                 continue;
             }
