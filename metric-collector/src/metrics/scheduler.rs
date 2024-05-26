@@ -198,9 +198,8 @@ impl From<String> for SchedSample {
         ))
         .unwrap();
         let captures = re.captures(&content).unwrap();
-        let time_since_boot =
-            Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_millis();
-        let time_since_boot = (time_since_boot / 1_000_000) as f64;
+        let time_since_boot = Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap())
+            .as_millis() as f64;
 
         let wait_start = &captures[7];
         let sleep_start = &captures[9];
@@ -214,14 +213,14 @@ impl From<String> for SchedSample {
         };
 
         let sleep_since_start = if sleep_start != "0.000000" {
-            let sleep_start: f64 = captures[9].parse().unwrap();
+            let sleep_start: f64 = sleep_start.parse().unwrap();
             f64::max(time_since_boot - sleep_start, 0.0)
         } else {
             0.0
         };
 
         let block_since_start = if block_start != "0.000000" {
-            let block_start: f64 = captures[11].parse().unwrap();
+            let block_start: f64 = block_start.parse().unwrap();
             f64::max(time_since_boot - block_start, 0.0)
         } else {
             0.0
