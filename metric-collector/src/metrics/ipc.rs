@@ -9,10 +9,13 @@ use std::{
     net::Ipv4Addr,
     path::Path,
     rc::Rc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
-use crate::execute::programs::ipc::{IpcEvent, IpcProgram, TargetFile};
+use crate::execute::{
+    boot_to_epoch,
+    programs::ipc::{IpcEvent, IpcProgram, TargetFile},
+};
 
 use super::Collect;
 use super::ToCsv;
@@ -70,15 +73,12 @@ impl Ipc {
 
 impl Collect for Ipc {
     fn sample(&mut self) -> Result<()> {
-        let events = self.ipc_program.borrow_mut().take_tid_events(self.tid)?;
+        let (events, sample_instant_since_boot) =
+            self.ipc_program.borrow_mut().take_tid_events(self.tid)?;
+        let sample_instant_epoch_ns =
+            sample_instant_since_boot.map(|instant| boot_to_epoch(instant as u128));
 
-        let sample_instant = SystemTime::now();
-        self.sample_instant_ns = Some(
-            sample_instant
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_nanos(),
-        );
+        self.sample_instant_ns = sample_instant_epoch_ns;
 
         for event in events {
             self.process_event(event)?;
@@ -573,15 +573,12 @@ impl EventPollCollection {
 
 impl Collect for EventPollCollection {
     fn sample(&mut self) -> Result<()> {
-        let events = self.ipc_program.borrow_mut().take_global_events()?;
+        let (events, sample_instant_since_boot) =
+            self.ipc_program.borrow_mut().take_global_events()?;
 
-        let sample_instant = SystemTime::now();
-        self.sample_instant_ns = Some(
-            sample_instant
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_nanos(),
-        );
+        let sample_instant_epoch_ns =
+            sample_instant_since_boot.map(|instant| boot_to_epoch(instant as u128));
+        self.sample_instant_ns = sample_instant_epoch_ns;
 
         for event in events {
             self.process_event(event)?;

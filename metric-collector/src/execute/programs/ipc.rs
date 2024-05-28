@@ -758,6 +758,7 @@ pub struct IpcProgram {
     state: IpcProgramState,
     stats_closure_events: HashMap<StatsClosureKey, (Option<IpcBpfEvent>, Option<IpcBpfEvent>)>,
     prev_instant_ns: Option<u64>,
+    latest_instant_ns: Option<u64>,
 }
 
 impl IpcProgram {
@@ -781,6 +782,29 @@ impl IpcProgram {
             stats_closure_events: HashMap::new(),
             state: IpcProgramState::OutStatClosure,
             prev_instant_ns: None,
+            latest_instant_ns: None,
+        })
+    }
+
+    pub fn custom_reader<R>(reader: R, terminate_flag: Arc<Mutex<bool>>) -> Result<Self>
+    where
+        R: Read + Send + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Self::start_bpf_reader(tx, reader, terminate_flag);
+
+        Ok(Self {
+            rx,
+            child: None,
+            header_lines: 0,
+            current_event: None,
+            events: HashMap::new(),
+            global_events: None,
+            new_process_events: None,
+            stats_closure_events: HashMap::new(),
+            state: IpcProgramState::OutStatClosure,
+            prev_instant_ns: None,
+            latest_instant_ns: None,
         })
     }
 
@@ -843,12 +867,13 @@ impl IpcProgram {
                         let entry = self.events.entry(tid).or_insert(Vec::new());
                         entry.push(event);
                     }
-                    IpcBpfEvent::EpollItemAdd { .. }
-                    | IpcBpfEvent::EpollItemRemove { .. }
-                    | IpcBpfEvent::EpollItem { .. } => {
+                    IpcBpfEvent::EpollItemAdd { ns_since_boot, .. }
+                    | IpcBpfEvent::EpollItemRemove { ns_since_boot, .. }
+                    | IpcBpfEvent::EpollItem { ns_since_boot, .. } => {
                         let event = IpcEvent::try_from(event)?;
                         let events = self.global_events.get_or_insert_with(|| Vec::new());
                         events.push(event);
+                        self.latest_instant_ns = Some(ns_since_boot);
                     }
                     IpcBpfEvent::MapStatsStart => {
                         self.state = IpcProgramState::InStatClosure(None);
@@ -871,6 +896,7 @@ impl IpcProgram {
                                 return Err(eyre!("Inconsistent ipc program state"));
                             };
                         self.state = IpcProgramState::OutStatClosure;
+                        self.latest_instant_ns = Some(ns_since_boot);
 
                         let closure_events =
                             mem::replace(&mut self.stats_closure_events, HashMap::new());
@@ -897,6 +923,7 @@ impl IpcProgram {
                                 Ok(())
                             })
                             .collect::<Result<Vec<()>>>()?;
+                        self.prev_instant_ns = Some(ns_since_boot)
                     }
                     IpcBpfEvent::InodeMapCached {
                         ref comm,
@@ -951,25 +978,25 @@ impl IpcProgram {
                 }
             }
         }
-        Ok(self.events.len())
+        Ok(self.events.len() + self.global_events.as_ref().map(|v| v.len()).unwrap_or(0))
     }
 
-    pub fn take_tid_events(&mut self, tid: usize) -> Result<Vec<IpcEvent>> {
+    pub fn take_tid_events(&mut self, tid: usize) -> Result<(Vec<IpcEvent>, Option<u64>)> {
         let res = self.poll_events();
         let events = self.events.remove(&tid).unwrap_or(Vec::new());
         match (res, events.len() > 0) {
-            (_, true) => Ok(events),
-            (Ok(_), false) => Ok(events),
+            (_, true) => Ok((events, self.latest_instant_ns)),
+            (Ok(_), false) => Ok((events, self.latest_instant_ns)),
             (Err(e), false) => Err(e),
         }
     }
 
-    pub fn take_global_events(&mut self) -> Result<Vec<IpcEvent>> {
+    pub fn take_global_events(&mut self) -> Result<(Vec<IpcEvent>, Option<u64>)> {
         let res = self.poll_events();
         let events = self.global_events.take().unwrap_or(Vec::new());
         match (res, events.len() > 0) {
-            (_, true) => Ok(events),
-            (Ok(_), false) => Ok(events),
+            (_, true) => Ok((events, self.latest_instant_ns)),
+            (Ok(_), false) => Ok((events, self.latest_instant_ns)),
             (Err(e), false) => Err(e),
         }
     }
@@ -1400,6 +1427,69 @@ mod tests {
             }
 
             Ok(())
+        }
+    }
+
+    mod ipcprogram {
+        use crate::execute::programs::{self, ipc::IpcProgram};
+        use eyre::{eyre, Result};
+        use indoc::indoc;
+        use std::{
+            io::prelude::*,
+            sync::{Arc, Mutex},
+            thread,
+            time::Duration,
+        };
+
+        #[test]
+        fn epoll_prev_instant() -> Result<()> {
+            let (rx, mut tx) = programs::pipe();
+            let mut program = IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap();
+            let block = indoc! {"
+                HEADER
+
+                => start map statistics
+                @inode_map[tokio-runtime-w, 1257489, devpts, 24, 8]: count 1, average 25617349, total 25617349
+                @epoll_map[0xffff8b2c5b49c000]: 25721222
+                SampleInstant   113
+                => end map statistics
+            "};
+            tx.write(block.as_bytes())?;
+            while program.poll_events()? == 0 {}
+            let res = program.take_tid_events(1257489).unwrap();
+            assert_eq!(res.1, Some(113));
+            let res = program.take_global_events().unwrap();
+            assert_eq!(res.1, Some(113));
+
+            let block = indoc! {"
+                EpollAdd       	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	16052950	125     25721222
+            "};
+            tx.write(block.as_bytes())?;
+            while program.poll_events()? == 0 {}
+            let res = program.take_global_events().unwrap();
+            assert_eq!(res.1, Some(125));
+
+            Ok(())
+        }
+
+        #[test]
+        fn account_global() -> Result<()> {
+            let (rx, mut tx) = programs::pipe();
+            let mut program = IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap();
+            let block = indoc! {"
+                HEADER
+
+                EpollAdd       	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	16052950	125     25721222
+            "};
+            tx.write(block.as_bytes())?;
+            for _ in 0..5 {
+                if program.poll_events()? != 0 {
+                    return Ok(());
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+
+            Err(eyre!("Program did not account return global events length"))
         }
     }
 }
