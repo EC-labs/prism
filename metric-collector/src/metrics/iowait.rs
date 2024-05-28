@@ -4,10 +4,11 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fs::{self, File},
-    io::{Seek, SeekFrom, Write},
+    io::Write,
+    mem,
     path::Path,
     rc::Rc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use crate::execute::{
@@ -59,7 +60,15 @@ impl ThreadDeviceStats {
     }
 
     fn store(&mut self) -> Result<()> {
-        self.minute_map
+        if self.minute_map.len() == 0 {
+            return Ok(());
+        }
+
+        let mut minute_map = mem::replace(
+            &mut self.minute_map,
+            LruCache::with_expiry_duration(Duration::from_millis(1000 * 120)),
+        );
+        minute_map
             .iter()
             .map(|(minute, map)| {
                 Self::store_minute(
@@ -82,12 +91,12 @@ impl ThreadDeviceStats {
     ) -> Result<()> {
         let minute_s = minute * 60;
         let file_path = format!("{}/{:?}/{:?}.csv", dir, minute_s, device);
-        let mut file = Self::get_or_create_file(data_files, &Path::new(file_path.as_str()), "")?;
-        file.set_len(0)?;
-        file.seek(SeekFrom::Start(0))?;
-
+        let mut file = Self::get_or_create_file(
+            data_files,
+            &Path::new(file_path.as_str()),
+            "epoch_s,sector_cnt\n",
+        )?;
         let mut data: Vec<u8> = Vec::with_capacity(1024);
-        data.extend("epoch_s,sector_cnt\n".as_bytes());
 
         let mut sorted = map.iter().collect::<Vec<(&u64, &usize)>>();
         sorted.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap());
@@ -99,7 +108,6 @@ impl ThreadDeviceStats {
         }
 
         file.write_all(&data)?;
-        file.flush()?;
         Ok(())
     }
 
@@ -161,8 +169,6 @@ impl ThreadIOStats {
 pub struct IOWait {
     iowait_program: Rc<RefCell<IOWaitProgram>>,
     thread_map: HashMap<usize, ThreadIOStats>,
-    current_sample_instant_s: Option<u64>,
-    last_store_10s: Option<u64>,
     dir: Rc<str>,
 }
 
@@ -177,8 +183,6 @@ impl IOWait {
         Self {
             iowait_program,
             thread_map: HashMap::new(),
-            current_sample_instant_s: None,
-            last_store_10s: None,
             dir,
         }
     }
@@ -194,18 +198,6 @@ impl IOWait {
         ));
         thread_acc.process(event);
     }
-
-    fn set_current_sample_instant(&mut self, value: Option<u64>) {
-        if let None = value {
-            let epoch_ns = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_nanos();
-            self.current_sample_instant_s = Some(((epoch_ns as u64) / 1_000_000_000) + 1);
-        } else {
-            self.current_sample_instant_s = value;
-        }
-    }
 }
 
 impl Collect for IOWait {
@@ -216,10 +208,6 @@ impl Collect for IOWait {
             .take_events()
             .unwrap_or(Vec::new());
 
-        if let None = self.current_sample_instant_s {
-            self.set_current_sample_instant(None)
-        }
-
         for event in events {
             self.process_event(event);
         }
@@ -228,20 +216,9 @@ impl Collect for IOWait {
     }
 
     fn store(&mut self) -> Result<()> {
-        let current_sample_insant_s = self.current_sample_instant_s.unwrap();
-        if let Some(last_store) = self.last_store_10s {
-            if last_store == (current_sample_insant_s / 10) {
-                self.current_sample_instant_s = None;
-                return Ok(());
-            }
-        }
-
-        println!("Store iowait");
         for (_, thread_stats) in self.thread_map.iter_mut() {
             thread_stats.store()?
         }
-        self.current_sample_instant_s = None;
-        self.last_store_10s = Some(current_sample_insant_s / 10);
 
         Ok(())
     }

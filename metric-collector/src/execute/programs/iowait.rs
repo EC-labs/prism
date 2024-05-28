@@ -130,7 +130,7 @@ impl IowaitBpfEvent {
                     part0: key_elements.next().unwrap().parse().unwrap(),
                     device: key_elements.next().unwrap().parse().unwrap(),
                     tid: key_elements.next().unwrap().parse().unwrap(),
-                    comm: Rc::from(key_elements.next().unwrap()),
+                    comm: Rc::from(key_elements.next().unwrap().replace("/", "|")),
                     sector_cnt: value.parse().unwrap(),
                 })
             }
@@ -150,7 +150,7 @@ impl IowaitBpfEvent {
                     status: key_elements.next().unwrap().parse().unwrap(),
                     ns_since_boot: value_elements.next().unwrap().parse().unwrap(),
                     tid: value_elements.next().unwrap().parse().unwrap(),
-                    comm: Rc::from(value_elements.next().unwrap()),
+                    comm: Rc::from(value_elements.next().unwrap().replace("/", "|")),
                     sector_cnt: value_elements.next().unwrap().parse().unwrap(),
                 })
             }
@@ -418,7 +418,7 @@ mod tests {
                 assert_eq!(part0, 271581184);
                 assert_eq!(device, 271581187);
                 assert_eq!(tid, 632);
-                assert_eq!(&*comm, "dmcrypt_write/2");
+                assert_eq!(&*comm, "dmcrypt_write|2");
                 assert_eq!(sector_cnt, 22616);
             } else {
                 return Err(eyre!("Incorrect bpf event"));
@@ -451,7 +451,7 @@ mod tests {
                 assert_eq!(status, 0);
                 assert_eq!(ns_since_boot, 1421282887324);
                 assert_eq!(tid, 632);
-                assert_eq!(&*comm, "dmcrypt_write/2");
+                assert_eq!(&*comm, "dmcrypt_write|2");
                 assert_eq!(sector_cnt, 8);
             } else {
                 return Err(eyre!("Incorrect bpf event"));
