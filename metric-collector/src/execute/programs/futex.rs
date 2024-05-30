@@ -1,9 +1,15 @@
 use eyre::Result;
-use std::collections::HashMap;
-use std::io::ErrorKind;
-use std::process::{Child, Command};
-use std::rc::Rc;
-use std::{fs::File, io::prelude::*};
+use std::{
+    collections::HashMap,
+    io::prelude::*,
+    process::{Child, Command},
+    rc::Rc,
+    sync::{
+        mpsc::{self, Receiver, Sender, TryRecvError},
+        Arc, Mutex,
+    },
+    thread,
+};
 
 use super::BOOT_EPOCH_NS;
 use crate::metrics::ToCsv;
@@ -132,7 +138,7 @@ impl ToCsv for FutexEvent {
 
 pub struct FutexProgram {
     child: Child,
-    reader: File,
+    rx: Receiver<Arc<[u8]>>,
     events: HashMap<usize, Vec<FutexEvent>>,
     new_pids: Option<Vec<(Rc<str>, usize)>>,
     header_lines: u8,
@@ -140,9 +146,11 @@ pub struct FutexProgram {
 }
 
 impl FutexProgram {
-    pub fn new(pid: u32) -> Result<Self> {
+    pub fn new(pid: u32, terminate_flag: Arc<Mutex<bool>>) -> Result<Self> {
         let (mut reader, writer) = super::pipe();
         super::fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
+        let (tx, rx) = mpsc::channel();
+        Self::start_bpf_reader(tx, reader, terminate_flag);
         let child = Command::new("bpftrace")
             .args([
                 "./metric-collector/src/bpf/futex_wait.bt",
@@ -152,12 +160,37 @@ impl FutexProgram {
             .spawn()?;
         Ok(Self {
             child,
-            reader,
+            rx,
             events: HashMap::new(),
             header_lines: 0,
             current_event: None,
             new_pids: None,
         })
+    }
+
+    fn start_bpf_reader<R>(
+        tx: Sender<Arc<[u8]>>,
+        mut bpf_pipe_rx: R,
+        terminate_flag: Arc<Mutex<bool>>,
+    ) where
+        R: Read + Send + 'static,
+    {
+        thread::spawn(move || loop {
+            if *terminate_flag.lock().unwrap() == true {
+                break;
+            }
+            let mut buf: [u8; 65536] = [0; 65536];
+            let res = bpf_pipe_rx.read(&mut buf);
+            if let Ok(bytes) = res {
+                if bytes == 0 {
+                    break;
+                }
+
+                if let Err(_) = tx.send(Arc::from(&buf[..bytes])) {
+                    break;
+                };
+            }
+        });
     }
 
     fn handle_header<'a, I: Iterator<Item = &'a u8>>(&mut self, buf: &mut I) {
@@ -192,27 +225,16 @@ impl FutexProgram {
 
     pub fn poll_events(&mut self) -> Result<()> {
         loop {
-            let mut buf: [u8; 256] = [0; 256];
-            let bytes = self.reader.read(&mut buf);
-
-            let bytes = match bytes {
-                Err(error) => {
-                    let kind = error.kind();
-                    if kind == ErrorKind::WouldBlock {
-                        break;
-                    }
-
-                    return Err(error.into());
+            let res = self.rx.try_recv();
+            let buf = match res {
+                Err(TryRecvError::Empty) => {
+                    break;
                 }
-                Ok(bytes) => {
-                    if bytes == 0 {
-                        break;
-                    }
-                    bytes
-                }
+                Err(e) => return Err(e.into()),
+                Ok(buf) => buf,
             };
 
-            let mut iterator = buf[..bytes].into_iter();
+            let mut iterator = buf.into_iter();
             if !self.header_read() {
                 self.handle_header(&mut iterator);
             }

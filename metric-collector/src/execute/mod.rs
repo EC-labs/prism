@@ -36,7 +36,7 @@ impl Executor {
 
         let pid = std::process::id();
         let mut clone = CloneProgram::new(pid)?;
-        let mut futex = FutexProgram::new(pid)?;
+        let mut futex = FutexProgram::new(pid, terminate_flag.clone())?;
         let mut io_wait = IOWaitProgram::new(terminate_flag.clone())?;
         let mut ipc = IpcProgram::new(terminate_flag, pid)?;
 
