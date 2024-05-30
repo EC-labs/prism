@@ -1,4 +1,4 @@
-use eyre::{eyre, OptionExt, Result};
+use eyre::{eyre, Result};
 use lru_time_cache::LruCache;
 use std::{
     cell::RefCell,
@@ -88,10 +88,11 @@ impl Collect for Ipc {
     }
 
     fn store(&mut self) -> Result<()> {
-        let epoch_ns = self
-            .sample_instant_ns
-            .take()
-            .ok_or_eyre("Missing sample instant")?;
+        let epoch_ns = if let Some(epoch_ns) = self.sample_instant_ns.take() {
+            epoch_ns
+        } else {
+            return Ok(());
+        };
 
         self.sockets.store(epoch_ns)?;
         self.pipes.store(epoch_ns)?;
@@ -588,10 +589,11 @@ impl Collect for EventPollCollection {
     }
 
     fn store(&mut self) -> Result<()> {
-        let epoch_ns = self
-            .sample_instant_ns
-            .take()
-            .ok_or_eyre("Missing sample instant")?;
+        let epoch_ns = if let Some(epoch_ns) = self.sample_instant_ns.take() {
+            epoch_ns
+        } else {
+            return Ok(());
+        };
 
         for (_, epoll) in self.event_poll_map.iter_mut() {
             epoll.store(epoch_ns)?

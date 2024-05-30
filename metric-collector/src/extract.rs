@@ -104,6 +104,7 @@ impl Extractor {
         self.targets.iter_mut().for_each(|(tid, target)| {
             if let Err(_e) = target.sample() {
                 println!("Remove target {tid}");
+                dbg!(_e);
                 targets_remove.push(*tid)
             }
         });
