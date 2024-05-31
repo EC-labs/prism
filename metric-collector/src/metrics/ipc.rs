@@ -101,8 +101,14 @@ impl Collect for Ipc {
     }
 }
 
+struct Stats {
+    accumulated_wait: u64,
+    average_wait_ns: u64,
+    count: u64,
+}
+
 struct Pipes {
-    stream_map: HashMap<TargetFile, u64>,
+    stream_map: HashMap<TargetFile, Stats>,
     sum_stream_wait_ns: u64,
     last_terminated: HashSet<TargetFile>,
     data_files: LruCache<String, File>,
@@ -128,14 +134,22 @@ impl Pipes {
                 sb_id,
                 inode_id,
                 total_interval_wait_ns,
+                average_wait_ns,
+                count_wait,
                 ..
             } => {
                 let target_file = TargetFile::Inode {
                     device: sb_id,
                     inode_id,
                 };
-                let entry = self.stream_map.entry(target_file.clone()).or_insert(0);
-                *entry += total_interval_wait_ns;
+                let entry = self.stream_map.entry(target_file.clone()).or_insert(Stats {
+                    accumulated_wait: 0,
+                    average_wait_ns: 0,
+                    count: 0,
+                });
+                entry.accumulated_wait += total_interval_wait_ns;
+                entry.average_wait_ns = average_wait_ns.unwrap_or(0);
+                entry.count = count_wait.unwrap_or(0);
                 self.sum_stream_wait_ns += total_interval_wait_ns;
                 self.last_terminated.insert(target_file);
             }
@@ -149,7 +163,11 @@ impl Pipes {
                 contrib_snapshot,
                 ..
             } => {
-                self.stream_map.entry(target_file.clone()).or_insert(0);
+                self.stream_map.entry(target_file.clone()).or_insert(Stats {
+                    accumulated_wait: 0,
+                    average_wait_ns: 0,
+                    count: 0,
+                });
                 self.active.insert(target_file, contrib_snapshot);
             }
             IpcEvent::EpollItemRemove {
@@ -158,13 +176,17 @@ impl Pipes {
                 ..
             } => {
                 self.active.remove(&target_file).map(|add_snapshot| {
-                    let entry = self.stream_map.entry(target_file.clone()).or_insert(0);
+                    let entry = self.stream_map.entry(target_file.clone()).or_insert(Stats {
+                        accumulated_wait: 0,
+                        average_wait_ns: 0,
+                        count: 0,
+                    });
                     let diff = if (contrib_snapshot as i64 - add_snapshot as i64) < 0 {
                         contrib_snapshot
                     } else {
                         contrib_snapshot - add_snapshot
                     };
-                    *entry += diff;
+                    entry.accumulated_wait += diff;
                     self.sum_stream_wait_ns += diff;
                     self.last_terminated.insert(target_file);
                 });
@@ -175,10 +197,14 @@ impl Pipes {
             } => {
                 for (target, add_time) in self.active.iter_mut() {
                     self.last_terminated.insert(target.clone());
-                    let entry = self.stream_map.entry(target.clone()).or_insert(0);
+                    let entry = self.stream_map.entry(target.clone()).or_insert(Stats {
+                        accumulated_wait: 0,
+                        average_wait_ns: 0,
+                        count: 0,
+                    });
                     let contrib =
                         i64::max(total_interval_wait_ns as i64 - *add_time as i64, 0) as u64;
-                    *entry += contrib;
+                    entry.accumulated_wait += contrib;
                     self.sum_stream_wait_ns += contrib;
                     *add_time = 0;
                 }
@@ -205,11 +231,17 @@ impl Pipes {
 
         for target_file in last_terminated {
             let epoch_ms = epoch_ns / 1_000_000;
-            let cumulative_wait = *self.stream_map.get(&target_file).unwrap_or(&0);
+            let stream_map_value = self.stream_map.get(&target_file).unwrap_or(&Stats {
+                accumulated_wait: 0,
+                average_wait_ns: 0,
+                count: 0,
+            });
 
             let sample = StreamFileSample {
                 epoch_ms,
-                cumulative_wait,
+                cumulative_wait: stream_map_value.accumulated_wait,
+                average_wait_ns: stream_map_value.average_wait_ns,
+                count: stream_map_value.count,
             };
 
             let file_path = match target_file {
@@ -288,7 +320,7 @@ pub type Socket = (SrcEndpoint, Option<DstEndpoint>);
 
 struct Sockets {
     kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
-    kfile_map: HashMap<KFile, u64>,
+    kfile_map: HashMap<KFile, Stats>,
     last_terminated: HashSet<KFile>,
     active: HashMap<KFile, u64>,
     data_files: LruCache<String, File>,
@@ -340,11 +372,19 @@ impl Sockets {
                 sb_id,
                 inode_id,
                 total_interval_wait_ns,
+                average_wait_ns,
+                count_wait,
                 ..
             } => {
                 let kfile = (sb_id, inode_id);
-                let entry = self.kfile_map.entry(kfile).or_insert(0);
-                *entry += total_interval_wait_ns;
+                let entry = self.kfile_map.entry(kfile).or_insert(Stats {
+                    accumulated_wait: 0,
+                    average_wait_ns: 0,
+                    count: 0,
+                });
+                entry.accumulated_wait += total_interval_wait_ns;
+                entry.average_wait_ns = average_wait_ns.unwrap_or(0);
+                entry.count = count_wait.unwrap_or(0);
                 self.last_terminated.insert(kfile);
             }
             IpcEvent::EpollItemAdd {
@@ -363,7 +403,11 @@ impl Sockets {
                         return Err(eyre!("Unexpected target file"));
                     }
                 };
-                self.kfile_map.entry(kfile).or_insert(0);
+                self.kfile_map.entry(kfile).or_insert(Stats {
+                    accumulated_wait: 0,
+                    average_wait_ns: 0,
+                    count: 0,
+                });
                 self.active.insert(kfile, contrib_snapshot);
             }
             IpcEvent::EpollItemRemove {
@@ -378,8 +422,13 @@ impl Sockets {
                     }
                 };
                 self.active.remove(&kfile).map(|add_snapshot| {
-                    let entry = self.kfile_map.entry(kfile).or_insert(0);
-                    *entry += if (contrib_snapshot as i64 - add_snapshot as i64) < 0 {
+                    let entry = self.kfile_map.entry(kfile).or_insert(Stats {
+                        accumulated_wait: 0,
+                        average_wait_ns: 0,
+                        count: 0,
+                    });
+                    entry.accumulated_wait += if (contrib_snapshot as i64 - add_snapshot as i64) < 0
+                    {
                         contrib_snapshot
                     } else {
                         contrib_snapshot - add_snapshot
@@ -393,10 +442,14 @@ impl Sockets {
             } => {
                 for (kfile, add_time) in self.active.iter_mut() {
                     self.last_terminated.insert(*kfile);
-                    let entry = self.kfile_map.entry(*kfile).or_insert(0);
+                    let entry = self.kfile_map.entry(*kfile).or_insert(Stats {
+                        accumulated_wait: 0,
+                        average_wait_ns: 0,
+                        count: 0,
+                    });
                     let contrib =
                         i64::max(total_interval_wait_ns as i64 - *add_time as i64, 0) as u64;
-                    *entry += contrib;
+                    entry.accumulated_wait += contrib;
                     *add_time = 0;
                 }
             }
@@ -434,10 +487,16 @@ impl Sockets {
         let kfiles = mem::replace(&mut self.last_terminated, HashSet::new());
 
         for kfile in kfiles {
-            let cumulative_wait = *self.kfile_map.get(&kfile).unwrap_or(&0) as u128;
+            let stat = self.kfile_map.get(&kfile).unwrap_or(&Stats {
+                accumulated_wait: 0,
+                average_wait_ns: 0,
+                count: 0,
+            });
             let sample = SocketSample {
                 epoch_ms,
-                cumulative_wait,
+                cumulative_wait: stat.accumulated_wait,
+                average_wait_ns: stat.average_wait_ns,
+                count: stat.count,
             };
 
             let file_path =
@@ -603,16 +662,21 @@ impl Collect for EventPollCollection {
 
 struct SocketSample {
     epoch_ms: u128,
-    cumulative_wait: u128,
+    cumulative_wait: u64,
+    average_wait_ns: u64,
+    count: u64,
 }
 
 impl ToCsv for SocketSample {
     fn to_csv_row(&self) -> String {
-        format!("{},{}\n", self.epoch_ms, self.cumulative_wait)
+        format!(
+            "{},{},{},{}\n",
+            self.epoch_ms, self.cumulative_wait, self.average_wait_ns, self.count
+        )
     }
 
     fn csv_headers(&self) -> &'static str {
-        "epoch_ms,socket_wait\n"
+        "epoch_ms,socket_wait,average_wait_ns,count\n"
     }
 }
 
@@ -634,14 +698,19 @@ impl ToCsv for StreamAggregatedSample {
 struct StreamFileSample {
     epoch_ms: u128,
     cumulative_wait: u64,
+    average_wait_ns: u64,
+    count: u64,
 }
 
 impl ToCsv for StreamFileSample {
     fn to_csv_row(&self) -> String {
-        format!("{},{}\n", self.epoch_ms, self.cumulative_wait)
+        format!(
+            "{},{},{},{}\n",
+            self.epoch_ms, self.cumulative_wait, self.average_wait_ns, self.count
+        )
     }
 
     fn csv_headers(&self) -> &'static str {
-        "epoch_ms,stream_wait\n"
+        "epoch_ms,stream_wait,average_wait_ns,count\n"
     }
 }
