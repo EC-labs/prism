@@ -13,7 +13,7 @@ use std::{
 
 use crate::{
     configure::Config,
-    execute::programs::clone::CloneEvent,
+    execute::programs::{clone::CloneEvent, ipc::IpcEvent},
     metrics::{iowait::IOWait, Collect},
 };
 use crate::{
@@ -52,9 +52,12 @@ impl Extractor {
         .expect("Error setting Ctrl-C handler");
     }
 
-    fn register_new_targets(&mut self, executor: &mut Executor) {
-        executor.clone.poll_events().unwrap().into_iter().for_each(
-            |clone_event| match clone_event {
+    fn register_new_targets(&mut self, executor: &mut Executor) -> Result<()> {
+        executor
+            .clone
+            .poll_events()?
+            .into_iter()
+            .for_each(|clone_event| match clone_event {
                 CloneEvent::NewThread(comm, tid) => {
                     if let Some(_) = self.targets.get(&tid) {
                         return;
@@ -73,18 +76,39 @@ impl Extractor {
                         ),
                     );
                 }
+                CloneEvent::NewProcess(comm, pid) => {
+                    if let Ok(targets) = Target::get_threads(pid) {
+                        targets.into_iter().for_each(|tid| {
+                            self.targets.insert(
+                                tid,
+                                Target::new(
+                                    tid,
+                                    executor.futex.clone(),
+                                    executor.ipc.clone(),
+                                    self.config.data_directory.clone(),
+                                    &format!("thread/{}/{}", comm, tid),
+                                    self.kfile_socket_map.clone(),
+                                ),
+                            );
+                        });
+                    }
+                }
+                CloneEvent::RemoveProcess(pid) => {
+                    if let Ok(targets) = Target::get_threads(pid) {
+                        targets.into_iter().for_each(|tid| {
+                            self.targets.remove(&tid);
+                        });
+                    }
+                }
                 _ => {}
-            },
-        );
+            });
 
-        let new_pids = executor.futex.borrow_mut().take_new_pid_events().unwrap();
+        let new_pids = executor.futex.borrow_mut().take_new_pid_events()?;
         for (comm, pid) in new_pids {
             let comm = comm.replace("/", "|");
             executor.monitor(pid);
-            Target::get_threads(pid)
-                .unwrap()
-                .into_iter()
-                .for_each(|tid| {
+            if let Ok(targets) = Target::get_threads(pid) {
+                targets.into_iter().for_each(|tid| {
                     self.targets.insert(
                         tid,
                         Target::new(
@@ -97,7 +121,33 @@ impl Extractor {
                         ),
                     );
                 });
+            }
         }
+
+        let events = executor.ipc.borrow_mut().take_process_events()?;
+        for event in events {
+            if let IpcEvent::NewProcess { comm, pid } = event {
+                let comm = comm.replace("/", "|");
+                executor.monitor(pid);
+                if let Ok(targets) = Target::get_threads(pid) {
+                    targets.into_iter().for_each(|tid| {
+                        self.targets.insert(
+                            tid,
+                            Target::new(
+                                tid,
+                                executor.futex.clone(),
+                                executor.ipc.clone(),
+                                self.config.data_directory.clone(),
+                                &format!("thread/{}/{}", comm, tid),
+                                self.kfile_socket_map.clone(),
+                            ),
+                        );
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn sample_targets(&mut self) {
@@ -167,7 +217,7 @@ impl Extractor {
         });
 
         let targets = Target::search_targets_regex(
-            self.config.process_name.as_ref().unwrap(),
+            self.config.process_name.as_ref().expect("Process name"),
             false,
             self.config.data_directory.clone(),
             &mut executor,
@@ -197,7 +247,7 @@ impl Extractor {
             println!("{:?} - Start collect", chrono::offset::Utc::now());
             self.sample_targets();
             self.sample_system_metrics()?;
-            self.register_new_targets(&mut executor);
+            self.register_new_targets(&mut executor)?;
             println!("{:?} - End collect", chrono::offset::Utc::now());
         }
 
