@@ -1,6 +1,5 @@
 use eyre::Result;
 use lru::LruCache;
-use nix::time::{self, ClockId};
 use std::{
     cell::RefCell,
     error::Error,
@@ -10,13 +9,15 @@ use std::{
     num::NonZeroUsize,
     path::Path,
     rc::Rc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use super::{Collect, MissingSample, ToCsv};
-use crate::execute::programs::{
-    futex::{FutexEvent, FutexProgram},
-    BOOT_EPOCH_NS,
+use super::{Collect, ToCsv};
+use crate::execute::{
+    boot_to_epoch,
+    programs::{
+        futex::{FutexEvent, FutexProgram},
+        BOOT_EPOCH_NS,
+    },
 };
 
 #[derive(Debug)]
@@ -153,13 +154,13 @@ impl Futex {
 
 impl Collect for Futex {
     fn sample(&mut self) -> Result<()> {
-        let time_since_boot =
-            Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME)?).as_nanos();
-        self.events = Some(
-            self.futex_program
-                .borrow_mut()
-                .take_futex_events(self.tid)?,
-        );
+        let res = self
+            .futex_program
+            .borrow_mut()
+            .take_futex_events(self.tid)?;
+        let time_since_boot = res.1;
+        self.events = Some(res.0);
+
         for event in self.events.as_ref().unwrap() {
             match event {
                 FutexEvent::Start { ns_since_boot, .. } => {
@@ -174,28 +175,26 @@ impl Collect for Futex {
         }
 
         let time_since_wait_start = if let Some(wait_start) = self.futex_wait_start {
-            time_since_boot - wait_start
+            time_since_boot.expect("Futex latest instant") - wait_start
         } else {
             0
         };
 
-        let start = SystemTime::now();
-        let ms_epoch = start
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_millis();
-
-        self.futex_sample = Some(FutexSample {
-            epoch_ms: ms_epoch,
-            cumulative_futex_wait: self.sum_futex_wait_time + time_since_wait_start,
-        });
+        self.futex_sample = if let Some(ns_since_boot) = time_since_boot {
+            Some(FutexSample {
+                epoch_ms: boot_to_epoch(ns_since_boot) / 1_000_000,
+                cumulative_futex_wait: self.sum_futex_wait_time + time_since_wait_start,
+            })
+        } else {
+            None
+        };
 
         Ok(())
     }
 
     fn store(&mut self) -> Result<()> {
         if let None = self.futex_sample {
-            return Err(MissingSample.into());
+            return Ok(());
         }
         let sample = self.futex_sample.take().unwrap();
 

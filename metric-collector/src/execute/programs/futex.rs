@@ -37,6 +37,9 @@ pub enum FutexEvent {
         ns_since_boot: u128,
         ret: i32,
     },
+    SampleInstant {
+        ns_since_boot: u128,
+    },
     NewProcess {
         comm: Rc<str>,
         pid: usize,
@@ -83,6 +86,9 @@ impl From<Vec<u8>> for FutexEvent {
             "NewProcess" => Self::NewProcess {
                 comm: elements.next().unwrap().into(),
                 pid: elements.next().unwrap().parse().unwrap(),
+            },
+            "SampleInstant" => Self::SampleInstant {
+                ns_since_boot: elements.next().unwrap().parse().unwrap(),
             },
             _ => Self::Unexpected { data: event_string },
         }
@@ -143,6 +149,7 @@ pub struct FutexProgram {
     new_pids: Option<Vec<(Rc<str>, usize)>>,
     header_lines: u8,
     current_event: Option<Vec<u8>>,
+    latest_instant_ns: Option<u128>,
 }
 
 impl FutexProgram {
@@ -165,6 +172,7 @@ impl FutexProgram {
             header_lines: 0,
             current_event: None,
             new_pids: None,
+            latest_instant_ns: None,
         })
     }
 
@@ -241,15 +249,22 @@ impl FutexProgram {
             while let Some(event) = self.handle_event(&mut iterator) {
                 let event = FutexEvent::from(event);
                 match &event {
-                    FutexEvent::Start { tid, .. }
-                    | FutexEvent::Elapsed { tid, .. }
-                    | FutexEvent::Wake { tid, .. } => {
+                    FutexEvent::Start {
+                        tid, ns_since_boot, ..
+                    }
+                    | FutexEvent::Elapsed {
+                        tid, ns_since_boot, ..
+                    }
+                    | FutexEvent::Wake {
+                        tid, ns_since_boot, ..
+                    } => {
                         let tid_events = self.events.get_mut(tid);
                         if let None = tid_events {
                             self.events.insert(*tid, Vec::new());
                         }
 
                         let tid_events = self.events.get_mut(tid).unwrap();
+                        self.latest_instant_ns = Some(*ns_since_boot);
                         tid_events.push(event);
                     }
                     FutexEvent::NewProcess { pid, comm } => {
@@ -258,6 +273,9 @@ impl FutexProgram {
                         }
                         let new_pids = self.new_pids.as_mut().unwrap();
                         new_pids.push((comm.clone(), *pid));
+                    }
+                    FutexEvent::SampleInstant { ns_since_boot } => {
+                        self.latest_instant_ns = Some(*ns_since_boot);
                     }
                     FutexEvent::UnhandledOpcode { .. } => {
                         println!("Futex unhandled opcode. {:?}", event);
@@ -271,8 +289,14 @@ impl FutexProgram {
         Ok(())
     }
 
-    pub fn take_futex_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
-        Ok(self.events.remove(&tid).unwrap_or(Vec::new()))
+    pub fn take_futex_events(&mut self, tid: usize) -> Result<(Vec<FutexEvent>, Option<u128>)> {
+        let res = self.poll_events();
+        let events = self.events.remove(&tid).unwrap_or(Vec::new());
+        match (res, events.len() > 0) {
+            (_, true) => Ok((events, self.latest_instant_ns)),
+            (Ok(_), false) => Ok((events, self.latest_instant_ns)),
+            (Err(e), false) => Err(e),
+        }
     }
 
     pub fn take_new_pid_events(&mut self) -> Result<Vec<(Rc<str>, usize)>> {

@@ -49,7 +49,7 @@ tracepoint:syscalls:sys_enter_futex
     }
 
     if (@futex[$root_pid, $uaddr] && !@pids[pid]) {
-        printf("%-10s\t%s\t%lld\n", "NewProcess", comm, pid);
+        printf("%-15s\t%s\t%lld\n", "NewProcess", comm, pid);
         @pids[pid] = 1;
     }
 
@@ -65,12 +65,12 @@ tracepoint:syscalls:sys_enter_futex
     $op = $op&(~FUTEX_CLOCK_REALTIME);
     if (($op == FUTEX_WAIT_BITSET) || ($op == FUTEX_WAIT)) {
         @start[tid] = (nsecs, $root_pid, $uaddr);
-        printf("%-10s\t%20lld\t%lld\t%lx\t%20lld\n", 
+        printf("%-15s\t%20lld\t%lld\t%lx\t%20lld\n", 
                "WaitStart", tid, $root_pid, $uaddr, @start[tid].0);
     } else if (($op == FUTEX_WAKE) || ($op == FUTEX_WAKE_BITSET)) {
         @wake[tid] = (nsecs, $root_pid, $uaddr);
     } else {
-        printf("%-10s\t%d\n", "UnhandledOpcode", args->op);
+        printf("%-15s\t%d\n", "UnhandledOpcode", args->op);
     }
 }
 
@@ -80,17 +80,22 @@ tracepoint:syscalls:sys_exit_futex
         $data = @start[tid];
         $since_boot = nsecs;
         $diff = (uint64)($since_boot - $data.0);
-        printf("%-10s\t%20lld\t%lld\t%lx\t%20lld\t%lld\t%d\n", 
+        printf("%-15s\t%20lld\t%lld\t%lx\t%20lld\t%lld\t%d\n", 
                "WaitElapsed", tid, $data.1, $data.2, $since_boot, $diff, args->ret);
         delete(@start[tid]);
     }
 
     if (@wake[tid].0) {
         $data = @wake[tid];
-        printf("%-10s\t%20lld\t%lld\t%lx\t%20lld\t%d\n", 
+        printf("%-15s\t%20lld\t%lld\t%lx\t%20lld\t%d\n", 
                "Wake", tid, $data.1, $data.2, $data.0, args->ret);
         delete(@wake[tid]);
     }
+}
+
+interval:s:1
+{
+    printf("%-15s\t%20lld\n", "SampleInstant", nsecs);
 }
 
 END {
