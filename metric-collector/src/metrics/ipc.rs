@@ -527,7 +527,7 @@ impl EventPollCollection {
         Self {
             ipc_program,
             kfile_socket_map,
-            root_directory: Rc::from(format!("{}/epoll", root_directory)),
+            root_directory: Rc::from(format!("{}/global/epoll", root_directory)),
             event_poll_map: HashMap::new(),
             sample_instant_ns: None,
         }
@@ -539,14 +539,13 @@ impl EventPollCollection {
             | IpcEvent::EpollItemRemove { event_poll, .. }
             | IpcEvent::EpollItem { event_poll, .. }
             | IpcEvent::EpollWait { event_poll, .. } => {
-                let event_poll = self
-                    .event_poll_map
-                    .entry(event_poll)
-                    .or_insert(EventPoll::new(
+                let event_poll = self.event_poll_map.entry(event_poll).or_insert_with(|| {
+                    EventPoll::new(
                         self.kfile_socket_map.clone(),
                         self.root_directory.clone(),
                         event_poll,
-                    ));
+                    )
+                });
                 event_poll.process_event(event)?;
             }
             IpcEvent::NewSocketMap {

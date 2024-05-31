@@ -103,7 +103,7 @@ impl Futex {
                 let epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
                 let epoch_minute_s = (epoch_ns / (1_000_000_000 * 60)) * 60;
                 format!(
-                    "{}/futex/wait/{}/{}.csv",
+                    "{}/global/futex/wait/{}/{}.csv",
                     self.root_directory, self.tid, epoch_minute_s,
                 )
             }
@@ -116,7 +116,7 @@ impl Futex {
                 let epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
                 let epoch_minute_s = (epoch_ns / (1_000_000_000 * 60)) * 60;
                 format!(
-                    "{}/futex/wake/{}/{}/{}.csv",
+                    "{}/global/futex/wake/{}/{}/{}.csv",
                     self.root_directory, root_pid, uaddr, epoch_minute_s,
                 )
             }

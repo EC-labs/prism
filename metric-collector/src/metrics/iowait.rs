@@ -177,7 +177,7 @@ impl IOWait {
         let dir = if let None = parent {
             Rc::from("iowait")
         } else {
-            Rc::from(&*format!("{}/iowait", parent.unwrap()))
+            Rc::from(&*format!("{}/global/iowait", parent.unwrap()))
         };
 
         Self {

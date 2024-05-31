@@ -130,7 +130,7 @@ impl Target {
                             futex_program.clone(),
                             ipc_program.clone(),
                             data_directory.clone(),
-                            &format!("{}/{}", comm, tid),
+                            &format!("thread/{}/{}", comm, tid),
                             kfile_socket_map.clone(),
                         ))
                     })
@@ -154,7 +154,7 @@ impl Target {
     }
 
     pub fn sample(&mut self) -> Result<()> {
-        for (i, collector) in self.collectors.iter_mut().enumerate() {
+        for (_i, collector) in self.collectors.iter_mut().enumerate() {
             collector.sample()?;
             collector.store()?;
         }

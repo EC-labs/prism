@@ -4,6 +4,7 @@ use eyre::Result;
 use std::{
     cell::RefCell,
     collections::HashMap,
+    fs,
     rc::Rc,
     sync::{mpsc::Receiver, Arc, Mutex},
     thread,
@@ -67,7 +68,7 @@ impl Extractor {
                             executor.futex.clone(),
                             executor.ipc.clone(),
                             self.config.data_directory.clone(),
-                            &format!("{}/{}", comm, tid),
+                            &format!("thread/{}/{}", comm, tid),
                             self.kfile_socket_map.clone(),
                         ),
                     );
@@ -91,7 +92,7 @@ impl Extractor {
                             executor.futex.clone(),
                             executor.ipc.clone(),
                             self.config.data_directory.clone(),
-                            &format!("{}/{}", comm, tid),
+                            &format!("thread/{}/{}", comm, tid),
                             self.kfile_socket_map.clone(),
                         ),
                     );
@@ -104,7 +105,6 @@ impl Extractor {
         self.targets.iter_mut().for_each(|(tid, target)| {
             if let Err(_e) = target.sample() {
                 println!("Remove target {tid}");
-                dbg!(_e);
                 targets_remove.push(*tid)
             }
         });
@@ -140,7 +140,17 @@ impl Extractor {
         Ok(())
     }
 
+    fn write_fs_version(&self) -> Result<()> {
+        fs::create_dir_all(&*self.config.data_directory)?;
+        fs::write(
+            format!("{}/version.txt", self.config.data_directory),
+            "0.1.0\n",
+        )?;
+        Ok(())
+    }
+
     pub fn run(mut self) -> Result<()> {
+        self.write_fs_version()?;
         self.register_sighandler();
         let mut executor = Executor::new(self.terminate_flag.clone())?;
         self.start_timer_thread();
