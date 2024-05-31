@@ -4,6 +4,8 @@ use std::process::{Child, Command};
 use std::rc::Rc;
 use std::{fs::File, io::prelude::*};
 
+use crate::execute::BpfReader;
+
 pub enum CloneEvent {
     NewThread {
         comm: Rc<str>,
@@ -44,6 +46,28 @@ pub struct CloneProgram {
     current_event: Option<Vec<u8>>,
 }
 
+impl BpfReader for CloneProgram {
+    fn header_read(&self) -> bool {
+        self.header_lines == 1
+    }
+
+    fn header_lines_get_mut(&mut self) -> &mut u8 {
+        &mut self.header_lines
+    }
+
+    fn current_event_as_mut(&mut self) -> Option<&mut Vec<u8>> {
+        self.current_event.as_mut()
+    }
+
+    fn set_current_event(&mut self, val: Vec<u8>) {
+        self.current_event = Some(val);
+    }
+
+    fn take_current_event(&mut self) -> Option<Vec<u8>> {
+        self.current_event.take()
+    }
+}
+
 impl CloneProgram {
     pub fn new(pid: u32) -> Result<Self> {
         let (mut reader, writer) = super::pipe();
@@ -58,36 +82,6 @@ impl CloneProgram {
             header_lines: 0,
             current_event: None,
         })
-    }
-
-    pub fn handle_header<'a, I: Iterator<Item = &'a u8>>(&mut self, buf: &mut I) {
-        while !self.header_read() {
-            let newline = buf.find(|&&b| b == b'\n');
-            if let Some(_) = newline {
-                self.header_lines += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn handle_event<'a, I: Iterator<Item = &'a u8>>(&mut self, buf: &mut I) -> Option<Vec<u8>> {
-        if let None = self.current_event {
-            self.current_event = Some(Vec::new());
-        }
-
-        while let Some(byte) = buf.next() {
-            if *byte != b'\n' {
-                self.current_event.as_mut().map(|curr| curr.push(*byte));
-            } else {
-                return self.current_event.take();
-            }
-        }
-        return None;
-    }
-
-    pub fn header_read(&self) -> bool {
-        self.header_lines == 1
     }
 
     pub fn poll_events(&mut self) -> Result<Vec<CloneEvent>> {
