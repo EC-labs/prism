@@ -11,7 +11,7 @@ kfunc:vmlinux:__submit_bio
     $status = $bio->bi_status;
     $is_write = $op & 1;
     
-    @pending[$part0, $bdev, $bi_iter.bi_sector, $is_write, $op, $status] = (nsecs, tid, comm, $bi_iter.bi_size/512);
+    @pending[$part0, $bdev, $bi_iter.bi_sector, $is_write, $op, $status] = (nsecs, tid, pid, $bi_iter.bi_size/512);
 }
 
 kfunc:vmlinux:bio_endio

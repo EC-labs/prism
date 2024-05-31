@@ -23,7 +23,7 @@ tracepoint:syscalls:sys_enter_clone*
 tracepoint:syscalls:sys_exit_clone*
 / @enter[tid] /
 {
-    printf("%-15s\t%-15s\t%ld\n", "NewThread", comm, args->ret);
+    printf("%-15s\t%-15s\t%lld\t%ld\n", "NewThread", comm, pid, args->ret);
     delete(@enter[tid]);
 }
 

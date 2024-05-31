@@ -141,11 +141,11 @@ struct ThreadIOStats {
 }
 
 impl ThreadIOStats {
-    fn new(tid: usize, comm: Rc<str>, parent: Rc<str>) -> Self {
+    fn new(tid: usize, pid: usize, parent: Rc<str>) -> Self {
         Self {
             tid,
             device_map: HashMap::new(),
-            dir: Rc::from(format!("{}/{}/{:?}", parent, comm, tid)),
+            dir: Rc::from(format!("{}/{}/{:?}", parent, pid, tid)),
         }
     }
 
@@ -189,13 +189,12 @@ impl IOWait {
 
     fn process_event(&mut self, event: IowaitEvent) {
         let IowaitEvent::Requests {
-            ref tid, ref comm, ..
+            ref tid, ref pid, ..
         } = event;
-        let thread_acc = self.thread_map.entry(*tid).or_insert(ThreadIOStats::new(
-            *tid,
-            comm.clone(),
-            self.dir.clone(),
-        ));
+        let thread_acc =
+            self.thread_map
+                .entry(*tid)
+                .or_insert(ThreadIOStats::new(*tid, *pid, self.dir.clone()));
         thread_acc.process(event);
     }
 }

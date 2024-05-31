@@ -130,7 +130,7 @@ impl Target {
                             futex_program.clone(),
                             ipc_program.clone(),
                             data_directory.clone(),
-                            &format!("thread/{}/{}", comm, tid),
+                            &format!("thread/{}/{}", pid, tid),
                             kfile_socket_map.clone(),
                         ))
                     })

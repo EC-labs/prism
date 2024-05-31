@@ -8,7 +8,6 @@ use std::{
     io::prelude::*,
     mem,
     process::{Child, Command},
-    rc::Rc,
     thread,
 };
 
@@ -21,7 +20,7 @@ pub enum IowaitEvent {
         part0: u32,
         device: u32,
         tid: usize,
-        comm: Rc<str>,
+        pid: usize,
         sector_cnt: usize,
     },
 }
@@ -37,7 +36,7 @@ impl IowaitEvent {
             part0: key.part0,
             device: key.device,
             tid: key.tid,
-            comm: key.comm,
+            pid: key.pid,
             sector_cnt: value,
         }
     }
@@ -52,7 +51,7 @@ pub enum IowaitBpfEvent {
         part0: u32,
         device: u32,
         tid: usize,
-        comm: Rc<str>,
+        pid: usize,
         sector_cnt: usize,
     },
     MapPending {
@@ -65,7 +64,7 @@ pub enum IowaitBpfEvent {
         op: u8,
         status: u32,
         tid: usize,
-        comm: Rc<str>,
+        pid: usize,
     },
     SampleInstant {
         ns_since_boot: u64,
@@ -130,7 +129,7 @@ impl IowaitBpfEvent {
                     part0: key_elements.next().unwrap().parse().unwrap(),
                     device: key_elements.next().unwrap().parse().unwrap(),
                     tid: key_elements.next().unwrap().parse().unwrap(),
-                    comm: Rc::from(key_elements.next().unwrap().replace("/", "|")),
+                    pid: key_elements.next().unwrap().parse().unwrap(),
                     sector_cnt: value.parse().unwrap(),
                 })
             }
@@ -150,7 +149,7 @@ impl IowaitBpfEvent {
                     status: key_elements.next().unwrap().parse().unwrap(),
                     ns_since_boot: value_elements.next().unwrap().parse().unwrap(),
                     tid: value_elements.next().unwrap().parse().unwrap(),
-                    comm: Rc::from(value_elements.next().unwrap().replace("/", "|")),
+                    pid: value_elements.next().unwrap().parse().unwrap(),
                     sector_cnt: value_elements.next().unwrap().parse().unwrap(),
                 })
             }
@@ -173,7 +172,7 @@ impl From<Vec<u8>> for IowaitBpfEvent {
 struct StatsClosureKey {
     part0: u32,
     device: u32,
-    comm: Rc<str>,
+    pid: usize,
     tid: usize,
 }
 
@@ -318,7 +317,7 @@ impl IOWaitProgram {
                         });
                     }
                     IowaitBpfEvent::MapPending {
-                        comm,
+                        pid,
                         tid,
                         part0,
                         device,
@@ -326,7 +325,7 @@ impl IOWaitProgram {
                         ..
                     } => {
                         let key = StatsClosureKey {
-                            comm,
+                            pid,
                             tid,
                             part0,
                             device,
@@ -335,14 +334,14 @@ impl IOWaitProgram {
                         *entry += sector_cnt;
                     }
                     IowaitBpfEvent::MapCompleted {
-                        comm,
+                        pid,
                         tid,
                         part0,
                         device,
                         sector_cnt,
                     } => {
                         let key = StatsClosureKey {
-                            comm,
+                            pid,
                             tid,
                             part0,
                             device,
@@ -405,20 +404,20 @@ mod tests {
 
         #[test]
         fn map_completed() -> Result<()> {
-            let line = "@completed[271581184, 271581187, 632, dmcrypt_write/2]: 22616";
+            let line = "@completed[271581184, 271581187, 632, 631]: 22616";
             let event = IowaitBpfEvent::from(Vec::from(line.as_bytes()));
             if let IowaitBpfEvent::MapCompleted {
                 part0,
                 device,
                 tid,
-                comm,
+                pid,
                 sector_cnt,
             } = event
             {
                 assert_eq!(part0, 271581184);
                 assert_eq!(device, 271581187);
                 assert_eq!(tid, 632);
-                assert_eq!(&*comm, "dmcrypt_write|2");
+                assert_eq!(pid, 631);
                 assert_eq!(sector_cnt, 22616);
             } else {
                 return Err(eyre!("Incorrect bpf event"));
@@ -428,7 +427,8 @@ mod tests {
 
         #[test]
         fn map_pending() -> Result<()> {
-            let line = "@pending[271581184, 271581187, 1649015544, 1, 1, 0]: (1421282887324, 632, dmcrypt_write/2, 8)";
+            let line =
+                "@pending[271581184, 271581187, 1649015544, 1, 1, 0]: (1421282887324, 632, 631, 8)";
             let event = IowaitBpfEvent::from(Vec::from(line.as_bytes()));
             if let IowaitBpfEvent::MapPending {
                 ns_since_boot,
@@ -440,7 +440,7 @@ mod tests {
                 op,
                 status,
                 tid,
-                comm,
+                pid,
             } = event
             {
                 assert_eq!(part0, 271581184);
@@ -451,7 +451,7 @@ mod tests {
                 assert_eq!(status, 0);
                 assert_eq!(ns_since_boot, 1421282887324);
                 assert_eq!(tid, 632);
-                assert_eq!(&*comm, "dmcrypt_write|2");
+                assert_eq!(pid, 631);
                 assert_eq!(sector_cnt, 8);
             } else {
                 return Err(eyre!("Incorrect bpf event"));

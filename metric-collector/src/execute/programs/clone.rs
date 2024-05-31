@@ -5,10 +5,16 @@ use std::rc::Rc;
 use std::{fs::File, io::prelude::*};
 
 pub enum CloneEvent {
-    NewThread(Rc<str>, usize),
+    NewThread {
+        comm: Rc<str>,
+        pid: usize,
+        tid: usize,
+    },
     NewProcess(Rc<str>, usize),
     RemoveProcess(usize),
-    Unexpected { data: String },
+    Unexpected {
+        data: String,
+    },
 }
 
 impl From<Vec<u8>> for CloneEvent {
@@ -16,10 +22,11 @@ impl From<Vec<u8>> for CloneEvent {
         let event_string = String::from_utf8(value).unwrap();
         let mut elements = event_string.split_whitespace();
         match elements.next().unwrap() {
-            "NewThread" => Self::NewThread(
-                Rc::from(elements.next().unwrap()),
-                elements.next().unwrap().parse().unwrap(),
-            ),
+            "NewThread" => Self::NewThread {
+                comm: Rc::from(elements.next().unwrap()),
+                pid: elements.next().unwrap().parse().unwrap(),
+                tid: elements.next().unwrap().parse().unwrap(),
+            },
             "NewProcess" => Self::NewProcess(
                 Rc::from(elements.next().unwrap()),
                 elements.next().unwrap().parse().unwrap(),

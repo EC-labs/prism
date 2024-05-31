@@ -58,12 +58,11 @@ impl Extractor {
             .poll_events()?
             .into_iter()
             .for_each(|clone_event| match clone_event {
-                CloneEvent::NewThread(comm, tid) => {
+                CloneEvent::NewThread { pid, tid, .. } => {
                     if let Some(_) = self.targets.get(&tid) {
                         return;
                     }
 
-                    let comm = comm.replace("/", "|");
                     self.targets.insert(
                         tid,
                         Target::new(
@@ -71,7 +70,7 @@ impl Extractor {
                             executor.futex.clone(),
                             executor.ipc.clone(),
                             self.config.data_directory.clone(),
-                            &format!("thread/{}/{}", comm, tid),
+                            &format!("thread/{}/{}", pid, tid),
                             self.kfile_socket_map.clone(),
                         ),
                     );
@@ -86,7 +85,7 @@ impl Extractor {
                                     executor.futex.clone(),
                                     executor.ipc.clone(),
                                     self.config.data_directory.clone(),
-                                    &format!("thread/{}/{}", comm, tid),
+                                    &format!("thread/{}/{}", pid, tid),
                                     self.kfile_socket_map.clone(),
                                 ),
                             );
@@ -116,7 +115,7 @@ impl Extractor {
                             executor.futex.clone(),
                             executor.ipc.clone(),
                             self.config.data_directory.clone(),
-                            &format!("thread/{}/{}", comm, tid),
+                            &format!("thread/{}/{}", pid, tid),
                             self.kfile_socket_map.clone(),
                         ),
                     );
@@ -138,7 +137,7 @@ impl Extractor {
                                 executor.futex.clone(),
                                 executor.ipc.clone(),
                                 self.config.data_directory.clone(),
-                                &format!("thread/{}/{}", comm, tid),
+                                &format!("thread/{}/{}", pid, tid),
                                 self.kfile_socket_map.clone(),
                             ),
                         );
