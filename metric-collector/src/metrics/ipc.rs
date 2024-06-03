@@ -2,10 +2,9 @@ use eyre::{eyre, Result};
 use lru_time_cache::LruCache;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, File},
     io::prelude::*,
-    mem,
     net::Ipv4Addr,
     path::Path,
     rc::Rc,
@@ -88,19 +87,14 @@ impl Collect for Ipc {
     }
 
     fn store(&mut self) -> Result<()> {
-        let epoch_ns = if let Some(epoch_ns) = self.sample_instant_ns.take() {
-            epoch_ns
-        } else {
-            return Ok(());
-        };
-
-        self.sockets.store(epoch_ns)?;
-        self.pipes.store(epoch_ns)?;
+        self.sockets.store()?;
+        self.pipes.store()?;
 
         Ok(())
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Stats {
     accumulated_wait: u64,
     average_wait_ns: u64,
@@ -108,9 +102,8 @@ struct Stats {
 }
 
 struct Pipes {
-    stream_map: HashMap<TargetFile, Stats>,
-    sum_stream_wait_ns: u64,
-    last_terminated: HashSet<TargetFile>,
+    stream_stats_map: HashMap<TargetFile, Stats>,
+    snapshots: HashMap<TargetFile, VecDeque<(Option<u64>, Stats)>>,
     data_files: LruCache<String, File>,
     target_subdirectory: String,
     active: HashMap<TargetFile, u64>,
@@ -120,9 +113,8 @@ impl Pipes {
     fn new(target_subdirectory: String) -> Self {
         Self {
             target_subdirectory,
-            stream_map: HashMap::new(),
-            sum_stream_wait_ns: 0,
-            last_terminated: HashSet::new(),
+            stream_stats_map: HashMap::new(),
+            snapshots: HashMap::new(),
             data_files: LruCache::with_expiry_duration(Duration::from_millis(1000 * 120)),
             active: HashMap::new(),
         }
@@ -133,25 +125,33 @@ impl Pipes {
             IpcEvent::InodeWait {
                 sb_id,
                 inode_id,
+                sample_instant_ns,
                 total_interval_wait_ns,
                 average_wait_ns,
                 count_wait,
                 ..
             } => {
+                let sample_instant_epoch_ns = boot_to_epoch(sample_instant_ns as u128);
                 let target_file = TargetFile::Inode {
                     device: sb_id,
                     inode_id,
                 };
-                let entry = self.stream_map.entry(target_file.clone()).or_insert(Stats {
-                    accumulated_wait: 0,
-                    average_wait_ns: 0,
-                    count: 0,
-                });
-                entry.accumulated_wait += total_interval_wait_ns;
-                entry.average_wait_ns = average_wait_ns.unwrap_or(0);
-                entry.count = count_wait.unwrap_or(0);
-                self.sum_stream_wait_ns += total_interval_wait_ns;
-                self.last_terminated.insert(target_file);
+                let stat = self
+                    .stream_stats_map
+                    .entry(target_file.clone())
+                    .or_insert(Stats {
+                        accumulated_wait: 0,
+                        average_wait_ns: 0,
+                        count: 0,
+                    });
+                stat.accumulated_wait += total_interval_wait_ns;
+                stat.average_wait_ns = average_wait_ns.unwrap_or(0);
+                stat.count = count_wait.unwrap_or(0);
+                let snapshots = self
+                    .snapshots
+                    .entry(target_file)
+                    .or_insert_with(|| VecDeque::new());
+                snapshots.push_back((Some(sample_instant_epoch_ns as u64), stat.clone()));
             }
             IpcEvent::EpollItemAdd {
                 target_file,
@@ -163,11 +163,13 @@ impl Pipes {
                 contrib_snapshot,
                 ..
             } => {
-                self.stream_map.entry(target_file.clone()).or_insert(Stats {
-                    accumulated_wait: 0,
-                    average_wait_ns: 0,
-                    count: 0,
-                });
+                self.stream_stats_map
+                    .entry(target_file.clone())
+                    .or_insert(Stats {
+                        accumulated_wait: 0,
+                        average_wait_ns: 0,
+                        count: 0,
+                    });
                 self.active.insert(target_file, contrib_snapshot);
             }
             IpcEvent::EpollItemRemove {
@@ -176,37 +178,81 @@ impl Pipes {
                 ..
             } => {
                 self.active.remove(&target_file).map(|add_snapshot| {
-                    let entry = self.stream_map.entry(target_file.clone()).or_insert(Stats {
-                        accumulated_wait: 0,
-                        average_wait_ns: 0,
-                        count: 0,
-                    });
+                    let stat = self
+                        .stream_stats_map
+                        .entry(target_file.clone())
+                        .or_insert(Stats {
+                            accumulated_wait: 0,
+                            average_wait_ns: 0,
+                            count: 0,
+                        });
                     let diff = if (contrib_snapshot as i64 - add_snapshot as i64) < 0 {
                         contrib_snapshot
                     } else {
                         contrib_snapshot - add_snapshot
                     };
-                    entry.accumulated_wait += diff;
-                    self.sum_stream_wait_ns += diff;
-                    self.last_terminated.insert(target_file);
+                    stat.accumulated_wait += diff;
+                    let snapshots = self
+                        .snapshots
+                        .entry(target_file)
+                        .or_insert_with(|| VecDeque::new());
+                    match snapshots.back_mut() {
+                        Some((None, stat)) => {
+                            *stat = stat.clone();
+                        }
+                        Some((Some(_), _)) | None => {
+                            snapshots.push_back((None, stat.clone()));
+                        }
+                    }
                 });
             }
             IpcEvent::EpollWait {
                 total_interval_wait_ns,
+                sample_instant_ns,
                 ..
             } => {
+                let sample_instant_epoch_ns = boot_to_epoch(sample_instant_ns as u128);
+
                 for (target, add_time) in self.active.iter_mut() {
-                    self.last_terminated.insert(target.clone());
-                    let entry = self.stream_map.entry(target.clone()).or_insert(Stats {
-                        accumulated_wait: 0,
-                        average_wait_ns: 0,
-                        count: 0,
-                    });
+                    self.snapshots.entry(target.clone());
+                    let stat = self
+                        .stream_stats_map
+                        .entry(target.clone())
+                        .or_insert(Stats {
+                            accumulated_wait: 0,
+                            average_wait_ns: 0,
+                            count: 0,
+                        });
                     let contrib =
                         i64::max(total_interval_wait_ns as i64 - *add_time as i64, 0) as u64;
-                    entry.accumulated_wait += contrib;
-                    self.sum_stream_wait_ns += contrib;
+                    stat.accumulated_wait += contrib;
                     *add_time = 0;
+
+                    let snapshots = self
+                        .snapshots
+                        .entry(target.clone())
+                        .or_insert_with(|| VecDeque::new());
+                    match snapshots.back_mut() {
+                        Some((Some(_), _)) | None => {
+                            snapshots
+                                .push_back((Some(sample_instant_epoch_ns as u64), stat.clone()));
+                        }
+                        Some(snapshot) => {
+                            *snapshot = (Some(sample_instant_epoch_ns as u64), stat.clone());
+                        }
+                    }
+                }
+
+                let snapshot_keys: HashSet<TargetFile> =
+                    HashSet::from_iter(self.snapshots.keys().map(|key| key.clone()));
+                let active_keys = HashSet::from_iter(self.active.keys().map(|key| key.clone()));
+                let remaining = snapshot_keys.difference(&active_keys);
+                for kfile in remaining {
+                    let snapshots = self.snapshots.get_mut(kfile).unwrap();
+                    let last = snapshots.back_mut().expect("Contain an element");
+                    if let None = last.0 {
+                        last.0 = Some(sample_instant_epoch_ns as u64);
+                    }
                 }
             }
             _ => {
@@ -216,83 +262,80 @@ impl Pipes {
         Ok(())
     }
 
-    fn store(&mut self, epoch_ns: u128) -> Result<()> {
-        if self.last_terminated.len() == 0 {
+    fn store(&mut self) -> Result<()> {
+        if self.snapshots.len() == 0 {
             return Ok(());
         }
 
-        self.store_streams(epoch_ns)?;
-        self.store_aggregated_stream(epoch_ns)?;
+        self.store_streams()?;
         Ok(())
     }
 
-    fn store_streams(&mut self, epoch_ns: u128) -> Result<()> {
-        let last_terminated = mem::replace(&mut self.last_terminated, HashSet::new());
+    fn store_streams(&mut self) -> Result<()> {
+        let mut remove = Vec::new();
 
-        for target_file in last_terminated {
-            let epoch_ms = epoch_ns / 1_000_000;
-            let stream_map_value = self.stream_map.get(&target_file).unwrap_or(&Stats {
-                accumulated_wait: 0,
-                average_wait_ns: 0,
-                count: 0,
-            });
+        for (target_file, snapshots) in self.snapshots.iter_mut() {
+            while let Some(snapshot) = snapshots.pop_front() {
+                let (epoch_ms, stat) = if let Some(epoch_ns) = snapshot.0 {
+                    (epoch_ns / 1_000_000, snapshot.1)
+                } else {
+                    snapshots.push_front(snapshot);
+                    break;
+                };
 
-            let sample = StreamFileSample {
-                epoch_ms,
-                cumulative_wait: stream_map_value.accumulated_wait,
-                average_wait_ns: stream_map_value.average_wait_ns,
-                count: stream_map_value.count,
-            };
+                let sample = StreamFileSample {
+                    epoch_ms: epoch_ms as u128,
+                    cumulative_wait: stat.accumulated_wait,
+                    average_wait_ns: stat.average_wait_ns,
+                    count: stat.count,
+                };
 
-            let file_path = match target_file {
-                TargetFile::Inode { device, inode_id } => {
-                    format!(
-                        "{}/streams/{:?}/{:?}_{:?}.csv",
-                        self.target_subdirectory,
-                        (epoch_ms / (1000 * 60)) * 60,
-                        device,
-                        inode_id,
-                    )
-                }
-                TargetFile::AnonInode { name, address } => {
-                    format!(
-                        "{}/streams/{:?}/{}_{:x}.csv",
-                        self.target_subdirectory,
-                        (epoch_ms / (1000 * 60)) * 60,
-                        name,
-                        address,
-                    )
-                }
-            };
+                let file_path = match target_file {
+                    TargetFile::Inode { device, inode_id } => {
+                        format!(
+                            "{}/streams/{:?}/{:?}_{:?}.csv",
+                            self.target_subdirectory,
+                            (epoch_ms / (1000 * 60)) * 60,
+                            device,
+                            inode_id,
+                        )
+                    }
+                    TargetFile::AnonInode { name, address } => {
+                        format!(
+                            "{}/streams/{:?}/{}_{:x}.csv",
+                            self.target_subdirectory,
+                            (epoch_ms / (1000 * 60)) * 60,
+                            name,
+                            address,
+                        )
+                    }
+                };
 
-            let mut file = self.get_or_create_file(Path::new(&file_path), sample.csv_headers())?;
-            file.write_all(sample.to_csv_row().as_bytes())?;
+                let mut file = Self::get_or_create_file(
+                    &mut self.data_files,
+                    Path::new(&file_path),
+                    sample.csv_headers(),
+                )?;
+                file.write_all(sample.to_csv_row().as_bytes())?;
+            }
+
+            if snapshots.len() == 0 {
+                remove.push(target_file.clone());
+            }
         }
+        remove.into_iter().for_each(|kfile| {
+            self.snapshots.remove(&kfile);
+        });
+
         Ok(())
     }
 
-    fn store_aggregated_stream(&mut self, epoch_ns: u128) -> Result<()> {
-        let epoch_ms = epoch_ns / 1_000_000;
-        let cumulative_wait = self.sum_stream_wait_ns;
-
-        let sample = StreamAggregatedSample {
-            epoch_ms,
-            cumulative_wait,
-        };
-
-        let file_path = format!(
-            "{}/streams/{:?}/total.csv",
-            self.target_subdirectory,
-            (epoch_ms / (1000 * 60)) * 60,
-        );
-
-        let mut file = self.get_or_create_file(Path::new(&file_path), sample.csv_headers())?;
-        file.write_all(sample.to_csv_row().as_bytes())?;
-        Ok(())
-    }
-
-    fn get_or_create_file(&mut self, filepath: &Path, headers: &str) -> Result<&File> {
-        let file = self.data_files.get(filepath.to_str().unwrap());
+    fn get_or_create_file<'a>(
+        data_files: &'a mut LruCache<String, File>,
+        filepath: &Path,
+        headers: &str,
+    ) -> Result<&'a File> {
+        let file = data_files.get(filepath.to_str().unwrap());
         if let None = file {
             let file = File::options().append(true).open(filepath);
             let file = match file {
@@ -304,11 +347,10 @@ impl Pipes {
                 }
                 Ok(file) => file,
             };
-            self.data_files
-                .insert(filepath.to_str().unwrap().into(), file);
+            data_files.insert(filepath.to_str().unwrap().into(), file);
         }
 
-        let file = self.data_files.get(filepath.to_str().unwrap());
+        let file = data_files.get(filepath.to_str().unwrap());
         Ok(file.unwrap())
     }
 }
@@ -320,8 +362,8 @@ pub type Socket = (SrcEndpoint, Option<DstEndpoint>);
 
 struct Sockets {
     kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
-    kfile_map: HashMap<KFile, Stats>,
-    last_terminated: HashSet<KFile>,
+    kfile_stats_map: HashMap<KFile, Stats>,
+    snapshots: HashMap<KFile, VecDeque<(Option<u64>, Stats)>>,
     active: HashMap<KFile, u64>,
     data_files: LruCache<String, File>,
     target_subdirectory: String,
@@ -335,8 +377,8 @@ impl Sockets {
         Self {
             kfile_socket_map,
             target_subdirectory,
-            kfile_map: HashMap::new(),
-            last_terminated: HashSet::new(),
+            kfile_stats_map: HashMap::new(),
+            snapshots: HashMap::new(),
             active: HashMap::new(),
             data_files: LruCache::with_expiry_duration(Duration::from_millis(1000 * 120)),
         }
@@ -371,21 +413,27 @@ impl Sockets {
             IpcEvent::InodeWait {
                 sb_id,
                 inode_id,
+                sample_instant_ns,
                 total_interval_wait_ns,
                 average_wait_ns,
                 count_wait,
                 ..
             } => {
+                let sample_instant_epoch_ns = boot_to_epoch(sample_instant_ns as u128);
                 let kfile = (sb_id, inode_id);
-                let entry = self.kfile_map.entry(kfile).or_insert(Stats {
+                let stat = self.kfile_stats_map.entry(kfile).or_insert(Stats {
                     accumulated_wait: 0,
                     average_wait_ns: 0,
                     count: 0,
                 });
-                entry.accumulated_wait += total_interval_wait_ns;
-                entry.average_wait_ns = average_wait_ns.unwrap_or(0);
-                entry.count = count_wait.unwrap_or(0);
-                self.last_terminated.insert(kfile);
+                stat.accumulated_wait += total_interval_wait_ns;
+                stat.average_wait_ns = average_wait_ns.unwrap_or(0);
+                stat.count = count_wait.unwrap_or(0);
+                let snapshots = self
+                    .snapshots
+                    .entry(kfile)
+                    .or_insert_with(|| VecDeque::new());
+                snapshots.push_back((Some(sample_instant_epoch_ns as u64), stat.clone()));
             }
             IpcEvent::EpollItemAdd {
                 target_file,
@@ -403,7 +451,7 @@ impl Sockets {
                         return Err(eyre!("Unexpected target file"));
                     }
                 };
-                self.kfile_map.entry(kfile).or_insert(Stats {
+                self.kfile_stats_map.entry(kfile).or_insert(Stats {
                     accumulated_wait: 0,
                     average_wait_ns: 0,
                     count: 0,
@@ -422,35 +470,74 @@ impl Sockets {
                     }
                 };
                 self.active.remove(&kfile).map(|add_snapshot| {
-                    let entry = self.kfile_map.entry(kfile).or_insert(Stats {
+                    let stat = self.kfile_stats_map.entry(kfile).or_insert(Stats {
                         accumulated_wait: 0,
                         average_wait_ns: 0,
                         count: 0,
                     });
-                    entry.accumulated_wait += if (contrib_snapshot as i64 - add_snapshot as i64) < 0
+                    stat.accumulated_wait += if (contrib_snapshot as i64 - add_snapshot as i64) < 0
                     {
                         contrib_snapshot
                     } else {
                         contrib_snapshot - add_snapshot
                     };
-                    self.last_terminated.insert(kfile);
+                    let snapshots = self
+                        .snapshots
+                        .entry(kfile)
+                        .or_insert_with(|| VecDeque::new());
+                    match snapshots.back_mut() {
+                        Some((None, stat)) => {
+                            *stat = stat.clone();
+                        }
+                        Some((Some(_), _)) | None => {
+                            snapshots.push_back((None, stat.clone()));
+                        }
+                    }
                 });
             }
             IpcEvent::EpollWait {
                 total_interval_wait_ns,
+                sample_instant_ns,
                 ..
             } => {
+                let sample_instant_epoch_ns = boot_to_epoch(sample_instant_ns as u128);
+
                 for (kfile, add_time) in self.active.iter_mut() {
-                    self.last_terminated.insert(*kfile);
-                    let entry = self.kfile_map.entry(*kfile).or_insert(Stats {
+                    let stat = self.kfile_stats_map.entry(*kfile).or_insert(Stats {
                         accumulated_wait: 0,
                         average_wait_ns: 0,
                         count: 0,
                     });
                     let contrib =
                         i64::max(total_interval_wait_ns as i64 - *add_time as i64, 0) as u64;
-                    entry.accumulated_wait += contrib;
+                    stat.accumulated_wait += contrib;
                     *add_time = 0;
+
+                    let snapshots = self
+                        .snapshots
+                        .entry(*kfile)
+                        .or_insert_with(|| VecDeque::new());
+                    match snapshots.back_mut() {
+                        Some((Some(_), _)) | None => {
+                            snapshots
+                                .push_back((Some(sample_instant_epoch_ns as u64), stat.clone()));
+                        }
+                        Some(snapshot) => {
+                            *snapshot = (Some(sample_instant_epoch_ns as u64), stat.clone());
+                        }
+                    }
+                }
+
+                let snapshot_keys: HashSet<(u32, u64)> =
+                    HashSet::from_iter(self.snapshots.keys().map(|key| key.clone()));
+                let active_keys = HashSet::from_iter(self.active.keys().map(|key| key.clone()));
+                let remaining = snapshot_keys.difference(&active_keys);
+                for kfile in remaining {
+                    let snapshots = self.snapshots.get_mut(kfile).unwrap();
+                    let last = snapshots.back_mut().expect("Contain an element");
+                    if let None = last.0 {
+                        last.0 = Some(sample_instant_epoch_ns as u64);
+                    }
                 }
             }
             _ => {
@@ -461,8 +548,12 @@ impl Sockets {
         Ok(())
     }
 
-    fn get_or_create_file(&mut self, filepath: &Path, headers: &str) -> Result<&File> {
-        let file = self.data_files.get(filepath.to_str().unwrap());
+    fn get_or_create_file<'a>(
+        data_files: &'a mut LruCache<String, File>,
+        filepath: &Path,
+        headers: &str,
+    ) -> Result<&'a File> {
+        let file = data_files.get(filepath.to_str().unwrap());
         if let None = file {
             let file = File::options().append(true).open(filepath);
             let file = match file {
@@ -474,48 +565,61 @@ impl Sockets {
                 }
                 Ok(file) => file,
             };
-            self.data_files
-                .insert(filepath.to_str().unwrap().into(), file);
+            data_files.insert(filepath.to_str().unwrap().into(), file);
         }
 
-        let file = self.data_files.get(filepath.to_str().unwrap());
+        let file = data_files.get(filepath.to_str().unwrap());
         Ok(file.unwrap())
     }
 
-    fn store(&mut self, epoch_ns: u128) -> Result<()> {
-        let epoch_ms = epoch_ns / 1_000_000;
-        let kfiles = mem::replace(&mut self.last_terminated, HashSet::new());
+    fn store(&mut self) -> Result<()> {
+        let mut remove = Vec::new();
 
-        for kfile in kfiles {
-            let stat = self.kfile_map.get(&kfile).unwrap_or(&Stats {
-                accumulated_wait: 0,
-                average_wait_ns: 0,
-                count: 0,
-            });
-            let sample = SocketSample {
-                epoch_ms,
-                cumulative_wait: stat.accumulated_wait,
-                average_wait_ns: stat.average_wait_ns,
-                count: stat.count,
-            };
-
-            let file_path =
-                if let Some((src, Some(dst))) = self.kfile_socket_map.borrow().get(&kfile) {
-                    format!(
-                        "{}/sockets/{:?}/{}:{:?}_{}:{:?}.csv",
-                        self.target_subdirectory,
-                        (epoch_ms / (1000 * 60)) * 60,
-                        src.0.octets().map(|elem| elem.to_string()).join("."),
-                        src.1,
-                        dst.0.octets().map(|elem| elem.to_string()).join("."),
-                        dst.1,
-                    )
+        for (kfile, snapshots) in self.snapshots.iter_mut() {
+            while let Some(snapshot) = snapshots.pop_front() {
+                let (epoch_ms, stat) = if let Some(epoch_ns) = snapshot.0 {
+                    (epoch_ns / 1_000_000, snapshot.1)
                 } else {
-                    continue;
+                    snapshots.push_front(snapshot);
+                    break;
                 };
-            let mut file = self.get_or_create_file(Path::new(&file_path), sample.csv_headers())?;
-            file.write_all(sample.to_csv_row().as_bytes())?;
+
+                let sample = SocketSample {
+                    epoch_ms: epoch_ms as u128,
+                    cumulative_wait: stat.accumulated_wait,
+                    average_wait_ns: stat.average_wait_ns,
+                    count: stat.count,
+                };
+                let file_path =
+                    if let Some((src, Some(dst))) = self.kfile_socket_map.borrow().get(&kfile) {
+                        format!(
+                            "{}/sockets/{:?}/{}:{:?}_{}:{:?}.csv",
+                            self.target_subdirectory,
+                            (epoch_ms / (1000 * 60)) * 60,
+                            src.0.octets().map(|elem| elem.to_string()).join("."),
+                            src.1,
+                            dst.0.octets().map(|elem| elem.to_string()).join("."),
+                            dst.1,
+                        )
+                    } else {
+                        continue;
+                    };
+                let mut file = Self::get_or_create_file(
+                    &mut self.data_files,
+                    Path::new(&file_path),
+                    sample.csv_headers(),
+                )?;
+                file.write_all(sample.to_csv_row().as_bytes())?;
+            }
+
+            if snapshots.len() == 0 {
+                remove.push(*kfile);
+            }
         }
+
+        remove.into_iter().for_each(|kfile| {
+            self.snapshots.remove(&kfile);
+        });
 
         Ok(())
     }
@@ -563,9 +667,9 @@ impl EventPoll {
         Ok(())
     }
 
-    fn store(&mut self, sample_instant_ns: u128) -> Result<()> {
-        self.sockets.store(sample_instant_ns)?;
-        self.pipes.store(sample_instant_ns)
+    fn store(&mut self) -> Result<()> {
+        self.sockets.store()?;
+        self.pipes.store()
     }
 }
 
@@ -647,14 +751,8 @@ impl Collect for EventPollCollection {
     }
 
     fn store(&mut self) -> Result<()> {
-        let epoch_ns = if let Some(epoch_ns) = self.sample_instant_ns.take() {
-            epoch_ns
-        } else {
-            return Ok(());
-        };
-
         for (_, epoll) in self.event_poll_map.iter_mut() {
-            epoll.store(epoch_ns)?
+            epoll.store()?
         }
         Ok(())
     }
@@ -712,5 +810,1129 @@ impl ToCsv for StreamFileSample {
 
     fn csv_headers(&self) -> &'static str {
         "epoch_ms,stream_wait,average_wait_ns,count\n"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    mod ipc_sockets {
+        use eyre::Result;
+        use indoc::indoc;
+        use std::{
+            cell::RefCell,
+            collections::HashMap,
+            env::temp_dir,
+            fs,
+            io::prelude::*,
+            rc::Rc,
+            sync::{Arc, Mutex},
+        };
+
+        use crate::{
+            execute::programs::{ipc::IpcProgram, pipe},
+            metrics::{
+                ipc::{Ipc, Stats},
+                Collect,
+            },
+        };
+
+        #[test]
+        fn socket_two_consecutive_inode_samples() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                NewSocketMap    sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058
+                AcceptEnd       example-applica 24239   sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+
+                => start map statistics
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 2848, total 2848
+
+                SampleInstant   19447107025962
+                => end map statistics
+
+                => start map statistics
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 43106, total 43106
+
+                SampleInstant   19448107034740
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let tmp_dir = temp_dir();
+            let mut ipc = Ipc::new(
+                ipc_program.clone(),
+                24239,
+                Rc::from(tmp_dir.to_str().unwrap()),
+                "thread/24239/24239",
+                Rc::new(RefCell::new(HashMap::new())),
+            );
+
+            ipc.sample()?;
+
+            let snapshots = ipc.sockets.snapshots.remove(&(8, 90098));
+            assert!(snapshots.is_some());
+
+            let mut snapshots = snapshots.unwrap();
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: 2848,
+                        average_wait_ns: 2848,
+                        count: 1
+                    }
+                ))
+            );
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19448107034740),
+                    Stats {
+                        accumulated_wait: 2848 + 43106,
+                        average_wait_ns: 43106,
+                        count: 1
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn store_snapshots() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                NewSocketMap    sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058
+                AcceptEnd       example-applica 24239   sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+
+                => start map statistics
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 2848, total 2848
+
+                SampleInstant   19447107025962
+                => end map statistics
+
+                => start map statistics
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 43106, total 43106
+
+                SampleInstant   19448107034740
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let tmp_dir = tempdir::TempDir::new("")?;
+            let mut ipc = Ipc::new(
+                ipc_program.clone(),
+                24239,
+                Rc::from(tmp_dir.path().to_str().unwrap()),
+                "thread/24239/24239",
+                Rc::new(RefCell::new(HashMap::new())),
+            );
+
+            ipc.sample()?;
+            ipc.store()?;
+            assert!(ipc.sockets.snapshots.len() == 0);
+
+            let contents = fs::read_to_string(format!(
+                "{}/thread/24239/24239/ipc/sockets/19440/127.0.0.1:7878_127.0.0.1:50058.csv",
+                tmp_dir.path().to_str().unwrap()
+            ))?;
+            assert_eq!(
+                indoc! {"
+                epoch_ms,socket_wait,average_wait_ns,count
+                19447107,2848,2848,1
+                19448107,45954,43106,1
+            "},
+                contents
+            );
+
+            Ok(())
+        }
+    }
+
+    mod ipc_pipes {
+        use eyre::Result;
+        use indoc::indoc;
+        use std::{
+            cell::RefCell,
+            collections::HashMap,
+            env::temp_dir,
+            fs,
+            io::prelude::*,
+            rc::Rc,
+            sync::{Arc, Mutex},
+        };
+
+        use crate::{
+            execute::programs::{
+                ipc::{IpcProgram, TargetFile},
+                pipe,
+            },
+            metrics::{
+                ipc::{Ipc, Stats},
+                Collect,
+            },
+        };
+
+        #[test]
+        fn socket_two_consecutive_inode_samples() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                AcceptEnd       example-applica 24239   devpts  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+
+                => start map statistics
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 2848, total 2848
+
+                SampleInstant   19447107025962
+                => end map statistics
+
+                => start map statistics
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 43106, total 43106
+
+                SampleInstant   19448107034740
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let tmp_dir = temp_dir();
+            let mut ipc = Ipc::new(
+                ipc_program.clone(),
+                24239,
+                Rc::from(tmp_dir.to_str().unwrap()),
+                "thread/24239/24239",
+                Rc::new(RefCell::new(HashMap::new())),
+            );
+
+            ipc.sample()?;
+
+            let snapshots = ipc.pipes.snapshots.remove(&TargetFile::Inode {
+                device: 8,
+                inode_id: 90098,
+            });
+            assert!(snapshots.is_some());
+
+            let mut snapshots = snapshots.unwrap();
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: 2848,
+                        average_wait_ns: 2848,
+                        count: 1
+                    }
+                ))
+            );
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19448107034740),
+                    Stats {
+                        accumulated_wait: 2848 + 43106,
+                        average_wait_ns: 43106,
+                        count: 1
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn store_snapshots() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                AcceptEnd       example-applica 24239   devpts  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+
+                => start map statistics
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 2848, total 2848
+
+                SampleInstant   19447107025962
+                => end map statistics
+
+                => start map statistics
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 43106, total 43106
+
+                SampleInstant   19448107034740
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let tmp_dir = tempdir::TempDir::new("")?;
+            let mut ipc = Ipc::new(
+                ipc_program.clone(),
+                24239,
+                Rc::from(tmp_dir.path().to_str().unwrap()),
+                "thread/24239/24239",
+                Rc::new(RefCell::new(HashMap::new())),
+            );
+
+            ipc.sample()?;
+            ipc.store()?;
+
+            assert!(ipc.pipes.snapshots.len() == 0);
+
+            let contents = fs::read_to_string(format!(
+                "{}/thread/24239/24239/ipc/streams/19440/8_90098.csv",
+                tmp_dir.path().to_str().unwrap()
+            ))?;
+            assert_eq!(
+                indoc! {"
+                    epoch_ms,stream_wait,average_wait_ns,count
+                    19447107,2848,2848,1
+                    19448107,45954,43106,1
+                "},
+                contents
+            );
+
+            Ok(())
+        }
+    }
+
+    mod eventpoll_sockets {
+        use eyre::Result;
+        use indoc::indoc;
+        use std::{
+            cell::RefCell,
+            collections::HashMap,
+            env::temp_dir,
+            fs,
+            io::prelude::*,
+            rc::Rc,
+            sync::{Arc, Mutex},
+        };
+
+        use crate::{
+            execute::programs::{ipc::IpcProgram, pipe},
+            metrics::{
+                ipc::{EventPollCollection, Stats},
+                Collect,
+            },
+        };
+
+        #[test]
+        fn socket_empty_snapshot() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.sockets.snapshots.remove(&(8, 80672));
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    None,
+                    Stats {
+                        accumulated_wait: 578800067,
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn socket_filled_snapshot() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.sockets.snapshots.remove(&(8, 80672));
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: 578800067,
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn remove_and_add_active_socket() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.sockets.snapshots.remove(&(8, 80672));
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn two_consecutive_bpf_samples_last_pending() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.sockets.snapshots.remove(&(8, 80672));
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 2);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    None,
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291)
+                            + (289679399 - 200000000)
+                            + (1016301358 - 437501291),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn two_consecutive_bpf_samples() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 914973709
+                SampleInstant   19448107034740
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.sockets.snapshots.remove(&(8, 80672));
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 2);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19448107034740),
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291)
+                            + (289679399 - 200000000)
+                            + (1016301358 - 437501291),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn two_consecutive_bpf_samples_store() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 914973709
+                SampleInstant   19448107034740
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let tmp_dir = tempdir::TempDir::new("")?;
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(tmp_dir.path().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            event_polls.store()?;
+
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let event_poll = event_poll.unwrap();
+            let snapshots = event_poll.sockets.snapshots;
+            assert!(snapshots.len() == 0);
+
+            let contents = fs::read_to_string(format!(
+                "{}/global/epoll/ffff98dd8179e0c0/sockets/19440/127.0.0.1:50046_127.0.0.1:7878.csv",
+                tmp_dir.path().to_str().unwrap()
+            ))?;
+            assert_eq!(
+                contents,
+                indoc! {"
+                    epoch_ms,socket_wait,average_wait_ns,count
+                    19447107,668479466,0,0
+                    19448107,1247279533,0,0
+                "}
+            );
+
+            Ok(())
+        }
+    }
+
+    mod eventpoll_pipes {
+        use eyre::Result;
+        use indoc::indoc;
+        use std::{
+            cell::RefCell,
+            collections::HashMap,
+            env::temp_dir,
+            fs,
+            io::prelude::*,
+            rc::Rc,
+            sync::{Arc, Mutex},
+        };
+
+        use crate::{
+            execute::programs::{
+                ipc::{IpcProgram, TargetFile},
+                pipe,
+            },
+            metrics::{
+                ipc::{EventPollCollection, Stats},
+                Collect,
+            },
+        };
+
+        #[test]
+        fn empty_snapshot() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.pipes.snapshots.remove(&TargetFile::Inode {
+                device: 8,
+                inode_id: 80672,
+            });
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    None,
+                    Stats {
+                        accumulated_wait: 578800067,
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn filled_snapshot() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.pipes.snapshots.remove(&TargetFile::Inode {
+                device: 8,
+                inode_id: 80672,
+            });
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: 578800067,
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn remove_and_add_active() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.pipes.snapshots.remove(&TargetFile::Inode {
+                device: 8,
+                inode_id: 80672,
+            });
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn two_consecutive_bpf_samples_last_pending() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.pipes.snapshots.remove(&TargetFile::Inode {
+                device: 8,
+                inode_id: 80672,
+            });
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 2);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    None,
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291)
+                            + (289679399 - 200000000)
+                            + (1016301358 - 437501291),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn two_consecutive_bpf_samples() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 914973709
+                SampleInstant   19448107034740
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(temp_dir().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let mut event_poll = event_poll.unwrap();
+            let snapshots = event_poll.pipes.snapshots.remove(&TargetFile::Inode {
+                device: 8,
+                inode_id: 80672,
+            });
+            assert!(snapshots.is_some());
+            let mut snapshots = snapshots.unwrap();
+
+            assert_eq!(snapshots.len(), 2);
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19447107025962),
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+            assert_eq!(
+                snapshots.pop_front(),
+                Some((
+                    Some(19448107034740),
+                    Stats {
+                        accumulated_wait: (1016301358 - 437501291)
+                            + (289679399 - 200000000)
+                            + (1016301358 - 437501291),
+                        average_wait_ns: 0,
+                        count: 0,
+                    }
+                ))
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn two_consecutive_bpf_samples_store() -> Result<()> {
+            let (rx, mut tx) = pipe();
+            let ipc_program = Rc::new(RefCell::new(
+                IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+            ));
+
+            let bpf_content = indoc! {"
+                HEADER
+
+                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 289679399
+                SampleInstant   19447107025962
+                => end map statistics
+
+                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
+                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+
+                => start map statistics
+                @epoll_map[0xffff98dd8179e0c0]: 914973709
+                SampleInstant   19448107034740
+                => end map statistics
+            "};
+            tx.write_all(bpf_content.as_bytes())?;
+            while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+            let tmp_dir = tempdir::TempDir::new("")?;
+            let mut event_polls = EventPollCollection::new(
+                ipc_program.clone(),
+                Rc::new(RefCell::new(HashMap::new())),
+                Rc::from(tmp_dir.path().to_str().unwrap()),
+            );
+
+            event_polls.sample()?;
+            event_polls.store()?;
+
+            let event_poll = event_polls
+                .event_poll_map
+                .remove(&(0xffff98dd8179e0c0 as u64));
+            assert!(event_poll.is_some());
+
+            let event_poll = event_poll.unwrap();
+            let snapshots = event_poll.sockets.snapshots;
+            assert!(snapshots.len() == 0);
+
+            let contents = fs::read_to_string(format!(
+                "{}/global/epoll/ffff98dd8179e0c0/streams/19440/8_80672.csv",
+                tmp_dir.path().to_str().unwrap()
+            ))?;
+            assert_eq!(
+                contents,
+                indoc! {"
+                    epoch_ms,stream_wait,average_wait_ns,count
+                    19447107,668479466,0,0
+                    19448107,1247279533,0,0
+                "}
+            );
+
+            Ok(())
+        }
     }
 }

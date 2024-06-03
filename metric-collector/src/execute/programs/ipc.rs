@@ -427,19 +427,21 @@ pub enum IpcEvent {
         ns_since_boot: u64,
         contrib_snapshot: u64,
     },
+    EpollWait {
+        event_poll: u64,
+        sample_instant_ns: u64,
+        total_interval_wait_ns: u64,
+    },
     InodeWait {
         comm: Rc<str>,
         tid: usize,
         fs_type: Rc<str>,
         sb_id: u32,
         inode_id: u64,
+        sample_instant_ns: u64,
         total_interval_wait_ns: u64,
         average_wait_ns: Option<u64>,
         count_wait: Option<u64>,
-    },
-    EpollWait {
-        event_poll: u64,
-        total_interval_wait_ns: u64,
     },
 }
 
@@ -499,6 +501,7 @@ impl IpcEvent {
                     fs_type,
                     sb_id,
                     inode_id,
+                    sample_instant_ns: current_instant_ns,
                     total_interval_wait_ns: cached + pending,
                     average_wait_ns: Some(average_ns),
                     count_wait: Some(count),
@@ -522,6 +525,7 @@ impl IpcEvent {
                 fs_type,
                 sb_id,
                 inode_id,
+                sample_instant_ns: current_instant_ns,
                 total_interval_wait_ns: total_ns,
                 average_wait_ns: Some(average_ns),
                 count_wait: Some(count),
@@ -553,6 +557,7 @@ impl IpcEvent {
                     fs_type,
                     sb_id,
                     inode_id,
+                    sample_instant_ns: current_instant_ns,
                     total_interval_wait_ns: pending,
                     average_wait_ns: None,
                     count_wait: None,
@@ -579,6 +584,7 @@ impl IpcEvent {
 
                 Ok(IpcEvent::EpollWait {
                     event_poll,
+                    sample_instant_ns: current_instant_ns,
                     total_interval_wait_ns: cached + pending,
                 })
             }
@@ -590,6 +596,7 @@ impl IpcEvent {
                 None,
             ) => Ok(IpcEvent::EpollWait {
                 event_poll,
+                sample_instant_ns: current_instant_ns,
                 total_interval_wait_ns: total_ns,
             }),
             (
@@ -610,6 +617,7 @@ impl IpcEvent {
                 };
                 Ok(IpcEvent::EpollWait {
                     event_poll,
+                    sample_instant_ns: current_instant_ns,
                     total_interval_wait_ns: pending,
                 })
             }
@@ -1078,6 +1086,7 @@ mod tests {
         use crate::execute::programs::ipc::TargetFile;
 
         use super::super::IpcBpfEvent;
+
         #[test]
         fn inode_map() -> Result<()> {
             let line = "@inode_map[tokio-runtime-w, 1257489, devpts, 24, 8]: count 1, average 25617349, total 25617349";
