@@ -1010,12 +1010,12 @@ impl IpcProgram {
         Ok(self.events.len() + self.global_events.as_ref().map(|v| v.len()).unwrap_or(0))
     }
 
-    pub fn take_tid_events(&mut self, tid: usize) -> Result<(Vec<IpcEvent>, Option<u64>)> {
+    pub fn take_tid_events(&mut self, tid: usize) -> Result<Vec<IpcEvent>> {
         let res = self.poll_events();
         let events = self.events.remove(&tid).unwrap_or(Vec::new());
         match (res, events.len() > 0) {
-            (_, true) => Ok((events, self.latest_instant_ns)),
-            (Ok(_), false) => Ok((events, self.latest_instant_ns)),
+            (_, true) => Ok(events),
+            (Ok(_), false) => Ok(events),
             (Err(e), false) => Err(e),
         }
     }
@@ -1470,37 +1470,6 @@ mod tests {
             thread,
             time::Duration,
         };
-
-        #[test]
-        fn epoll_prev_instant() -> Result<()> {
-            let (rx, mut tx) = programs::pipe();
-            let mut program = IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap();
-            let block = indoc! {"
-                HEADER
-
-                => start map statistics
-                @inode_map[tokio-runtime-w, 1257489, devpts, 24, 8]: count 1, average 25617349, total 25617349
-                @epoll_map[0xffff8b2c5b49c000]: 25721222
-                SampleInstant   113
-                => end map statistics
-            "};
-            tx.write(block.as_bytes())?;
-            while program.poll_events()? == 0 {}
-            let res = program.take_tid_events(1257489).unwrap();
-            assert_eq!(res.1, Some(113));
-            let res = program.take_global_events().unwrap();
-            assert_eq!(res.1, Some(113));
-
-            let block = indoc! {"
-                EpollAdd       	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	16052950	125     25721222
-            "};
-            tx.write(block.as_bytes())?;
-            while program.poll_events()? == 0 {}
-            let res = program.take_global_events().unwrap();
-            assert_eq!(res.1, Some(125));
-
-            Ok(())
-        }
 
         #[test]
         fn account_global() -> Result<()> {

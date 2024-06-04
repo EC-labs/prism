@@ -24,7 +24,6 @@ pub type KFile = (u32, u64);
 pub struct Ipc {
     ipc_program: Rc<RefCell<IpcProgram>>,
     tid: usize,
-    sample_instant_ns: Option<u128>,
     sockets: Sockets,
     pipes: Pipes,
 }
@@ -40,7 +39,6 @@ impl Ipc {
         Self {
             ipc_program,
             tid,
-            sample_instant_ns: None,
             sockets: Sockets::new(
                 format!("{}/{}/ipc", root_directory, target_subdirectory),
                 kfile_socket_map,
@@ -72,12 +70,7 @@ impl Ipc {
 
 impl Collect for Ipc {
     fn sample(&mut self) -> Result<()> {
-        let (events, sample_instant_since_boot) =
-            self.ipc_program.borrow_mut().take_tid_events(self.tid)?;
-        let sample_instant_epoch_ns =
-            sample_instant_since_boot.map(|instant| boot_to_epoch(instant as u128));
-
-        self.sample_instant_ns = sample_instant_epoch_ns;
+        let events = self.ipc_program.borrow_mut().take_tid_events(self.tid)?;
 
         for event in events {
             self.process_event(event)?;
