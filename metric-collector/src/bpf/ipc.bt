@@ -570,10 +570,12 @@ kfunc:vmlinux:ep_poll
         return;
     }
 
+    $now = nsecs;
     if (@epoll_wait_depth[args->ep] == 0) {
-        @epoll_pending[args->ep] = nsecs;
+        @epoll_pending[args->ep] = $now;
     }
     @epoll_wait_depth[args->ep] += 1;
+    @inode_pending[comm, tid, "                          epoll", 0, (uint64) args->ep] = $now;
 }
 
 kretfunc:vmlinux:ep_poll
@@ -598,6 +600,16 @@ kretfunc:vmlinux:ep_poll
     $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
     @epoll_map[args->ep] = @epoll_map[args->ep] + $pending_contrib;
     delete(@epoll_pending[args->ep]);
+
+    $epoll = "                          epoll";
+    $start = @inode_pending[comm, tid, $epoll, 0, (uint64) args->ep];
+    $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    @inode_map[comm, tid, $epoll, 0, (uint64) args->ep] = (
+        @inode_map[comm, tid, $epoll, 0, (uint64) args->ep].0 + $pending_contrib,
+        @inode_map[comm, tid, $epoll, 0, (uint64) args->ep].1 + 1
+    );
+    delete(@inode_pending[comm, tid, $epoll, 0, (uint64) args->ep]);
+
 }
 
 kfunc:vmlinux:ep_send_events
@@ -694,15 +706,15 @@ kretfunc:do_select
 {
     $terminate = nsecs;
     $i = 0;
-    while ($i < 684) {
+    while ($i < 512) {
         $value = @io_multi[tid, $i];
 
         // In case there are multiple entries for the same (struct file *),
         // `@inode_pending` will no longer have the `(struct file *)` entry
         // after the first has been accounted. 
-        $pending = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
-        $pending_contrib = $pending > 0 ? $terminate - $pending : 0;
-        if ($pending_contrib) {
+        $start = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
+        if ($start) {
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
             @inode_map[comm, tid, $value.0, $value.1, $value.2] = (
                 @inode_map[comm, tid, $value.0, $value.1, $value.2].0 + $pending_contrib,
                 @inode_map[comm, tid, $value.0, $value.1, $value.2].1
@@ -740,9 +752,9 @@ kretfunc:do_sys_poll
         // In case there are multiple entries for the same (struct file *),
         // `@inode_pending` will no longer have the `(struct file *)` entry
         // after the first has been accounted. 
-        $pending = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
-        $pending_contrib = $pending > 0 ? $terminate - $pending : 0;
-        if ($pending_contrib) {
+        $start = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
+        if ($start) {
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
             @inode_map[comm, tid, $value.0, $value.1, $value.2] = (
                 @inode_map[comm, tid, $value.0, $value.1, $value.2].0 + $pending_contrib,
                 @inode_map[comm, tid, $value.0, $value.1, $value.2].1
