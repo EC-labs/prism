@@ -125,7 +125,10 @@ kretfunc:vmlinux:vfs_read
 
         $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
         $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
-        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+            @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+            @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+        );
         delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
     }    
 }
@@ -188,7 +191,10 @@ kretfunc:vmlinux:vfs_write
 
         $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
         $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
-        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+            @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+            @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+        );
         delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
     }
 }
@@ -381,7 +387,10 @@ kretfunc:vmlinux:sock_recvmsg
 
     $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
     $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
-    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+    );
     delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
 }
 
@@ -462,7 +471,10 @@ kretfunc:vmlinux:inet_sendmsg
 
     $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
     $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
-    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+    );
     delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
 }
 
@@ -682,7 +694,7 @@ kretfunc:do_select
 {
     $terminate = nsecs;
     $i = 0;
-    while ($i < 256) {
+    while ($i < 684) {
         $value = @io_multi[tid, $i];
 
         // In case there are multiple entries for the same (struct file *),
@@ -691,7 +703,10 @@ kretfunc:do_select
         $pending = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
         $pending_contrib = $pending > 0 ? $terminate - $pending : 0;
         if ($pending_contrib) {
-            @inode_map[comm, tid, $value.0, $value.1, $value.2] = stats($pending_contrib);
+            @inode_map[comm, tid, $value.0, $value.1, $value.2] = (
+                @inode_map[comm, tid, $value.0, $value.1, $value.2].0 + $pending_contrib,
+                @inode_map[comm, tid, $value.0, $value.1, $value.2].1
+            );
         }
 
         delete(@inode_pending[comm, tid, $value.0, $value.1, $value.2]);
@@ -728,7 +743,10 @@ kretfunc:do_sys_poll
         $pending = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
         $pending_contrib = $pending > 0 ? $terminate - $pending : 0;
         if ($pending_contrib) {
-            @inode_map[comm, tid, $value.0, $value.1, $value.2] = stats($pending_contrib);
+            @inode_map[comm, tid, $value.0, $value.1, $value.2] = (
+                @inode_map[comm, tid, $value.0, $value.1, $value.2].0 + $pending_contrib,
+                @inode_map[comm, tid, $value.0, $value.1, $value.2].1
+            );
         }
 
         delete(@inode_pending[comm, tid, $value.0, $value.1, $value.2]);
