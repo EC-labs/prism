@@ -648,11 +648,11 @@ kprobe:ep_item_poll*
 }
 
 /*
- * SELECT
+ * SELECT & POLL
  *
- * When a thread calls the select system call, we will account the time spent
- * waiting for each file descriptor passed in as an argument to the calling
- * thread.
+ * When a thread calls the select/poll system call, we will account the time
+ * spent waiting for each file descriptor passed in as an argument to the
+ * calling thread.
  *
  * Maps:
  *
@@ -706,6 +706,44 @@ kretfunc:do_select
     delete(@fds[tid]);
     delete(@io_multi_idx[tid]);
 }
+
+kfunc:do_sys_poll
+/ @pids[pid] /
+{
+    @fds[tid] = (int64) args->nfds;
+    @io_multi_idx[tid] = 0;
+}
+
+kretfunc:do_sys_poll 
+/ @fds[tid] / 
+{
+    $terminate = nsecs;
+    $i = 0;
+    while ($i < 256) {
+        $value = @io_multi[tid, $i];
+
+        // In case there are multiple entries for the same (struct file *),
+        // `@inode_pending` will no longer have the `(struct file *)` entry
+        // after the first has been accounted. 
+        $pending = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
+        $pending_contrib = $pending > 0 ? $terminate - $pending : 0;
+        if ($pending_contrib) {
+            @inode_map[comm, tid, $value.0, $value.1, $value.2] = stats($pending_contrib);
+        }
+
+        delete(@inode_pending[comm, tid, $value.0, $value.1, $value.2]);
+        delete(@io_multi[tid, $i]);
+
+        $i++;
+        if ($i >= @fds[tid]) {
+            break;
+        }
+    }
+
+    delete(@fds[tid]);
+    delete(@io_multi_idx[tid]);
+}
+
 
 kretfunc:__fdget
 / @fds[tid] /
