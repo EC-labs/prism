@@ -647,6 +647,92 @@ kprobe:ep_item_poll*
     }
 }
 
+/*
+ * SELECT
+ *
+ * When a thread calls the select system call, we will account the time spent
+ * waiting for each file descriptor passed in as an argument to the calling
+ * thread.
+ *
+ * Maps:
+ *
+ * `@fds[<tid>]`: The number of file desrciptors passed in to the system call,
+ *     by the calling `<tid>` thread.
+ * `@io_multi_idx[<tid>]`: As thread `<tid>`'s select syscall calls `__fdget`
+ *     for each file, this map tracks the current index available.
+ * `@io_multi[<tid>, <idx>]`: For a given thread `<tid>` and index `<idx>`,
+ *     this map provides as value the files identifiers, i.e., file system
+ *     name, device id, and inode id.
+ * `@inode_pending[..]`: Stores the instant a thread started waiting for a
+ *     `(struct file *)`.
+ * `@inode_map[..]`: Computes the total time a thread waited for a 
+ *     `(struct file *)` since the last interval.
+ * `@files[..]`: Stores the files being monitored by the current program.
+ */
+
+kfunc:do_select
+/ @pids[pid] /
+{
+    @fds[tid] = args->n;
+    @io_multi_idx[tid] = 0;
+}
+
+kretfunc:do_select 
+/ @fds[tid] / 
+{
+    $terminate = nsecs;
+    $i = 0;
+    while ($i < 256) {
+        $value = @io_multi[tid, $i];
+
+        // In case there are multiple entries for the same (struct file *),
+        // `@inode_pending` will no longer have the `(struct file *)` entry
+        // after the first has been accounted. 
+        $pending = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
+        $pending_contrib = $pending > 0 ? $terminate - $pending : 0;
+        if ($pending_contrib) {
+            @inode_map[comm, tid, $value.0, $value.1, $value.2] = stats($pending_contrib);
+        }
+
+        delete(@inode_pending[comm, tid, $value.0, $value.1, $value.2]);
+        delete(@io_multi[tid, $i]);
+
+        $i++;
+        if ($i >= @fds[tid]) {
+            break;
+        }
+    }
+
+    delete(@fds[tid]);
+    delete(@io_multi_idx[tid]);
+}
+
+kretfunc:__fdget
+/ @fds[tid] /
+{
+    if (@io_multi_idx[tid] >= @fds[tid]) {
+        return;
+    }
+
+    $ret = retval;
+    $file = (struct file *) ($ret & (~3));
+    $fs_id = $file->f_inode->i_sb->s_id;
+    $s_dev = $file->f_inode->i_sb->s_dev;
+    $i_id = $file->f_inode->i_ino;
+
+    if(!@files[$s_dev, $i_id]) {
+        @files[$s_dev, $i_id] = 1;
+    }
+
+    @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
+    @io_multi[tid, @io_multi_idx[tid]] = ($fs_id, $s_dev, $i_id);
+    @io_multi_idx[tid]++;
+}
+
+/*
+ * POLL
+ */
+
 interval:s:1
 {
     printf("=> start map statistics\n");
