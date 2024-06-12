@@ -90,7 +90,6 @@ impl Collect for Ipc {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Stats {
     accumulated_wait: u64,
-    average_wait_ns: u64,
     count: u64,
 }
 
@@ -120,7 +119,6 @@ impl Pipes {
                 inode_id,
                 sample_instant_ns,
                 total_interval_wait_ns,
-                average_wait_ns,
                 count_wait,
                 ..
             } => {
@@ -134,11 +132,9 @@ impl Pipes {
                     .entry(target_file.clone())
                     .or_insert(Stats {
                         accumulated_wait: 0,
-                        average_wait_ns: 0,
                         count: 0,
                     });
                 stat.accumulated_wait += total_interval_wait_ns;
-                stat.average_wait_ns = average_wait_ns.unwrap_or(0);
                 stat.count = count_wait.unwrap_or(0);
                 let snapshots = self
                     .snapshots
@@ -160,7 +156,6 @@ impl Pipes {
                     .entry(target_file.clone())
                     .or_insert(Stats {
                         accumulated_wait: 0,
-                        average_wait_ns: 0,
                         count: 0,
                     });
                 self.active.insert(target_file, contrib_snapshot);
@@ -176,7 +171,6 @@ impl Pipes {
                         .entry(target_file.clone())
                         .or_insert(Stats {
                             accumulated_wait: 0,
-                            average_wait_ns: 0,
                             count: 0,
                         });
                     let diff = if (contrib_snapshot as i64 - add_snapshot as i64) < 0 {
@@ -213,7 +207,6 @@ impl Pipes {
                         .entry(target.clone())
                         .or_insert(Stats {
                             accumulated_wait: 0,
-                            average_wait_ns: 0,
                             count: 0,
                         });
                     let contrib =
@@ -279,7 +272,6 @@ impl Pipes {
                 let sample = StreamFileSample {
                     epoch_ms: epoch_ms as u128,
                     cumulative_wait: stat.accumulated_wait,
-                    average_wait_ns: stat.average_wait_ns,
                     count: stat.count,
                 };
 
@@ -408,7 +400,6 @@ impl Sockets {
                 inode_id,
                 sample_instant_ns,
                 total_interval_wait_ns,
-                average_wait_ns,
                 count_wait,
                 ..
             } => {
@@ -416,11 +407,9 @@ impl Sockets {
                 let kfile = (sb_id, inode_id);
                 let stat = self.kfile_stats_map.entry(kfile).or_insert(Stats {
                     accumulated_wait: 0,
-                    average_wait_ns: 0,
                     count: 0,
                 });
                 stat.accumulated_wait += total_interval_wait_ns;
-                stat.average_wait_ns = average_wait_ns.unwrap_or(0);
                 stat.count = count_wait.unwrap_or(0);
                 let snapshots = self
                     .snapshots
@@ -446,7 +435,6 @@ impl Sockets {
                 };
                 self.kfile_stats_map.entry(kfile).or_insert(Stats {
                     accumulated_wait: 0,
-                    average_wait_ns: 0,
                     count: 0,
                 });
                 self.active.insert(kfile, contrib_snapshot);
@@ -465,7 +453,6 @@ impl Sockets {
                 self.active.remove(&kfile).map(|add_snapshot| {
                     let stat = self.kfile_stats_map.entry(kfile).or_insert(Stats {
                         accumulated_wait: 0,
-                        average_wait_ns: 0,
                         count: 0,
                     });
                     stat.accumulated_wait += if (contrib_snapshot as i64 - add_snapshot as i64) < 0
@@ -498,7 +485,6 @@ impl Sockets {
                 for (kfile, add_time) in self.active.iter_mut() {
                     let stat = self.kfile_stats_map.entry(*kfile).or_insert(Stats {
                         accumulated_wait: 0,
-                        average_wait_ns: 0,
                         count: 0,
                     });
                     let contrib =
@@ -580,7 +566,6 @@ impl Sockets {
                 let sample = SocketSample {
                     epoch_ms: epoch_ms as u128,
                     cumulative_wait: stat.accumulated_wait,
-                    average_wait_ns: stat.average_wait_ns,
                     count: stat.count,
                 };
                 let file_path =
@@ -754,20 +739,19 @@ impl Collect for EventPollCollection {
 struct SocketSample {
     epoch_ms: u128,
     cumulative_wait: u64,
-    average_wait_ns: u64,
     count: u64,
 }
 
 impl ToCsv for SocketSample {
     fn to_csv_row(&self) -> String {
         format!(
-            "{},{},{},{}\n",
-            self.epoch_ms, self.cumulative_wait, self.average_wait_ns, self.count
+            "{},{},{}\n",
+            self.epoch_ms, self.cumulative_wait, self.count
         )
     }
 
     fn csv_headers(&self) -> &'static str {
-        "epoch_ms,socket_wait,average_wait_ns,count\n"
+        "epoch_ms,socket_wait,count\n"
     }
 }
 
@@ -789,20 +773,19 @@ impl ToCsv for StreamAggregatedSample {
 struct StreamFileSample {
     epoch_ms: u128,
     cumulative_wait: u64,
-    average_wait_ns: u64,
     count: u64,
 }
 
 impl ToCsv for StreamFileSample {
     fn to_csv_row(&self) -> String {
         format!(
-            "{},{},{},{}\n",
-            self.epoch_ms, self.cumulative_wait, self.average_wait_ns, self.count
+            "{},{},{}\n",
+            self.epoch_ms, self.cumulative_wait, self.count
         )
     }
 
     fn csv_headers(&self) -> &'static str {
-        "epoch_ms,stream_wait,average_wait_ns,count\n"
+        "epoch_ms,stream_wait,count\n"
     }
 }
 
@@ -843,13 +826,13 @@ mod tests {
                 AcceptEnd       example-applica 24239   sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
-                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 2848, total 2848
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: (2848, 1)
 
                 SampleInstant   19447107025962
                 => end map statistics
 
                 => start map statistics
-                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 43106, total 43106
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: (43106, 1)
 
                 SampleInstant   19448107034740
                 => end map statistics
@@ -878,7 +861,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: 2848,
-                        average_wait_ns: 2848,
                         count: 1
                     }
                 ))
@@ -889,7 +871,6 @@ mod tests {
                     Some(19448107034740),
                     Stats {
                         accumulated_wait: 2848 + 43106,
-                        average_wait_ns: 43106,
                         count: 1
                     }
                 ))
@@ -912,13 +893,13 @@ mod tests {
                 AcceptEnd       example-applica 24239   sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
-                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 2848, total 2848
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: (2848, 1)
 
                 SampleInstant   19447107025962
                 => end map statistics
 
                 => start map statistics
-                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 43106, total 43106
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: (43106, 1)
 
                 SampleInstant   19448107034740
                 => end map statistics
@@ -945,9 +926,9 @@ mod tests {
             ))?;
             assert_eq!(
                 indoc! {"
-                epoch_ms,socket_wait,average_wait_ns,count
-                19447107,2848,2848,1
-                19448107,45954,43106,1
+                epoch_ms,socket_wait,count
+                19447107,2848,1
+                19448107,45954,1
             "},
                 contents
             );
@@ -993,13 +974,13 @@ mod tests {
                 AcceptEnd       example-applica 24239   devpts  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
-                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 2848, total 2848
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: (2848, 1)
 
                 SampleInstant   19447107025962
                 => end map statistics
 
                 => start map statistics
-                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 43106, total 43106
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: (43106, 1)
 
                 SampleInstant   19448107034740
                 => end map statistics
@@ -1031,7 +1012,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: 2848,
-                        average_wait_ns: 2848,
                         count: 1
                     }
                 ))
@@ -1042,7 +1022,6 @@ mod tests {
                     Some(19448107034740),
                     Stats {
                         accumulated_wait: 2848 + 43106,
-                        average_wait_ns: 43106,
                         count: 1
                     }
                 ))
@@ -1064,13 +1043,13 @@ mod tests {
                 AcceptEnd       example-applica 24239   devpts  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
-                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 2848, total 2848
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: (2848, 1)
 
                 SampleInstant   19447107025962
                 => end map statistics
 
                 => start map statistics
-                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 43106, total 43106
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: (43106, 1)
 
                 SampleInstant   19448107034740
                 => end map statistics
@@ -1098,9 +1077,9 @@ mod tests {
             ))?;
             assert_eq!(
                 indoc! {"
-                    epoch_ms,stream_wait,average_wait_ns,count
-                    19447107,2848,2848,1
-                    19448107,45954,43106,1
+                    epoch_ms,stream_wait,count
+                    19447107,2848,1
+                    19448107,45954,1
                 "},
                 contents
             );
@@ -1172,7 +1151,6 @@ mod tests {
                     None,
                     Stats {
                         accumulated_wait: 578800067,
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1228,7 +1206,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: 578800067,
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1285,7 +1262,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1345,7 +1321,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1358,7 +1333,6 @@ mod tests {
                         accumulated_wait: (1016301358 - 437501291)
                             + (289679399 - 200000000)
                             + (1016301358 - 437501291),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1423,7 +1397,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1436,7 +1409,6 @@ mod tests {
                         accumulated_wait: (1016301358 - 437501291)
                             + (289679399 - 200000000)
                             + (1016301358 - 437501291),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1503,9 +1475,9 @@ mod tests {
             assert_eq!(
                 contents,
                 indoc! {"
-                    epoch_ms,socket_wait,average_wait_ns,count
-                    19447107,668479466,0,0
-                    19448107,1247279533,0,0
+                    epoch_ms,socket_wait,count
+                    19447107,668479466,0
+                    19448107,1247279533,0
                 "}
             );
 
@@ -1581,7 +1553,6 @@ mod tests {
                     None,
                     Stats {
                         accumulated_wait: 578800067,
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1639,7 +1610,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: 578800067,
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1698,7 +1668,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1760,7 +1729,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1773,7 +1741,6 @@ mod tests {
                         accumulated_wait: (1016301358 - 437501291)
                             + (289679399 - 200000000)
                             + (1016301358 - 437501291),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1840,7 +1807,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1853,7 +1819,6 @@ mod tests {
                         accumulated_wait: (1016301358 - 437501291)
                             + (289679399 - 200000000)
                             + (1016301358 - 437501291),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1919,9 +1884,9 @@ mod tests {
             assert_eq!(
                 contents,
                 indoc! {"
-                    epoch_ms,stream_wait,average_wait_ns,count
-                    19447107,668479466,0,0
-                    19448107,1247279533,0,0
+                    epoch_ms,stream_wait,count
+                    19447107,668479466,0
+                    19448107,1247279533,0
                 "}
             );
 

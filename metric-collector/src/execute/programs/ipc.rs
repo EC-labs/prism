@@ -94,7 +94,6 @@ pub enum IpcBpfEvent {
         sb_id: u32,
         inode_id: u64,
         count: u64,
-        average_ns: u64,
         total_ns: u64,
     },
     InodeMapPending {
@@ -149,15 +148,12 @@ impl IpcBpfEvent {
                 let key = cap_iter.next().unwrap().unwrap().as_str();
                 let mut key_elements = key.split(", ");
 
-                fn stat_value_to_u64(value: &str) -> u64 {
-                    value.split(" ").nth(1).unwrap().parse().unwrap()
-                }
                 let value = cap_iter.next().unwrap().unwrap().as_str();
+                let value = &value[1..value.len() - 1];
                 let mut value_elements = value.split(", ");
 
-                let count_ns = stat_value_to_u64(value_elements.next().unwrap());
-                let average_ns = stat_value_to_u64(value_elements.next().unwrap());
-                let total_ns = stat_value_to_u64(value_elements.next().unwrap());
+                let total_ns = value_elements.next().unwrap().parse().unwrap();
+                let count = value_elements.next().unwrap().parse().unwrap();
 
                 Ok(Self::InodeMapCached {
                     comm: Rc::from(key_elements.next().unwrap()),
@@ -165,9 +161,8 @@ impl IpcBpfEvent {
                     fs_type: Rc::from(key_elements.next().unwrap()),
                     sb_id: key_elements.next().unwrap().parse().unwrap(),
                     inode_id: key_elements.next().unwrap().parse().unwrap(),
-                    count: count_ns,
-                    average_ns,
                     total_ns,
+                    count,
                 })
             }
             "inode_pending" => {
@@ -440,7 +435,6 @@ pub enum IpcEvent {
         inode_id: u64,
         sample_instant_ns: u64,
         total_interval_wait_ns: u64,
-        average_wait_ns: Option<u64>,
         count_wait: Option<u64>,
     },
 }
@@ -478,7 +472,6 @@ impl IpcEvent {
                     sb_id,
                     inode_id,
                     total_ns,
-                    average_ns,
                     count,
                 }),
                 Some(IpcBpfEvent::InodeMapPending { ns_since_boot, .. }),
@@ -503,7 +496,6 @@ impl IpcEvent {
                     inode_id,
                     sample_instant_ns: current_instant_ns,
                     total_interval_wait_ns: cached + pending,
-                    average_wait_ns: Some(average_ns),
                     count_wait: Some(count),
                 })
             }
@@ -515,7 +507,6 @@ impl IpcEvent {
                     sb_id,
                     inode_id,
                     total_ns,
-                    average_ns,
                     count,
                 }),
                 None,
@@ -527,7 +518,6 @@ impl IpcEvent {
                 inode_id,
                 sample_instant_ns: current_instant_ns,
                 total_interval_wait_ns: total_ns,
-                average_wait_ns: Some(average_ns),
                 count_wait: Some(count),
             }),
             (
@@ -559,7 +549,6 @@ impl IpcEvent {
                     inode_id,
                     sample_instant_ns: current_instant_ns,
                     total_interval_wait_ns: pending,
-                    average_wait_ns: None,
                     count_wait: None,
                 })
             }
@@ -1089,7 +1078,7 @@ mod tests {
 
         #[test]
         fn inode_map() -> Result<()> {
-            let line = "@inode_map[tokio-runtime-w, 1257489, devpts, 24, 8]: count 1, average 25617349, total 25617349";
+            let line = "@inode_map[tokio-runtime-w, 1257489, devpts, 24, 8]: (25617349, 1)";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
 
             if let IpcBpfEvent::InodeMapCached {
@@ -1098,8 +1087,7 @@ mod tests {
                 fs_type,
                 sb_id,
                 inode_id,
-                count: count_ns,
-                average_ns,
+                count,
                 total_ns,
             } = event
             {
@@ -1108,8 +1096,7 @@ mod tests {
                 assert_eq!(fs_type, Rc::from("devpts"));
                 assert_eq!(sb_id, 24);
                 assert_eq!(inode_id, 8);
-                assert_eq!(count_ns, 1);
-                assert_eq!(average_ns, 25617349);
+                assert_eq!(count, 1);
                 assert_eq!(total_ns, 25617349);
             } else {
                 return Err(eyre!("Incorrect bpf event"));
