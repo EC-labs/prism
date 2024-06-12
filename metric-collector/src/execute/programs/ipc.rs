@@ -92,7 +92,7 @@ pub enum IpcBpfEvent {
         tid: usize,
         fs_type: Rc<str>,
         sb_id: u32,
-        inode_id: u64,
+        inode_id: i64,
         count: u64,
         total_ns: u64,
     },
@@ -101,7 +101,7 @@ pub enum IpcBpfEvent {
         tid: usize,
         fs_type: Rc<str>,
         sb_id: u32,
-        inode_id: u64,
+        inode_id: i64,
         ns_since_boot: u64,
     },
     EpollMapCached {
@@ -121,6 +121,7 @@ pub enum IpcBpfEvent {
 pub enum TargetFile {
     AnonInode { name: Rc<str>, address: u64 },
     Inode { device: u32, inode_id: u64 },
+    Epoll { address: u64 },
 }
 
 impl IpcBpfEvent {
@@ -158,7 +159,7 @@ impl IpcBpfEvent {
                 Ok(Self::InodeMapCached {
                     comm: Rc::from(key_elements.next().unwrap()),
                     tid: key_elements.next().unwrap().parse().unwrap(),
-                    fs_type: Rc::from(key_elements.next().unwrap()),
+                    fs_type: Rc::from(key_elements.next().unwrap().trim()),
                     sb_id: key_elements.next().unwrap().parse().unwrap(),
                     inode_id: key_elements.next().unwrap().parse().unwrap(),
                     total_ns,
@@ -173,7 +174,7 @@ impl IpcBpfEvent {
                 Ok(Self::InodeMapPending {
                     comm: Rc::from(key_elements.next().unwrap()),
                     tid: key_elements.next().unwrap().parse().unwrap(),
-                    fs_type: Rc::from(key_elements.next().unwrap()),
+                    fs_type: Rc::from(key_elements.next().unwrap().trim()),
                     sb_id: key_elements.next().unwrap().parse().unwrap(),
                     inode_id: key_elements.next().unwrap().parse().unwrap(),
                     ns_since_boot: value.parse().unwrap(),
@@ -432,7 +433,7 @@ pub enum IpcEvent {
         tid: usize,
         fs_type: Rc<str>,
         sb_id: u32,
-        inode_id: u64,
+        inode_id: i64,
         sample_instant_ns: u64,
         total_interval_wait_ns: u64,
         count_wait: Option<u64>,
@@ -758,7 +759,7 @@ enum StatsClosureKey {
         comm: Rc<str>,
         tid: usize,
         device: u32,
-        inode_id: u64,
+        inode_id: i64,
     },
     EventPoll {
         address: u64,

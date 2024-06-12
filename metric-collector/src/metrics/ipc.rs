@@ -115,6 +115,7 @@ impl Pipes {
     fn process_event(&mut self, event: IpcEvent) -> Result<()> {
         match event {
             IpcEvent::InodeWait {
+                fs_type,
                 sb_id,
                 inode_id,
                 sample_instant_ns,
@@ -123,9 +124,14 @@ impl Pipes {
                 ..
             } => {
                 let sample_instant_epoch_ns = boot_to_epoch(sample_instant_ns as u128);
-                let target_file = TargetFile::Inode {
-                    device: sb_id,
-                    inode_id,
+                let target_file = match &*fs_type {
+                    "epoll" => TargetFile::Epoll {
+                        address: u64::from_ne_bytes((inode_id as i64).to_ne_bytes()),
+                    },
+                    _ => TargetFile::Inode {
+                        device: sb_id,
+                        inode_id: inode_id as u64,
+                    },
                 };
                 let stat = self
                     .stream_stats_map
@@ -294,6 +300,14 @@ impl Pipes {
                             address,
                         )
                     }
+                    TargetFile::Epoll { address } => {
+                        format!(
+                            "{}/streams/{:?}/epoll_{:x}.csv",
+                            self.target_subdirectory,
+                            (epoch_ms / (1000 * 60)) * 60,
+                            address,
+                        )
+                    }
                 };
 
                 let mut file = Self::get_or_create_file(
@@ -404,7 +418,7 @@ impl Sockets {
                 ..
             } => {
                 let sample_instant_epoch_ns = boot_to_epoch(sample_instant_ns as u128);
-                let kfile = (sb_id, inode_id);
+                let kfile = (sb_id, inode_id as u64);
                 let stat = self.kfile_stats_map.entry(kfile).or_insert(Stats {
                     accumulated_wait: 0,
                     count: 0,
@@ -791,26 +805,31 @@ impl ToCsv for StreamFileSample {
 
 #[cfg(test)]
 mod tests {
-    mod ipc_sockets {
-        use eyre::Result;
-        use indoc::indoc;
-        use std::{
-            cell::RefCell,
-            collections::HashMap,
-            env::temp_dir,
-            fs,
-            io::prelude::*,
-            rc::Rc,
-            sync::{Arc, Mutex},
-        };
+    use eyre::Result;
+    use indoc::indoc;
+    use std::{
+        cell::RefCell,
+        collections::HashMap,
+        env::temp_dir,
+        fs,
+        io::prelude::*,
+        rc::Rc,
+        sync::{Arc, Mutex},
+    };
 
-        use crate::{
-            execute::programs::{ipc::IpcProgram, pipe},
-            metrics::{
-                ipc::{Ipc, Stats},
-                Collect,
-            },
-        };
+    use crate::{
+        execute::programs::{
+            ipc::{IpcProgram, TargetFile},
+            pipe,
+        },
+        metrics::{
+            ipc::{EventPollCollection, Ipc, Stats},
+            Collect,
+        },
+    };
+
+    mod ipc_sockets {
+        use super::*;
 
         #[test]
         fn socket_two_consecutive_inode_samples() -> Result<()> {
@@ -938,28 +957,7 @@ mod tests {
     }
 
     mod ipc_pipes {
-        use eyre::Result;
-        use indoc::indoc;
-        use std::{
-            cell::RefCell,
-            collections::HashMap,
-            env::temp_dir,
-            fs,
-            io::prelude::*,
-            rc::Rc,
-            sync::{Arc, Mutex},
-        };
-
-        use crate::{
-            execute::programs::{
-                ipc::{IpcProgram, TargetFile},
-                pipe,
-            },
-            metrics::{
-                ipc::{Ipc, Stats},
-                Collect,
-            },
-        };
+        use super::*;
 
         #[test]
         fn socket_two_consecutive_inode_samples() -> Result<()> {
@@ -1089,25 +1087,7 @@ mod tests {
     }
 
     mod eventpoll_sockets {
-        use eyre::Result;
-        use indoc::indoc;
-        use std::{
-            cell::RefCell,
-            collections::HashMap,
-            env::temp_dir,
-            fs,
-            io::prelude::*,
-            rc::Rc,
-            sync::{Arc, Mutex},
-        };
-
-        use crate::{
-            execute::programs::{ipc::IpcProgram, pipe},
-            metrics::{
-                ipc::{EventPollCollection, Stats},
-                Collect,
-            },
-        };
+        use super::*;
 
         #[test]
         fn socket_empty_snapshot() -> Result<()> {
@@ -1486,28 +1466,7 @@ mod tests {
     }
 
     mod eventpoll_pipes {
-        use eyre::Result;
-        use indoc::indoc;
-        use std::{
-            cell::RefCell,
-            collections::HashMap,
-            env::temp_dir,
-            fs,
-            io::prelude::*,
-            rc::Rc,
-            sync::{Arc, Mutex},
-        };
-
-        use crate::{
-            execute::programs::{
-                ipc::{IpcProgram, TargetFile},
-                pipe,
-            },
-            metrics::{
-                ipc::{EventPollCollection, Stats},
-                Collect,
-            },
-        };
+        use super::*;
 
         #[test]
         fn empty_snapshot() -> Result<()> {
@@ -1892,5 +1851,88 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn epoll_inode() -> Result<()> {
+        let (rx, mut tx) = pipe();
+        let ipc_program = Rc::new(RefCell::new(
+            IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+        ));
+
+        let bpf_content = indoc! {"
+            HEADER
+
+            NewSocketMap    sockfs  8       2519815 127.0.0.1       60958   127.0.0.1       7878
+            EpollAdd        epoll_server    357171  0xffff96892f1e7b00      sockfs  8       2519815 521457873233008 861999000
+
+            => start map statistics
+            @inode_map[epoll_server, 357171,                           epoll, 0, -115959031497984]: (862007004, 12)
+            @inode_pending[epoll_server, 357171,                           epoll, 0, -115959031497984]: 521457873417016
+
+            @epoll_map[0xffff96892f1e7b00]: 861999871
+            @epoll_pending[0xffff96892f1e7b00]: 521457873417016
+            SampleInstant   521457925386742
+            => end map statistics
+        "};
+        tx.write_all(bpf_content.as_bytes())?;
+        while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+        let tmp_dir = tempdir::TempDir::new("")?;
+        let mut event_polls = EventPollCollection::new(
+            ipc_program.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+        );
+
+        event_polls.sample()?;
+        event_polls.store()?;
+
+        let event_poll = event_polls
+            .event_poll_map
+            .remove(&(0xffff96892f1e7b00 as u64));
+        assert!(event_poll.is_some());
+
+        let event_poll = event_poll.unwrap();
+        let snapshots = event_poll.sockets.snapshots;
+        assert!(snapshots.len() == 0);
+
+        let contents = fs::read_to_string(format!(
+            "{}/global/epoll/ffff96892f1e7b00/sockets/521400/127.0.0.1:60958_127.0.0.1:7878.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            contents,
+            indoc! {"
+                epoch_ms,socket_wait,count
+                521457925,51970597,0
+            "}
+        );
+
+        let mut ipc = Ipc::new(
+            ipc_program.clone(),
+            357171,
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+            "thread/357171/357171",
+            Rc::new(RefCell::new(HashMap::new())),
+        );
+
+        ipc.sample()?;
+        ipc.store()?;
+
+        assert!(ipc.pipes.snapshots.len() == 0);
+        let contents = fs::read_to_string(format!(
+            "{}/thread/357171/357171/ipc/streams/521400/epoll_ffff96892f1e7b00.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            indoc! {"
+                epoch_ms,stream_wait,count
+                521457925,913976730,12
+            "},
+            contents
+        );
+
+        Ok(())
     }
 }
