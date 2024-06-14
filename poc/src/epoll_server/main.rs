@@ -36,7 +36,7 @@ async fn main() -> Result<(), std::io::Error> {
     let app = Route::new().at("/api", get(hello)).with(Tracing);
     let mut handles = [
         tokio::spawn(
-            Server::new(TcpListener::bind("0.0.0.0:3001"))
+            Server::new(TcpListener::bind("[::1]:3001"))
                 .name("hello-world")
                 .run(app),
         ),
