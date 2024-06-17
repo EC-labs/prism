@@ -23,6 +23,10 @@ path = "src/pipe/main.rs"
 name = "fs-sync"
 path = "src/fs-sync/src/main.rs"
 
+[[bin]]
+name = "unix-pair"
+path = "src/unix_sock/socketpair.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"]}
 poem = "1.2"
