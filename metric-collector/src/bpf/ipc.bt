@@ -105,8 +105,11 @@ kfunc:vmlinux:vfs_read
         $s_dev = $inode->i_sb->s_dev;
         $fs_id = $inode->i_sb->s_id;
 
-        printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
-               "UnhandledFileMode", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+        if (!@unhandled_files[$fs_id, $s_dev, $i_id]) {
+            @unhandled_files[$fs_id, $s_dev, $i_id] = 1;
+            printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
+                   "UnhandledFileMode", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+        }
     }
 }
 
@@ -171,8 +174,11 @@ kfunc:vmlinux:vfs_write
         $s_dev = $inode->i_sb->s_dev;
         $fs_id = $inode->i_sb->s_id;
 
-        printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
-               "UnhandledFileMode", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+        if (!@unhandled_files[$fs_id, $s_dev, $i_id]) {
+            @unhandled_files[$fs_id, $s_dev, $i_id] = 1;
+            printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
+                   "UnhandledFileMode", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+        }
     }
 }
 
@@ -205,19 +211,34 @@ kretfunc:vmlinux:vfs_write
 /*
  * SOCKETS
  */
-kfunc:vmlinux:tcp_connect
+kfunc:vmlinux:__sys_connect_file
 {
     if (!@pids[pid]) {
         return;
     }
 
-    $sk = args->sk;
+    $nsecs = nsecs;
+    printf("%-15s\t%s\t%lld\t%lld\n", 
+           "ConnectStart", comm, tid, $nsecs);
+    @start_sock[tid] = $nsecs;
+}
+
+
+kretfunc:vmlinux:__sys_connect_file
+/ @start_sock[tid] /
+{
+    $sock = (struct socket *) args->file->private_data;
+    $sk = $sock->sk;
     $inet_family = $sk->__sk_common.skc_family;
 
     $inode = $sk->sk_socket->file->f_inode;
     $i_id = $inode->i_ino;
     $s_dev = $inode->i_sb->s_dev;
     $fs_id = $inode->i_sb->s_id;
+
+    $nsecs = nsecs;
+    $diff = $nsecs - @start_sock[tid];
+    delete(@start_sock[tid]);
 
     if ($inet_family == AF_INET) {
         $daddr = ntop($sk->__sk_common.skc_daddr);
@@ -235,8 +256,8 @@ kfunc:vmlinux:tcp_connect
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
 
-        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\n", 
-               "ConnectStart", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\t%lld\n", 
+               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, $nsecs, $diff);
     } else if ($inet_family == AF_INET6) {
         $daddr = ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8);
         $saddr = ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8);
@@ -253,20 +274,30 @@ kfunc:vmlinux:tcp_connect
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
 
-        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\n", 
-               "ConnectStart", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\t%lld\n", 
+               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, $nsecs, $diff);
+    } else if ($inet_family == AF_UNIX) {
+        $unix_sock = (struct unix_sock *) $sk - offsetof(struct unix_sock, sk);
+        $peer = $unix_sock->peer;
+
+        @socks_unix[$sk, $peer] = 1;
+
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%p\t%p\t%lld\t%lld\n", 
+               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer, $nsecs, $diff);
+    } else {
+        if (!@unhandled_sock[$fs_id, $s_dev, $i_id]) {
+            @unhandled_sock[$fs_id, $s_dev, $i_id] = 1;
+            printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%d\n",
+                   "UnhandledSockFam", comm, tid, $fs_id, $s_dev, $i_id, $inet_family);
+        }
     }
 
-    @start_sock[tid] = nsecs;
-}
-
-
-kretfunc:vmlinux:tcp_connect
-/ @start_sock[tid] /
-{
-    printf("%-15s\t%s\t%lld\t%lld\n",
-           "ConnectEnded", comm, tid, nsecs - @start_sock[tid]);
-    delete(@start_sock[tid]);
 }
 
 kfunc:vmlinux:do_accept 
@@ -291,7 +322,16 @@ kfunc:vmlinux:do_accept
 
         printf("%-15s\t%s\t%lld\t%s\t%d\n", 
                "AcceptStart", comm, tid, $saddr, $lport);
-    }
+    } else if ($inet_family == AF_UNIX) {
+        $inode = $sk->sk_socket->file->f_inode;
+        $i_id = $inode->i_ino;
+
+        // For lack of better description of what socket we are accepting on,
+        // we opt for the socket's inode id, which is the field that appears
+        // when listing a process' files in procfs.
+        printf("%-15s\t%s\t%lld\t%s\t%s\t%lld\n", 
+               "AcceptStart", comm, tid, "AF_UNIX", "socket", $i_id);
+    } 
 
     @start_sock[tid] = nsecs;
 }
@@ -345,8 +385,28 @@ kretfunc:vmlinux:do_accept
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
 
-        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n", 
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n",
                "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, nsecs);
+    } else if ($inet_family == AF_UNIX) {
+        $unix_sock = (struct unix_sock *) $sk - offsetof(struct unix_sock, sk);
+        $peer = $unix_sock->peer;
+
+        @socks_unix[$sk, $peer] = 1;
+
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%p\t%p\t%lld\n", 
+               "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer, nsecs);
+    } else {
+        if (!@unhandled_sock[$fs_id, $s_dev, $i_id]) {
+            @unhandled_sock[$fs_id, $s_dev, $i_id] = 1;
+            printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%d\n",
+                   "UnhandledSockFam", comm, tid, $fs_id, $s_dev, $i_id, $inet_family);
+        }
     }
 
     delete(@start_sock[tid]);
@@ -651,7 +711,7 @@ kretfunc:vmlinux:inet6_sendmsg
     delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
 }
 
-kfunc:vmlinux:unix_stream_sendmsg
+kfunc:vmlinux:unix*sendmsg
 {
     $inode = (struct inode *)args->sock->file->f_inode;
     $i_id = $inode->i_ino;
