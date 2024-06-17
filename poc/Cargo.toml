@@ -27,8 +27,13 @@ path = "src/fs-sync/src/main.rs"
 name = "unix-pair"
 path = "src/unix_sock/socketpair.rs"
 
+[[bin]]
+name = "unix-accept-connect"
+path = "src/unix_sock/accept_connect.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"]}
 poem = "1.2"
 reqwest = { version = "0.11", features = ["json"] }
 libc = "0.2.153"
+nix = { version = "0.28.0", features = ["process"] }

@@ -1075,6 +1075,7 @@ name = "poc"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "nix 0.28.0",
  "poem",
  "reqwest",
  "tokio",
