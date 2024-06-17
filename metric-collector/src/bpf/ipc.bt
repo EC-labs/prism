@@ -227,6 +227,10 @@ kfunc:vmlinux:__sys_connect_file
 kretfunc:vmlinux:__sys_connect_file
 / @start_sock[tid] /
 {
+    if (retval < 0) {
+        return;
+    }
+
     $sock = (struct socket *) args->file->private_data;
     $sk = $sock->sk;
     $inet_family = $sk->__sk_common.skc_family;
@@ -251,13 +255,13 @@ kretfunc:vmlinux:__sys_connect_file
         @socks_ipv4[$saddr, $lport, $daddr, $dport] = 1;
 
         if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-                   "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
 
-        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\t%lld\n", 
-               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, $nsecs, $diff);
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\t%lld\n", 
+               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport, $nsecs, $diff);
     } else if ($inet_family == AF_INET6) {
         $daddr = ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8);
         $saddr = ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8);
@@ -269,13 +273,13 @@ kretfunc:vmlinux:__sys_connect_file
         @socks_ipv6[$saddr, $lport, $daddr, $dport] = 1;
 
         if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-                   "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
 
-        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\t%lld\n", 
-               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, $nsecs, $diff);
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\t%lld\n", 
+               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport, $nsecs, $diff);
     } else if ($inet_family == AF_UNIX) {
         $unix_sock = (struct unix_sock *) $sk - offsetof(struct unix_sock, sk);
         $peer = $unix_sock->peer;
@@ -308,23 +312,23 @@ kfunc:vmlinux:do_accept
 
     $socket = (struct socket *)args->file->private_data;
     $sk = $socket->sk;
+    $inode = $sk->sk_socket->file->f_inode;
+    $i_id = $inode->i_ino;
 	$inet_family = $sk->__sk_common.skc_family;
     
     if ($inet_family == AF_INET) {
         $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
         $lport = $sk->__sk_common.skc_num;
 
-        printf("%-15s\t%s\t%lld\t%s\t%d\n", 
-               "AcceptStart", comm, tid, $saddr, $lport);
+        printf("%-15s\t%s\t%lld\t%s\t%lld\t%s\t%d\n", 
+               "AcceptStart", comm, tid, "AF_INET", $i_id, $saddr, $lport);
     } else if ($inet_family == AF_INET6) {
         $saddr = ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8);
         $lport = $sk->__sk_common.skc_num;
 
-        printf("%-15s\t%s\t%lld\t%s\t%d\n", 
-               "AcceptStart", comm, tid, $saddr, $lport);
+        printf("%-15s\t%s\t%lld\t%s\t%lld\t%s\t%d\n", 
+               "AcceptStart", comm, tid, "AF_INET6", $i_id, $saddr, $lport);
     } else if ($inet_family == AF_UNIX) {
-        $inode = $sk->sk_socket->file->f_inode;
-        $i_id = $inode->i_ino;
 
         // For lack of better description of what socket we are accepting on,
         // we opt for the socket's inode id, which is the field that appears
@@ -343,6 +347,10 @@ kretfunc:vmlinux:do_accept
     }
 
     $sock = (struct socket *) retval->private_data;
+    if (($sock == 0) || !@start_sock[tid]) {
+        return; 
+    }
+
     $sk = $sock->sk;
 	$inet_family = $sk->__sk_common.skc_family;
 
@@ -362,13 +370,13 @@ kretfunc:vmlinux:do_accept
         @socks_ipv4[$saddr, $lport, $daddr, $dport] = 1;
 
         if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-                   "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
 
-        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n", 
-               "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, nsecs);
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\n", 
+               "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport, nsecs);
 	} else if ($inet_family == AF_INET6) {
         $daddr = ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8);
         $saddr = ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8);
@@ -380,13 +388,13 @@ kretfunc:vmlinux:do_accept
         @socks_ipv6[$saddr, $lport, $daddr, $dport] = 1;
 
         if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-                   "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
 
-        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n",
-               "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, nsecs);
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\n",
+               "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport, nsecs);
     } else if ($inet_family == AF_UNIX) {
         $unix_sock = (struct unix_sock *) $sk - offsetof(struct unix_sock, sk);
         $peer = $unix_sock->peer;
@@ -451,8 +459,8 @@ kfunc:vmlinux:sock_recvmsg
         }
 
         if (@pids[pid] && !@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-                   "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
     } else if ($inet_family == AF_INET6) {
@@ -483,8 +491,8 @@ kfunc:vmlinux:sock_recvmsg
         }
 
         if (!@kfile_socket[$fs_id, $s_dev, $i_id] && @pids[pid]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-                   "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
     } else if ($inet_family == AF_UNIX) {
@@ -594,8 +602,8 @@ kfunc:vmlinux:inet_sendmsg
         }
 
         if (@pids[pid] && !@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-                   "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
     }
@@ -671,8 +679,8 @@ kfunc:vmlinux:inet6_sendmsg
         }
 
         if (!@kfile_socket[$fs_id, $s_dev, $i_id] && @pids[pid]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-                   "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
     }
@@ -763,7 +771,7 @@ kfunc:vmlinux:unix*sendmsg
     @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
 }
 
-kretfunc:vmlinux:unix_stream_sendmsg
+kretfunc:vmlinux:unix*sendmsg
 {
     $inode = (struct inode *)args->sock->file->f_inode;
     $i_id = $inode->i_ino;
@@ -1106,6 +1114,7 @@ kretfunc:__fdget
  * POLL
  */
 
+
 interval:s:1
 {
     printf("=> start map statistics\n");
@@ -1131,5 +1140,6 @@ END
     clear(@pids);
     clear(@socks_ipv4);
     clear(@socks_ipv6);
-    clear(@kfile_socket)
+    clear(@socks_unix);
+    clear(@kfile_socket);
 }
