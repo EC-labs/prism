@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     io::Read,
     mem,
-    net::Ipv4Addr,
+    net::{Ipv4Addr, Ipv6Addr},
     process::{Child, Command},
     rc::Rc,
     str::FromStr,
@@ -17,6 +17,26 @@ use std::{
 
 use crate::execute::BpfReader;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Connection {
+    Ipv4 {
+        src_host: Ipv4Addr,
+        src_port: u64,
+        dst_host: Ipv4Addr,
+        dst_port: u64,
+    },
+    Ipv6 {
+        src_host: Ipv6Addr,
+        src_port: u64,
+        dst_host: Ipv6Addr,
+        dst_port: u64,
+    },
+    Unix {
+        src_address: u64,
+        dst_address: u64,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum IpcBpfEvent {
     NoOp,
@@ -28,10 +48,7 @@ pub enum IpcBpfEvent {
         fs_type: Rc<str>,
         sb_id: u32,
         inode_id: u64,
-        src_host: Ipv4Addr,
-        src_port: u64,
-        dst_host: Ipv4Addr,
-        dst_port: u64,
+        conn: Connection,
     },
     AcceptEnd {
         comm: Rc<str>,
@@ -39,22 +56,33 @@ pub enum IpcBpfEvent {
         fs_type: Rc<str>,
         sb_id: u32,
         inode_id: u64,
-        src_host: Ipv4Addr,
-        src_port: u64,
-        dst_host: Ipv4Addr,
-        dst_port: u64,
+        conn: Connection,
     },
-    ConnectStart {
+    ConnectEnd {
         comm: Rc<str>,
         tid: usize,
         fs_type: Rc<str>,
         sb_id: u32,
         inode_id: u64,
-        src_host: Ipv4Addr,
-        src_port: u64,
-        dst_host: Ipv4Addr,
-        dst_port: u64,
+        conn: Connection,
     },
+    UnhandledFileMode {
+        comm: Rc<str>,
+        tid: usize,
+        fs: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        mode: u64,
+    },
+    UnhandledSockFam {
+        comm: Rc<str>,
+        tid: usize,
+        fs: Rc<str>,
+        sb_id: u32,
+        inode_id: u64,
+        family: u32,
+    },
+
     EpollItemAdd {
         comm: Rc<str>,
         tid: usize,
@@ -221,28 +249,90 @@ impl IpcBpfEvent {
     fn from_trace_string(event_string: &str) -> Result<Self> {
         let mut elements = event_string.split_whitespace();
         let event = match elements.next().unwrap() {
-            "AcceptEnd" => Self::AcceptEnd {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                fs_type: Rc::from(elements.next().unwrap()),
-                sb_id: elements.next().unwrap().parse().unwrap(),
-                inode_id: elements.next().unwrap().parse().unwrap(),
-                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                src_port: elements.next().unwrap().parse().unwrap(),
-                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                dst_port: elements.next().unwrap().parse().unwrap(),
-            },
-            "ConnectStart" => Self::ConnectStart {
-                comm: Rc::from(elements.next().unwrap()),
-                tid: elements.next().unwrap().parse().unwrap(),
-                fs_type: Rc::from(elements.next().unwrap()),
-                sb_id: elements.next().unwrap().parse().unwrap(),
-                inode_id: elements.next().unwrap().parse().unwrap(),
-                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                src_port: elements.next().unwrap().parse().unwrap(),
-                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                dst_port: elements.next().unwrap().parse().unwrap(),
-            },
+            "AcceptEnd" => {
+                let comm = Rc::from(elements.next().unwrap());
+                let tid = elements.next().unwrap().parse().unwrap();
+                let fs_type = Rc::from(elements.next().unwrap());
+                let sb_id = elements.next().unwrap().parse().unwrap();
+                let inode_id = elements.next().unwrap().parse().unwrap();
+                let conn = match elements.next().unwrap() {
+                    "AF_INET" => Connection::Ipv4 {
+                        src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                        src_port: elements.next().unwrap().parse().unwrap(),
+                        dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                        dst_port: elements.next().unwrap().parse().unwrap(),
+                    },
+                    "AF_INET6" => Connection::Ipv6 {
+                        src_host: Ipv6Addr::from_str(elements.next().unwrap()).unwrap(),
+                        src_port: elements.next().unwrap().parse().unwrap(),
+                        dst_host: Ipv6Addr::from_str(elements.next().unwrap()).unwrap(),
+                        dst_port: elements.next().unwrap().parse().unwrap(),
+                    },
+                    "AF_UNIX" => Connection::Unix {
+                        src_address: u64::from_str_radix(
+                            elements.next().unwrap().trim_start_matches("0x"),
+                            16,
+                        )
+                        .unwrap(),
+                        dst_address: u64::from_str_radix(
+                            elements.next().unwrap().trim_start_matches("0x"),
+                            16,
+                        )
+                        .unwrap(),
+                    },
+                    _ => return Err(eyre!("Unexpected socket family type")),
+                };
+                Self::AcceptEnd {
+                    comm,
+                    tid,
+                    fs_type,
+                    sb_id,
+                    inode_id,
+                    conn,
+                }
+            }
+            "ConnectEnd" => {
+                let comm = Rc::from(elements.next().unwrap());
+                let tid = elements.next().unwrap().parse().unwrap();
+                let fs_type = Rc::from(elements.next().unwrap());
+                let sb_id = elements.next().unwrap().parse().unwrap();
+                let inode_id = elements.next().unwrap().parse().unwrap();
+                let conn = match elements.next().unwrap() {
+                    "AF_INET" => Connection::Ipv4 {
+                        src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                        src_port: elements.next().unwrap().parse().unwrap(),
+                        dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                        dst_port: elements.next().unwrap().parse().unwrap(),
+                    },
+                    "AF_INET6" => Connection::Ipv6 {
+                        src_host: Ipv6Addr::from_str(elements.next().unwrap()).unwrap(),
+                        src_port: elements.next().unwrap().parse().unwrap(),
+                        dst_host: Ipv6Addr::from_str(elements.next().unwrap()).unwrap(),
+                        dst_port: elements.next().unwrap().parse().unwrap(),
+                    },
+                    "AF_UNIX" => Connection::Unix {
+                        src_address: u64::from_str_radix(
+                            elements.next().unwrap().trim_start_matches("0x"),
+                            16,
+                        )
+                        .unwrap(),
+                        dst_address: u64::from_str_radix(
+                            elements.next().unwrap().trim_start_matches("0x"),
+                            16,
+                        )
+                        .unwrap(),
+                    },
+                    _ => return Err(eyre!("Unexpected socket family type")),
+                };
+                Self::ConnectEnd {
+                    comm,
+                    tid,
+                    fs_type,
+                    sb_id,
+                    inode_id,
+                    conn,
+                }
+            }
             "EpollAdd" => {
                 let comm = Rc::from(elements.next().unwrap());
                 let tid = elements.next().unwrap().parse().unwrap();
@@ -324,21 +414,66 @@ impl IpcBpfEvent {
                     contrib_snapshot: elements.next().unwrap().parse().unwrap(),
                 }
             }
-            "NewSocketMap" => Self::NewSocketMap {
-                fs_type: Rc::from(elements.next().unwrap()),
-                sb_id: elements.next().unwrap().parse().unwrap(),
-                inode_id: elements.next().unwrap().parse().unwrap(),
-                src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                src_port: elements.next().unwrap().parse().unwrap(),
-                dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
-                dst_port: elements.next().unwrap().parse().unwrap(),
-            },
+            "NewSocketMap" => {
+                let fs_type = Rc::from(elements.next().unwrap());
+                let sb_id = elements.next().unwrap().parse().unwrap();
+                let inode_id = elements.next().unwrap().parse().unwrap();
+                let conn = match elements.next().unwrap() {
+                    "AF_INET" => Connection::Ipv4 {
+                        src_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                        src_port: elements.next().unwrap().parse().unwrap(),
+                        dst_host: Ipv4Addr::from_str(elements.next().unwrap()).unwrap(),
+                        dst_port: elements.next().unwrap().parse().unwrap(),
+                    },
+                    "AF_INET6" => Connection::Ipv6 {
+                        src_host: Ipv6Addr::from_str(elements.next().unwrap()).unwrap(),
+                        src_port: elements.next().unwrap().parse().unwrap(),
+                        dst_host: Ipv6Addr::from_str(elements.next().unwrap()).unwrap(),
+                        dst_port: elements.next().unwrap().parse().unwrap(),
+                    },
+                    "AF_UNIX" => Connection::Unix {
+                        src_address: u64::from_str_radix(
+                            elements.next().unwrap().trim_start_matches("0x"),
+                            16,
+                        )
+                        .unwrap(),
+                        dst_address: u64::from_str_radix(
+                            elements.next().unwrap().trim_start_matches("0x"),
+                            16,
+                        )
+                        .unwrap(),
+                    },
+                    _ => return Err(eyre!("Unexpected socket family type")),
+                };
+                Self::NewSocketMap {
+                    fs_type,
+                    sb_id,
+                    inode_id,
+                    conn,
+                }
+            }
             "NewProcess" => Self::NewProcess {
                 comm: Rc::from(elements.next().unwrap()),
                 pid: elements.next().unwrap().parse().unwrap(),
             },
             "SampleInstant" => Self::SampleInstant {
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
+            },
+            "UnhandledFileMode" => Self::UnhandledFileMode {
+                comm: Rc::from(elements.next().unwrap()),
+                tid: elements.next().unwrap().parse().unwrap(),
+                fs: elements.next().unwrap().into(),
+                sb_id: elements.next().unwrap().parse().unwrap(),
+                inode_id: elements.next().unwrap().parse().unwrap(),
+                mode: u64::from_str_radix(elements.next().unwrap(), 16).unwrap(),
+            },
+            "UnhandledSockFam" => Self::UnhandledSockFam {
+                comm: Rc::from(elements.next().unwrap()),
+                tid: elements.next().unwrap().parse().unwrap(),
+                fs: elements.next().unwrap().into(),
+                sb_id: elements.next().unwrap().parse().unwrap(),
+                inode_id: elements.next().unwrap().parse().unwrap(),
+                family: elements.next().unwrap().parse().unwrap(),
             },
             _ => {
                 return Err(eyre!("Invalid trace data"));
@@ -369,10 +504,7 @@ pub enum IpcEvent {
         fs_type: Rc<str>,
         sb_id: u32,
         inode_id: u64,
-        src_host: Ipv4Addr,
-        src_port: u64,
-        dst_host: Ipv4Addr,
-        dst_port: u64,
+        conn: Connection,
     },
     AcceptEnd {
         comm: Rc<str>,
@@ -380,21 +512,15 @@ pub enum IpcEvent {
         fs_type: Rc<str>,
         sb_id: u32,
         inode_id: u64,
-        src_host: Ipv4Addr,
-        src_port: u64,
-        dst_host: Ipv4Addr,
-        dst_port: u64,
+        conn: Connection,
     },
-    ConnectStart {
+    ConnectEnd {
         comm: Rc<str>,
         tid: usize,
         fs_type: Rc<str>,
         sb_id: u32,
         inode_id: u64,
-        src_host: Ipv4Addr,
-        src_port: u64,
-        dst_host: Ipv4Addr,
-        dst_port: u64,
+        conn: Connection,
     },
     EpollItemAdd {
         comm: Rc<str>,
@@ -639,58 +765,40 @@ impl TryFrom<IpcBpfEvent> for IpcEvent {
                 fs_type,
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
             } => Ok(IpcEvent::AcceptEnd {
                 comm,
                 tid,
                 fs_type,
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
             }),
-            IpcBpfEvent::ConnectStart {
+            IpcBpfEvent::ConnectEnd {
                 comm,
                 tid,
                 fs_type,
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
-            } => Ok(IpcEvent::ConnectStart {
+                conn,
+            } => Ok(IpcEvent::ConnectEnd {
                 comm,
                 tid,
                 fs_type,
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
             }),
             IpcBpfEvent::NewSocketMap {
                 fs_type,
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
             } => Ok(IpcEvent::NewSocketMap {
                 fs_type,
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
             }),
             IpcBpfEvent::EpollItemAdd {
                 comm,
@@ -881,7 +989,7 @@ impl IpcProgram {
                         let events = self.global_events.get_or_insert_with(|| Vec::new());
                         events.push(event);
                     }
-                    IpcBpfEvent::AcceptEnd { tid, .. } | IpcBpfEvent::ConnectStart { tid, .. } => {
+                    IpcBpfEvent::AcceptEnd { tid, .. } | IpcBpfEvent::ConnectEnd { tid, .. } => {
                         let event = IpcEvent::try_from(event)?;
                         let entry = self.events.entry(tid).or_insert(Vec::new());
                         entry.push(event);
@@ -1073,9 +1181,7 @@ mod tests {
 
         use eyre::{eyre, Result};
 
-        use crate::execute::programs::ipc::TargetFile;
-
-        use super::super::IpcBpfEvent;
+        use super::super::{Connection, IpcBpfEvent, TargetFile};
 
         #[test]
         fn inode_map() -> Result<()> {
@@ -1199,8 +1305,15 @@ mod tests {
 
         #[test]
         fn accept_end() -> Result<()> {
-            let line = "AcceptEnd       epoll_server    339840  sockfs  8       16067228        127.0.0.1       3001    127.0.0.1   53520   535862448460614";
+            let line = "AcceptEnd       epoll_server    339840  sockfs  8       16067228        AF_INET     127.0.0.1       3001    127.0.0.1   53520   535862448460614     1111111111";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+
+            let conn_cmp = Connection::Ipv4 {
+                src_host: Ipv4Addr::new(127, 0, 0, 1),
+                src_port: 3001,
+                dst_host: Ipv4Addr::new(127, 0, 0, 1),
+                dst_port: 53520,
+            };
 
             if let IpcBpfEvent::AcceptEnd {
                 comm,
@@ -1208,10 +1321,7 @@ mod tests {
                 fs_type,
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
             } = event
             {
                 assert_eq!(&*comm, "epoll_server");
@@ -1219,10 +1329,7 @@ mod tests {
                 assert_eq!(&*fs_type, "sockfs");
                 assert_eq!(sb_id, 8);
                 assert_eq!(inode_id, 16067228);
-                assert_eq!(src_host, Ipv4Addr::new(127, 0, 0, 1));
-                assert_eq!(src_port, 3001);
-                assert_eq!(dst_host, Ipv4Addr::new(127, 0, 0, 1));
-                assert_eq!(dst_port, 53520);
+                assert_eq!(conn, conn_cmp);
             } else {
                 return Err(eyre!("Incorrect bpf event"));
             }
@@ -1233,19 +1340,23 @@ mod tests {
         #[test]
         fn connect_start() -> Result<()> {
             let line =
-                "ConnectStart   	epoll_server   	339840	sockfs	8	16052952	127.0.0.1	39432	127.0.0.1	7878";
+                "ConnectEnd   	epoll_server   	339840	sockfs	8	16052952	AF_INET     127.0.0.1	39432	127.0.0.1	7878    111111111111    1034";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
 
-            if let IpcBpfEvent::ConnectStart {
+            let conn_cmp = Connection::Ipv4 {
+                src_host: Ipv4Addr::new(127, 0, 0, 1),
+                src_port: 39432,
+                dst_host: Ipv4Addr::new(127, 0, 0, 1),
+                dst_port: 7878,
+            };
+
+            if let IpcBpfEvent::ConnectEnd {
                 comm,
                 tid,
                 fs_type,
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
             } = event
             {
                 assert_eq!(&*comm, "epoll_server");
@@ -1253,10 +1364,7 @@ mod tests {
                 assert_eq!(&*fs_type, "sockfs");
                 assert_eq!(sb_id, 8);
                 assert_eq!(inode_id, 16052952);
-                assert_eq!(src_host, Ipv4Addr::new(127, 0, 0, 1));
-                assert_eq!(src_port, 39432);
-                assert_eq!(dst_host, Ipv4Addr::new(127, 0, 0, 1));
-                assert_eq!(dst_port, 7878);
+                assert_eq!(conn, conn_cmp);
             } else {
                 return Err(eyre!("Incorrect bpf event"));
             }
@@ -1266,26 +1374,26 @@ mod tests {
 
         #[test]
         fn new_socket_map() -> Result<()> {
-            let line = "NewSocketMap   	sockfs	8	16052952	127.0.0.1	39432	127.0.0.1	7878";
+            let line = "NewSocketMap   	sockfs	8	16052952	AF_INET     127.0.0.1	39432	127.0.0.1	7878";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
+            let conn_cmp = Connection::Ipv4 {
+                src_host: Ipv4Addr::new(127, 0, 0, 1),
+                src_port: 39432,
+                dst_host: Ipv4Addr::new(127, 0, 0, 1),
+                dst_port: 7878,
+            };
 
             if let IpcBpfEvent::NewSocketMap {
                 fs_type,
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
             } = event
             {
                 assert_eq!(&*fs_type, "sockfs");
                 assert_eq!(sb_id, 8);
                 assert_eq!(inode_id, 16052952);
-                assert_eq!(src_host, Ipv4Addr::new(127, 0, 0, 1));
-                assert_eq!(src_port, 39432);
-                assert_eq!(dst_host, Ipv4Addr::new(127, 0, 0, 1));
-                assert_eq!(dst_port, 7878);
+                assert_eq!(conn, conn_cmp);
             } else {
                 return Err(eyre!("Incorrect bpf event"));
             }

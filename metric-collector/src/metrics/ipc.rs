@@ -13,7 +13,7 @@ use std::{
 
 use crate::execute::{
     boot_to_epoch,
-    programs::ipc::{IpcEvent, IpcProgram, TargetFile},
+    programs::ipc::{Connection, IpcEvent, IpcProgram, TargetFile},
 };
 
 use super::Collect;
@@ -56,7 +56,7 @@ impl Ipc {
                     self.pipes.process_event(event)?;
                 }
             }
-            IpcEvent::AcceptEnd { .. } | IpcEvent::ConnectStart { .. } => {
+            IpcEvent::AcceptEnd { .. } | IpcEvent::ConnectEnd { .. } => {
                 self.sockets.process_event(event)?;
             }
             _ => {
@@ -385,29 +385,31 @@ impl Sockets {
 
     fn process_event(&mut self, event: IpcEvent) -> Result<()> {
         match event {
-            IpcEvent::ConnectStart {
+            IpcEvent::ConnectEnd {
                 inode_id,
                 sb_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
                 ..
             }
             | IpcEvent::AcceptEnd {
                 inode_id,
                 sb_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
                 ..
             } => {
-                let kfile = (sb_id, inode_id);
-                self.kfile_socket_map
-                    .borrow_mut()
-                    .entry(kfile)
-                    .or_insert(((src_host, src_port), Some((dst_host, dst_port))));
+                if let Connection::Ipv4 {
+                    src_host,
+                    src_port,
+                    dst_host,
+                    dst_port,
+                } = conn
+                {
+                    let kfile = (sb_id, inode_id);
+                    self.kfile_socket_map
+                        .borrow_mut()
+                        .entry(kfile)
+                        .or_insert(((src_host, src_port), Some((dst_host, dst_port))));
+                }
             }
             IpcEvent::InodeWait {
                 sb_id,
@@ -706,16 +708,21 @@ impl EventPollCollection {
             IpcEvent::NewSocketMap {
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
                 ..
             } => {
-                self.kfile_socket_map.borrow_mut().insert(
-                    (sb_id, inode_id),
-                    ((src_host, src_port), Some((dst_host, dst_port))),
-                );
+                if let Connection::Ipv4 {
+                    src_host,
+                    src_port,
+                    dst_host,
+                    dst_port,
+                } = conn
+                {
+                    self.kfile_socket_map.borrow_mut().insert(
+                        (sb_id, inode_id),
+                        ((src_host, src_port), Some((dst_host, dst_port))),
+                    );
+                }
             }
             _ => {
                 return Err(eyre!(format!("Expected epoll event. Got {:?}", event)));
@@ -842,7 +849,7 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058
-                AcceptEnd       example-applica 24239   sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                AcceptEnd       example-applica 24239   sockfs  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
                 @inode_map[example-applica, 24239, sockfs, 8, 90098]: (2848, 1)
@@ -908,8 +915,8 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058
-                AcceptEnd       example-applica 24239   sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                NewSocketMap    sockfs  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058
+                AcceptEnd       example-applica 24239   sockfs  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
                 @inode_map[example-applica, 24239, sockfs, 8, 90098]: (2848, 1)
@@ -969,7 +976,7 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                AcceptEnd       example-applica 24239   devpts  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                AcceptEnd       example-applica 24239   devpts  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
                 @inode_map[example-applica, 24239, devpts, 8, 90098]: (2848, 1)
@@ -1038,7 +1045,7 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                AcceptEnd       example-applica 24239   devpts  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                AcceptEnd       example-applica 24239   devpts  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
                 @inode_map[example-applica, 24239, devpts, 8, 90098]: (2848, 1)
@@ -1100,7 +1107,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
             "};
@@ -1150,7 +1156,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
 
@@ -1205,7 +1210,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
@@ -1261,7 +1265,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
@@ -1332,7 +1335,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
@@ -1407,8 +1409,8 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                NewSocketMap    sockfs  8       80672   AF_INET     127.0.0.1       50046   127.0.0.1       7878
+                ConnectEnd      epoll_server    24354   sockfs  8       80672   AF_INET     127.0.0.1       50046   127.0.0.1       7878    111111111   1034
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
@@ -1478,7 +1480,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
             "};
@@ -1530,7 +1531,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
 
@@ -1587,7 +1587,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
@@ -1645,7 +1644,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
@@ -1718,7 +1716,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
@@ -1796,7 +1793,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
@@ -1863,7 +1859,7 @@ mod tests {
         let bpf_content = indoc! {"
             HEADER
 
-            NewSocketMap    sockfs  8       2519815 127.0.0.1       60958   127.0.0.1       7878
+            NewSocketMap    sockfs  8       2519815 AF_INET     127.0.0.1       60958   127.0.0.1       7878
             EpollAdd        epoll_server    357171  0xffff96892f1e7b00      sockfs  8       2519815 521457873233008 861999000
 
             => start map statistics
