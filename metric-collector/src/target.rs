@@ -1,11 +1,14 @@
 use crate::{
     execute::{
-        programs::{futex::FutexProgram, ipc::IpcProgram},
+        programs::{
+            futex::FutexProgram,
+            ipc::{Connection, IpcProgram},
+        },
         Executor,
     },
     metrics::{
         futex::Futex,
-        ipc::{Ipc, KFile, Socket},
+        ipc::{Ipc, KFile},
         scheduler::{Sched, SchedStat},
         Collect,
     },
@@ -44,7 +47,7 @@ impl Target {
         ipc_program: Rc<RefCell<IpcProgram>>,
         root_directory: Rc<str>,
         target_subdirectory: &str,
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     ) -> Self {
         println!("Register new target {}", tid);
         Self {
@@ -80,7 +83,7 @@ impl Target {
         kthread: bool,
         data_directory: Rc<str>,
         executor: &mut Executor,
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     ) -> Result<Vec<Self>> {
         let mut targets = Vec::new();
 

@@ -5,7 +5,6 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs::{self, File},
     io::prelude::*,
-    net::Ipv4Addr,
     path::Path,
     rc::Rc,
     time::Duration,
@@ -34,7 +33,7 @@ impl Ipc {
         tid: usize,
         root_directory: Rc<str>,
         target_subdirectory: &str,
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     ) -> Self {
         Self {
             ipc_program,
@@ -354,13 +353,8 @@ impl Pipes {
     }
 }
 
-type Endpoint = (Ipv4Addr, u64);
-type SrcEndpoint = Endpoint;
-type DstEndpoint = Endpoint;
-pub type Socket = (SrcEndpoint, Option<DstEndpoint>);
-
 struct Sockets {
-    kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+    kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     kfile_stats_map: HashMap<KFile, Stats>,
     snapshots: HashMap<KFile, VecDeque<(Option<u64>, Stats)>>,
     active: HashMap<KFile, u64>,
@@ -371,7 +365,7 @@ struct Sockets {
 impl Sockets {
     fn new(
         target_subdirectory: String,
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     ) -> Self {
         Self {
             kfile_socket_map,
@@ -397,19 +391,11 @@ impl Sockets {
                 conn,
                 ..
             } => {
-                if let Connection::Ipv4 {
-                    src_host,
-                    src_port,
-                    dst_host,
-                    dst_port,
-                } = conn
-                {
-                    let kfile = (sb_id, inode_id);
-                    self.kfile_socket_map
-                        .borrow_mut()
-                        .entry(kfile)
-                        .or_insert(((src_host, src_port), Some((dst_host, dst_port))));
-                }
+                let kfile = (sb_id, inode_id);
+                self.kfile_socket_map
+                    .borrow_mut()
+                    .entry(kfile)
+                    .or_insert(conn);
             }
             IpcEvent::InodeWait {
                 sb_id,
@@ -584,20 +570,54 @@ impl Sockets {
                     cumulative_wait: stat.accumulated_wait,
                     count: stat.count,
                 };
-                let file_path =
-                    if let Some((src, Some(dst))) = self.kfile_socket_map.borrow().get(&kfile) {
-                        format!(
-                            "{}/sockets/{:?}/{}:{:?}_{}:{:?}.csv",
-                            self.target_subdirectory,
-                            (epoch_ms / (1000 * 60)) * 60,
-                            src.0.octets().map(|elem| elem.to_string()).join("."),
-                            src.1,
-                            dst.0.octets().map(|elem| elem.to_string()).join("."),
-                            dst.1,
-                        )
-                    } else {
-                        continue;
-                    };
+                let file_path = match self.kfile_socket_map.borrow().get(&kfile) {
+                    Some(Connection::Ipv4 {
+                        src_host,
+                        src_port,
+                        dst_host,
+                        dst_port,
+                    }) => format!(
+                        "{}/sockets/{:?}/ipv4_{}:{}_{}:{}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        src_host.octets().map(|elem| elem.to_string()).join("."),
+                        src_port,
+                        dst_host.octets().map(|elem| elem.to_string()).join("."),
+                        dst_port,
+                    ),
+                    Some(Connection::Ipv6 {
+                        src_host,
+                        src_port,
+                        dst_host,
+                        dst_port,
+                    }) => format!(
+                        "{}/sockets/{:?}/ipv6_[{}]:{}_[{}]:{}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        src_host.segments().map(|elem| elem.to_string()).join(":"),
+                        src_port,
+                        dst_host.segments().map(|elem| elem.to_string()).join(":"),
+                        dst_port,
+                    ),
+                    Some(Connection::Unix {
+                        src_address,
+                        dst_address,
+                    }) => format!(
+                        "{}/sockets/{:?}/unix_{:#x}_{:#x}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        src_address,
+                        dst_address
+                    ),
+                    _ => format!(
+                        "{}/sockets/{:?}/{}_{}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        kfile.0,
+                        kfile.1,
+                    ),
+                };
+
                 let mut file = Self::get_or_create_file(
                     &mut self.data_files,
                     Path::new(&file_path),
@@ -626,7 +646,7 @@ struct EventPoll {
 
 impl EventPoll {
     fn new(
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
         data_directory: Rc<str>,
         address: u64,
     ) -> Self {
@@ -670,7 +690,7 @@ impl EventPoll {
 pub struct EventPollCollection {
     event_poll_map: HashMap<u64, EventPoll>,
     ipc_program: Rc<RefCell<IpcProgram>>,
-    kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+    kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     root_directory: Rc<str>,
     sample_instant_ns: Option<u128>,
 }
@@ -678,7 +698,7 @@ pub struct EventPollCollection {
 impl EventPollCollection {
     pub fn new(
         ipc_program: Rc<RefCell<IpcProgram>>,
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
         root_directory: Rc<str>,
     ) -> Self {
         Self {
@@ -711,18 +731,9 @@ impl EventPollCollection {
                 conn,
                 ..
             } => {
-                if let Connection::Ipv4 {
-                    src_host,
-                    src_port,
-                    dst_host,
-                    dst_port,
-                } = conn
-                {
-                    self.kfile_socket_map.borrow_mut().insert(
-                        (sb_id, inode_id),
-                        ((src_host, src_port), Some((dst_host, dst_port))),
-                    );
-                }
+                self.kfile_socket_map
+                    .borrow_mut()
+                    .insert((sb_id, inode_id), conn);
             }
             _ => {
                 return Err(eyre!(format!("Expected epoll event. Got {:?}", event)));
@@ -947,7 +958,7 @@ mod tests {
             assert!(ipc.sockets.snapshots.len() == 0);
 
             let contents = fs::read_to_string(format!(
-                "{}/thread/24239/24239/ipc/sockets/19440/127.0.0.1:7878_127.0.0.1:50058.csv",
+                "{}/thread/24239/24239/ipc/sockets/19440/ipv4_127.0.0.1:7878_127.0.0.1:50058.csv",
                 tmp_dir.path().to_str().unwrap()
             ))?;
             assert_eq!(
@@ -1451,7 +1462,7 @@ mod tests {
             assert!(snapshots.len() == 0);
 
             let contents = fs::read_to_string(format!(
-                "{}/global/epoll/ffff98dd8179e0c0/sockets/19440/127.0.0.1:50046_127.0.0.1:7878.csv",
+                "{}/global/epoll/ffff98dd8179e0c0/sockets/19440/ipv4_127.0.0.1:50046_127.0.0.1:7878.csv",
                 tmp_dir.path().to_str().unwrap()
             ))?;
             assert_eq!(
@@ -1894,7 +1905,7 @@ mod tests {
         assert!(snapshots.len() == 0);
 
         let contents = fs::read_to_string(format!(
-            "{}/global/epoll/ffff96892f1e7b00/sockets/521400/127.0.0.1:60958_127.0.0.1:7878.csv",
+            "{}/global/epoll/ffff96892f1e7b00/sockets/521400/ipv4_127.0.0.1:60958_127.0.0.1:7878.csv",
             tmp_dir.path().to_str().unwrap()
         ))?;
         assert_eq!(

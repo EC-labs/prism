@@ -13,13 +13,13 @@ use std::{
 
 use crate::{
     configure::Config,
-    execute::programs::{clone::CloneEvent, ipc::IpcEvent},
+    execute::programs::{
+        clone::CloneEvent,
+        ipc::{Connection, IpcEvent},
+    },
     metrics::{iowait::IOWait, Collect},
 };
-use crate::{
-    execute::Executor,
-    metrics::ipc::{KFile, Socket},
-};
+use crate::{execute::Executor, metrics::ipc::KFile};
 use crate::{metrics::ipc::EventPollCollection, target::Target};
 
 pub struct Extractor {
@@ -28,7 +28,7 @@ pub struct Extractor {
     targets: HashMap<usize, Target>,
     system_metrics: Vec<Box<dyn Collect>>,
     rx_timer: Option<Receiver<bool>>,
-    kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+    kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
 }
 
 impl Extractor {
