@@ -76,6 +76,7 @@ impl Extractor {
                     );
                 }
                 CloneEvent::NewProcess(_, pid) => {
+                    executor.monitor(pid);
                     if let Ok(targets) = Target::get_threads(pid) {
                         targets.into_iter().for_each(|tid| {
                             self.targets.insert(
