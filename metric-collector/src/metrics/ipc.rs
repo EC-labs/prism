@@ -529,6 +529,22 @@ impl Sockets {
         Ok(())
     }
 
+    fn rename<'a>(
+        data_files: &'a mut LruCache<String, File>,
+        old: &Path,
+        new: &Path,
+    ) -> Result<()> {
+        let old = old.to_str().unwrap().into();
+        let new = new.to_str().unwrap().into();
+
+        let file = data_files.remove(old);
+        if let Some(file) = file {
+            fs::rename(&old, &new)?;
+            data_files.insert(new, file);
+        }
+        Ok(())
+    }
+
     fn get_or_create_file<'a>(
         data_files: &'a mut LruCache<String, File>,
         filepath: &Path,
@@ -570,6 +586,13 @@ impl Sockets {
                     cumulative_wait: stat.accumulated_wait,
                     count: stat.count,
                 };
+                let kfile_path = format!(
+                    "{}/sockets/{:?}/{}_{}.csv",
+                    self.target_subdirectory,
+                    (epoch_ms / (1000 * 60)) * 60,
+                    kfile.0,
+                    kfile.1,
+                );
                 let file_path = match self.kfile_socket_map.borrow().get(&kfile) {
                     Some(Connection::Ipv4 {
                         src_host,
@@ -617,6 +640,14 @@ impl Sockets {
                         kfile.1,
                     ),
                 };
+
+                if kfile_path != file_path {
+                    Self::rename(
+                        &mut self.data_files,
+                        Path::new(&kfile_path),
+                        Path::new(&file_path),
+                    )?;
+                }
 
                 let mut file = Self::get_or_create_file(
                     &mut self.data_files,
