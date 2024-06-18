@@ -1942,4 +1942,100 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn epoll_inode_ipv6() -> Result<()> {
+        let (rx, mut tx) = pipe();
+        let ipc_program = Rc::new(RefCell::new(
+            IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+        ));
+
+        let bpf_content = indoc! {"
+            HEADER
+
+            NewSocketMap    sockfs  8                    1031455    AF_INET6        ::1                     3001   ::1                     55774
+            AcceptEnd       epoll_server                   67967    sockfs  8                    1031455    AF_INET6     ::1     3001    ::1     55774        330488529582598
+            EpollAdd        epoll_server                   67967    0xffff9d5c4f7ca840      sockfs  8                    1031455         330488529608026               248242602
+
+            => start map statistics
+            @inode_map[epoll_server, 67967, sockfs, 8, 1031455]: (30594, 5)
+            @inode_pending[epoll_server, 67967,                           epoll, 0, -108455180588992]: 330489199386315
+            @epoll_map[0xffff9d5c4f7ca840]: 586287502
+            @epoll_pending[0xffff9d5c4f7ca840]: 330489199386315
+            SampleInstant        330489281294037
+            => end map statistics
+        "};
+        tx.write_all(bpf_content.as_bytes())?;
+        while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+        let tmp_dir = tempdir::TempDir::new("")?;
+        let mut event_polls = EventPollCollection::new(
+            ipc_program.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+        );
+
+        event_polls.sample()?;
+        event_polls.store()?;
+
+        let event_poll = event_polls
+            .event_poll_map
+            .remove(&(0xffff9d5c4f7ca840 as u64));
+        assert!(event_poll.is_some());
+
+        let event_poll = event_poll.unwrap();
+        let snapshots = event_poll.sockets.snapshots;
+        assert!(snapshots.len() == 0);
+
+        let contents = fs::read_to_string(format!(
+            "{}/global/epoll/ffff9d5c4f7ca840/sockets/330480/ipv6_[0:0:0:0:0:0:0:1]:3001_[0:0:0:0:0:0:0:1]:55774.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            contents,
+            indoc! {"
+                epoch_ms,socket_wait,count
+                330489281,419952622,0
+            "}
+        );
+
+        let mut ipc = Ipc::new(
+            ipc_program.clone(),
+            67967,
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+            "thread/67967/67967",
+            Rc::new(RefCell::new(HashMap::new())),
+        );
+
+        ipc.sample()?;
+        ipc.store()?;
+
+        assert!(ipc.sockets.snapshots.len() == 0);
+        let contents = fs::read_to_string(format!(
+            "{}/thread/67967/67967/ipc/sockets/330480/ipv6_[0:0:0:0:0:0:0:1]:3001_[0:0:0:0:0:0:0:1]:55774.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            indoc! {"
+                epoch_ms,socket_wait,count
+                330489281,30594,5
+            "},
+            contents
+        );
+
+        assert!(ipc.pipes.snapshots.len() == 0);
+        let contents = fs::read_to_string(format!(
+            "{}/thread/67967/67967/ipc/streams/330480/epoll_ffff9d5c4f7ca840.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            indoc! {"
+                epoch_ms,stream_wait,count
+                330489281,81907722,0
+            "},
+            contents
+        );
+
+        Ok(())
+    }
 }
