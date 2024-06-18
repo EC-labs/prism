@@ -5,6 +5,7 @@
 #include <linux/net.h>
 #include <linux/socket.h>
 #include <net/sock.h>
+#include <net/af_unix.h>
 
 struct epoll_filefd {
 	struct file *file;
@@ -104,8 +105,11 @@ kfunc:vmlinux:vfs_read
         $s_dev = $inode->i_sb->s_dev;
         $fs_id = $inode->i_sb->s_id;
 
-        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
-               "ReadUnknown", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+        if (!@unhandled_files[$fs_id, $s_dev, $i_id]) {
+            @unhandled_files[$fs_id, $s_dev, $i_id] = 1;
+            printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
+                   "UnhandledFileMode", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+        }
     }
 }
 
@@ -125,7 +129,10 @@ kretfunc:vmlinux:vfs_read
 
         $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
         $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
-        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+            @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+            @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+        );
         delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
     }    
 }
@@ -167,8 +174,11 @@ kfunc:vmlinux:vfs_write
         $s_dev = $inode->i_sb->s_dev;
         $fs_id = $inode->i_sb->s_id;
 
-        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
-               "WriteUnknown", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+        if (!@unhandled_files[$fs_id, $s_dev, $i_id]) {
+            @unhandled_files[$fs_id, $s_dev, $i_id] = 1;
+            printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%x\n",
+                   "UnhandledFileMode", comm, tid, $fs_id, $s_dev, $i_id, ($mode & S_IFMT));
+        }
     }
 }
 
@@ -188,7 +198,10 @@ kretfunc:vmlinux:vfs_write
 
         $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
         $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
-        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+            @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+            @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+        );
         delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
     }
 }
@@ -198,51 +211,97 @@ kretfunc:vmlinux:vfs_write
 /*
  * SOCKETS
  */
-kfunc:vmlinux:tcp_connect
+kfunc:vmlinux:__sys_connect_file
 {
     if (!@pids[pid]) {
         return;
     }
 
-    $sk = args->sk;
-    $inet_family = $sk->__sk_common.skc_family;
+    $nsecs = nsecs;
+    printf("%-15s\t%s\t%lld\t%lld\n", 
+           "ConnectStart", comm, tid, $nsecs);
+    @start_sock[tid] = $nsecs;
+}
 
-    if ($inet_family != AF_INET) {
+
+kretfunc:vmlinux:__sys_connect_file
+/ @start_sock[tid] /
+{
+    if (retval < 0) {
         return;
     }
+
+    $sock = (struct socket *) args->file->private_data;
+    $sk = $sock->sk;
+    $inet_family = $sk->__sk_common.skc_family;
 
     $inode = $sk->sk_socket->file->f_inode;
     $i_id = $inode->i_ino;
     $s_dev = $inode->i_sb->s_dev;
     $fs_id = $inode->i_sb->s_id;
 
-    $daddr = ntop($sk->__sk_common.skc_daddr);
-    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+    $nsecs = nsecs;
+    $diff = $nsecs - @start_sock[tid];
+    delete(@start_sock[tid]);
 
-    $lport = $sk->__sk_common.skc_num;
-    $dport = $sk->__sk_common.skc_dport;
-    $dport = bswap($dport);
+    if ($inet_family == AF_INET) {
+        $daddr = ntop($sk->__sk_common.skc_daddr);
+        $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
 
-    @socks[$saddr, $lport, $daddr, $dport] = 1;
+        $lport = $sk->__sk_common.skc_num;
+        $dport = $sk->__sk_common.skc_dport;
+        $dport = bswap($dport);
 
-    if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-        printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-               "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
-        @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        @socks_ipv4[$saddr, $lport, $daddr, $dport] = 1;
+
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\t%lld\n", 
+               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport, $nsecs, $diff);
+    } else if ($inet_family == AF_INET6) {
+        $daddr = ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8);
+        $saddr = ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8);
+
+        $lport = $sk->__sk_common.skc_num;
+        $dport = $sk->__sk_common.skc_dport;
+        $dport = bswap($dport);
+        
+        @socks_ipv6[$saddr, $lport, $daddr, $dport] = 1;
+
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\t%lld\n", 
+               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport, $nsecs, $diff);
+    } else if ($inet_family == AF_UNIX) {
+        $unix_sock = (struct unix_sock *) $sk - offsetof(struct unix_sock, sk);
+        $peer = $unix_sock->peer;
+
+        @socks_unix[$sk, $peer] = 1;
+
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%p\t%p\t%lld\t%lld\n", 
+               "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer, $nsecs, $diff);
+    } else {
+        if (!@unhandled_sock[$fs_id, $s_dev, $i_id]) {
+            @unhandled_sock[$fs_id, $s_dev, $i_id] = 1;
+            printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%d\n",
+                   "UnhandledSockFam", comm, tid, $fs_id, $s_dev, $i_id, $inet_family);
+        }
     }
 
-    @start_sock[tid] = nsecs;
-    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\n", 
-           "ConnectStart", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
-}
-
-
-kretfunc:vmlinux:tcp_connect
-/ @start_sock[tid] /
-{
-    printf("%-15s\t%s\t%lld\t%lld\n",
-           "ConnectEnded", comm, tid, nsecs - @start_sock[tid]);
-    delete(@start_sock[tid]);
 }
 
 kfunc:vmlinux:do_accept 
@@ -253,18 +312,32 @@ kfunc:vmlinux:do_accept
 
     $socket = (struct socket *)args->file->private_data;
     $sk = $socket->sk;
+    $inode = $sk->sk_socket->file->f_inode;
+    $i_id = $inode->i_ino;
 	$inet_family = $sk->__sk_common.skc_family;
     
-    if ($inet_family != AF_INET) {
-        return;
-    }
+    if ($inet_family == AF_INET) {
+        $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+        $lport = $sk->__sk_common.skc_num;
 
-    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
-    $lport = $sk->__sk_common.skc_num;
+        printf("%-15s\t%s\t%lld\t%s\t%lld\t%s\t%d\n", 
+               "AcceptStart", comm, tid, "AF_INET", $i_id, $saddr, $lport);
+    } else if ($inet_family == AF_INET6) {
+        $saddr = ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8);
+        $lport = $sk->__sk_common.skc_num;
+
+        printf("%-15s\t%s\t%lld\t%s\t%lld\t%s\t%d\n", 
+               "AcceptStart", comm, tid, "AF_INET6", $i_id, $saddr, $lport);
+    } else if ($inet_family == AF_UNIX) {
+
+        // For lack of better description of what socket we are accepting on,
+        // we opt for the socket's inode id, which is the field that appears
+        // when listing a process' files in procfs.
+        printf("%-15s\t%s\t%lld\t%s\t%s\t%lld\n", 
+               "AcceptStart", comm, tid, "AF_UNIX", "socket", $i_id);
+    } 
 
     @start_sock[tid] = nsecs;
-    printf("%-15s\t%s\t%lld\t%s\t%d\n", 
-           "AcceptStart", comm, tid, $saddr, $lport);
 }
 
 kretfunc:vmlinux:do_accept
@@ -274,76 +347,190 @@ kretfunc:vmlinux:do_accept
     }
 
     $sock = (struct socket *) retval->private_data;
+    if (($sock == 0) || !@start_sock[tid]) {
+        return; 
+    }
+
     $sk = $sock->sk;
 	$inet_family = $sk->__sk_common.skc_family;
-
-	if ($inet_family != AF_INET) {
-        return;
-	}
 
     $inode = retval->f_inode;
     $i_id = $inode->i_ino;
     $s_dev = $inode->i_sb->s_dev;
     $fs_id = $inode->i_sb->s_id;
 
-    $daddr = ntop($sk->__sk_common.skc_daddr);
-    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+	if ($inet_family == AF_INET) {
+        $daddr = ntop($sk->__sk_common.skc_daddr);
+        $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
 
-    $lport = $sk->__sk_common.skc_num;
-    $dport = $sk->__sk_common.skc_dport;
-    $dport = bswap($dport);
+        $lport = $sk->__sk_common.skc_num;
+        $dport = $sk->__sk_common.skc_dport;
+        $dport = bswap($dport);
 
-    @socks[$saddr, $lport, $daddr, $dport] = 1;
+        @socks_ipv4[$saddr, $lport, $daddr, $dport] = 1;
 
-    if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-        printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-               "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
-        @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\n", 
+               "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport, nsecs);
+	} else if ($inet_family == AF_INET6) {
+        $daddr = ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8);
+        $saddr = ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8);
+
+        $lport = $sk->__sk_common.skc_num;
+        $dport = $sk->__sk_common.skc_dport;
+        $dport = bswap($dport);
+        
+        @socks_ipv6[$saddr, $lport, $daddr, $dport] = 1;
+
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\n",
+               "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport, nsecs);
+    } else if ($inet_family == AF_UNIX) {
+        $unix_sock = (struct unix_sock *) $sk - offsetof(struct unix_sock, sk);
+        $peer = $unix_sock->peer;
+
+        @socks_unix[$sk, $peer] = 1;
+
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+
+        printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%p\t%p\t%lld\n", 
+               "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer, nsecs);
+    } else {
+        if (!@unhandled_sock[$fs_id, $s_dev, $i_id]) {
+            @unhandled_sock[$fs_id, $s_dev, $i_id] = 1;
+            printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%d\n",
+                   "UnhandledSockFam", comm, tid, $fs_id, $s_dev, $i_id, $inet_family);
+        }
     }
 
-    printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n", 
-           "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, nsecs);
     delete(@start_sock[tid]);
-
 }
 
 
 kfunc:vmlinux:sock_recvmsg
 {
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
 	$sk = args->sock->sk;
 	$inet_family = $sk->__sk_common.skc_family;
 
-    if ($inet_family != AF_INET) {
-        return;
-    }
+    if ($inet_family == AF_INET) {
+        $daddr = ntop($sk->__sk_common.skc_daddr);
+        $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
 
-    $daddr = ntop($sk->__sk_common.skc_daddr);
-    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+        $lport = $sk->__sk_common.skc_num;
+        $dport = $sk->__sk_common.skc_dport;
+        $dport = bswap($dport);
+        
+        /* 
+         * If the current socket is not tracked and this process belongs to the
+         * list of processes of interest, start tracking the socket.
+         */ 
+        if (@pids[pid] && !@socks_ipv4[$saddr, $lport, $daddr, $dport]) {
+            @socks_ipv4[$saddr, $lport, $daddr, $dport] = 1;
+        }
 
-    $lport = $sk->__sk_common.skc_num;
-    $dport = $sk->__sk_common.skc_dport;
-    $dport = bswap($dport);
-    
-    /* 
-     * If the current socket is not tracked and this process belongs to the
-     * list of processes of interest, start tracking the socket.
-     */ 
-    if (!@socks[$saddr, $lport, $daddr, $dport]) {
-        if (@pids[pid]) {
-            @socks[$saddr, $lport, $daddr, $dport] = 1;
+        /*
+         * If the conjugate socket is currently in the tracked list, but the
+         * current pid is not, we should add this process group to the list of
+         * interest.
+         */
+        if (@socks_ipv4[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
+            @pids[pid] = 1
+        }
+
+        if (@pids[pid] && !@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+    } else if ($inet_family == AF_INET6) {
+        $daddr = ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8);
+        $saddr = ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8);
+
+        $lport = $sk->__sk_common.skc_num;
+        $dport = $sk->__sk_common.skc_dport;
+        $dport = bswap($dport);
+
+        /* 
+         * If the current socket is not tracked and this process belongs to the
+         * list of processes of interest, start tracking the socket.
+         */ 
+        if (@pids[pid] && !@socks_ipv6[$saddr, $lport, $daddr, $dport]) {
+            @socks_ipv6[$saddr, $lport, $daddr, $dport] = 1;
+        }
+
+        /*
+         * If the conjugate socket is currently in the tracked list, but the
+         * current pid is not, we should add this process group to the list of
+         * interest.
+         */
+        if (@socks_ipv6[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
+            @pids[pid] = 1
+        }
+
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id] && @pids[pid]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+    } else if ($inet_family == AF_UNIX) {
+        $unix_sock = (struct unix_sock *) $sk - offsetof(struct unix_sock, sk);
+        $peer = $unix_sock->peer;
+        
+        /* 
+         * If the current socket is not tracked and this process belongs to the
+         * list of processes of interest, start tracking the socket.
+         */ 
+        if (@pids[pid] && !@socks_unix[$sk, $peer]) {
+            @socks_unix[$sk, $peer] = 1;
+        }
+
+        /*
+         * If the conjugate socket is currently in the tracked list, but the
+         * current pid is not, we should add this process group to the list of
+         * interest.
+         */
+        if (@socks_unix[$peer, $sk] && !@pids[pid]) {
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
+            @pids[pid] = 1
+        }
+
+        if (@pids[pid] && !@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+    } else {
+        if (@pids[pid] && !@unhandled_sock[$fs_id, $s_dev, $i_id]) {
+            @unhandled_sock[$fs_id, $s_dev, $i_id] = 1;
+            printf("%-20s\t%-15s\t%lld\t%s\t%d\t%lld\t%d\n",
+                   "UnhandledSockFam", comm, tid, $fs_id, $s_dev, $i_id, $inet_family);
         }
     }
 
-    /*
-     * If the conjugate socket is currently in the tracked list, but the
-     * current pid is not, we should add this process group to the list of
-     * interest.
-     */
-    if (@socks[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
-        printf("%s\t%s\t%lld\n", 
-               "NewProcess", comm, pid);
-        @pids[pid] = 1
-    }
 
     /* 
      * If with the previous statements, the current pid still isn't in the
@@ -354,18 +541,7 @@ kfunc:vmlinux:sock_recvmsg
         return;
     }
 
-    $inode = (struct inode *)args->sock->file->f_inode;
-    $i_id = $inode->i_ino;
-    $s_dev = $inode->i_sb->s_dev;
-    $fs_id = $inode->i_sb->s_id;
-
     @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
-
-    if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-        printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-               "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
-        @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
-    }
 }
 
 kretfunc:vmlinux:sock_recvmsg
@@ -381,50 +557,57 @@ kretfunc:vmlinux:sock_recvmsg
 
     $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
     $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
-    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+    );
     delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
 }
 
 kfunc:vmlinux:inet_sendmsg
 {
-    if (!@pids[pid]) {
-        return;
-    }
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
 
 	$sk = args->sock->sk;
 	$inet_family = $sk->__sk_common.skc_family;
 
-    if ($inet_family != AF_INET) {
-        return;
-    }
+    if ($inet_family == AF_INET) {
+        $daddr = ntop($sk->__sk_common.skc_daddr);
+        $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
 
-    $daddr = ntop($sk->__sk_common.skc_daddr);
-    $saddr = ntop($sk->__sk_common.skc_rcv_saddr);
+        $lport = $sk->__sk_common.skc_num;
+        $dport = $sk->__sk_common.skc_dport;
+        $dport = bswap($dport);
 
-    $lport = $sk->__sk_common.skc_num;
-    $dport = $sk->__sk_common.skc_dport;
-    $dport = bswap($dport);
+        /* 
+         * If the current socket is not tracked and this process belongs to the
+         * list of processes of interest, start tracking the socket.
+         */ 
+        if (@pids[pid] && !@socks_ipv4[$saddr, $lport, $daddr, $dport]) {
+            @socks_ipv4[$saddr, $lport, $daddr, $dport] = 1;
+        }
 
-    /* 
-     * If the current socket is not tracked and this process belongs to the
-     * list of processes of interest, start tracking the socket.
-     */ 
-    if (!@socks[$saddr, $lport, $daddr, $dport]) {
-        if (@pids[pid]) {
-            @socks[$saddr, $lport, $daddr, $dport] = 1;
+        /*
+         * If the conjugate socket is currently in the tracked list, but the
+         * current pid is not, we should add this process group to the list of
+         * interest.
+         */
+        if (@socks_ipv4[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
+            @pids[pid] = 1
+        }
+
+        if (@pids[pid] && !@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET", $saddr, $lport, $daddr, $dport);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
     }
 
-    /*
-     * If the conjugate socket is currently in the tracked list, but the
-     * current pid is not, we should add this process group to the list of
-     * interest.
-     */
-    if (@socks[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
-        printf("%s\t%s\t%lld\n", 
-               "NewProcess", comm, pid);
-        @pids[pid] = 1
-    }
 
     /* 
      * If with the previous adjustments, the current pid still isn't in the
@@ -435,18 +618,7 @@ kfunc:vmlinux:inet_sendmsg
         return;
     }
 
-    $inode = (struct inode *)args->sock->file->f_inode;
-    $i_id = $inode->i_ino;
-    $s_dev = $inode->i_sb->s_dev;
-    $fs_id = $inode->i_sb->s_id;
-
     @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
-
-    if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-        printf("%-15s\t%s\t%d\t%lld\t%s\t%lld\t%s\t%lld\n",
-               "NewSocketMap", $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport);
-        @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
-    }
 }
 
 kretfunc:vmlinux:inet_sendmsg
@@ -462,10 +634,163 @@ kretfunc:vmlinux:inet_sendmsg
 
     $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
     $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
-    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = stats($pending_contrib);
+    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+    );
     delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
 }
 
+kfunc:vmlinux:inet6_sendmsg
+{
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+	$sk = args->sock->sk;
+	$inet_family = $sk->__sk_common.skc_family;
+
+    if ($inet_family == AF_INET6) {
+        $daddr = ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8);
+        $saddr = ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8);
+
+        $lport = $sk->__sk_common.skc_num;
+        $dport = $sk->__sk_common.skc_dport;
+        $dport = bswap($dport);
+
+        /* 
+         * If the current socket is not tracked and this process belongs to the
+         * list of processes of interest, start tracking the socket.
+         */ 
+        if (@pids[pid] && !@socks_ipv6[$saddr, $lport, $daddr, $dport]) {
+            @socks_ipv6[$saddr, $lport, $daddr, $dport] = 1;
+        }
+
+        /*
+         * If the conjugate socket is currently in the tracked list, but the
+         * current pid is not, we should add this process group to the list of
+         * interest.
+         */
+        if (@socks_ipv6[$daddr, $dport, $saddr, $lport] && !@pids[pid]) {
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
+            @pids[pid] = 1
+        }
+
+        if (!@kfile_socket[$fs_id, $s_dev, $i_id] && @pids[pid]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%s\t%lld\t%s\t%lld\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+    }
+
+
+    /* 
+     * If with the previous adjustments, the current pid still isn't in the
+     * tracked list of processes, then we can safely assume this is not an
+     * event of interest.
+     */
+    if (!@pids[pid]) {
+        return;
+    }
+
+    @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
+
+}
+
+kretfunc:vmlinux:inet6_sendmsg
+{
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    if (!@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]) {
+        return;
+    }
+
+    $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
+    $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+    );
+    delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
+}
+
+kfunc:vmlinux:unix*sendmsg
+{
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    $sk = args->sock->sk;
+	$family = $sk->__sk_common.skc_family;
+
+    if ($family == AF_UNIX) {
+        $unix_sock = (struct unix_sock *) $sk - offsetof(struct unix_sock, sk);
+        $peer = $unix_sock->peer;
+        
+        /* 
+         * If the current socket is not tracked and this process belongs to the
+         * list of processes of interest, start tracking the socket.
+         */ 
+        if (@pids[pid] && !@socks_unix[$sk, $peer]) {
+            @socks_unix[$sk, $peer] = 1;
+        }
+
+        /*
+         * If the conjugate socket is currently in the tracked list, but the
+         * current pid is not, we should add this process group to the list of
+         * interest.
+         */
+        if (@socks_unix[$peer, $sk] && !@pids[pid]) {
+            printf("%s\t%s\t%lld\n", 
+                   "NewProcess", comm, pid);
+            @pids[pid] = 1
+        }
+
+        if (@pids[pid] && !@kfile_socket[$fs_id, $s_dev, $i_id]) {
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+                   "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
+            @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
+        }
+    }
+
+    /* 
+     * If with the previous adjustments, the current pid still isn't in the
+     * tracked list of processes, then we can safely assume this is not an
+     * event of interest.
+     */
+    if (!@pids[pid]) {
+        return;
+    }
+
+    @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
+}
+
+kretfunc:vmlinux:unix*sendmsg
+{
+    $inode = (struct inode *)args->sock->file->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+
+    if (!@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]) {
+        return;
+    }
+
+    $start = @inode_pending[comm, tid, $fs_id, $s_dev, $i_id];
+    $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    @inode_map[comm, tid, $fs_id, $s_dev, $i_id] = (
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].0 + $pending_contrib,
+        @inode_map[comm, tid, $fs_id, $s_dev, $i_id].1 + 1
+    );
+
+    delete(@inode_pending[comm, tid, $fs_id, $s_dev, $i_id]);
+}
 
 
 /*
@@ -558,10 +883,12 @@ kfunc:vmlinux:ep_poll
         return;
     }
 
+    $now = nsecs;
     if (@epoll_wait_depth[args->ep] == 0) {
-        @epoll_pending[args->ep] = nsecs;
+        @epoll_pending[args->ep] = $now;
     }
     @epoll_wait_depth[args->ep] += 1;
+    @inode_pending[comm, tid, "                          epoll", 0, (uint64) args->ep] = $now;
 }
 
 kretfunc:vmlinux:ep_poll
@@ -586,6 +913,16 @@ kretfunc:vmlinux:ep_poll
     $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
     @epoll_map[args->ep] = @epoll_map[args->ep] + $pending_contrib;
     delete(@epoll_pending[args->ep]);
+
+    $epoll = "                          epoll";
+    $start = @inode_pending[comm, tid, $epoll, 0, (uint64) args->ep];
+    $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    @inode_map[comm, tid, $epoll, 0, (uint64) args->ep] = (
+        @inode_map[comm, tid, $epoll, 0, (uint64) args->ep].0 + $pending_contrib,
+        @inode_map[comm, tid, $epoll, 0, (uint64) args->ep].1 + 1
+    );
+    delete(@inode_pending[comm, tid, $epoll, 0, (uint64) args->ep]);
+
 }
 
 kfunc:vmlinux:ep_send_events
@@ -647,6 +984,137 @@ kprobe:ep_item_poll*
     }
 }
 
+/*
+ * SELECT & POLL
+ *
+ * When a thread calls the select/poll system call, we will account the time
+ * spent waiting for each file descriptor passed in as an argument to the
+ * calling thread.
+ *
+ * Maps:
+ *
+ * `@fds[<tid>]`: The number of file desrciptors passed in to the system call,
+ *     by the calling `<tid>` thread.
+ * `@io_multi_idx[<tid>]`: As thread `<tid>`'s select syscall calls `__fdget`
+ *     for each file, this map tracks the current index available.
+ * `@io_multi[<tid>, <idx>]`: For a given thread `<tid>` and index `<idx>`,
+ *     this map provides as value the files identifiers, i.e., file system
+ *     name, device id, and inode id.
+ * `@inode_pending[..]`: Stores the instant a thread started waiting for a
+ *     `(struct file *)`.
+ * `@inode_map[..]`: Computes the total time a thread waited for a 
+ *     `(struct file *)` since the last interval.
+ * `@files[..]`: Stores the files being monitored by the current program.
+ */
+
+kfunc:do_select
+/ @pids[pid] /
+{
+    @fds[tid] = args->n;
+    @io_multi_idx[tid] = 0;
+}
+
+kretfunc:do_select 
+/ @fds[tid] / 
+{
+    $terminate = nsecs;
+    $i = 0;
+    while ($i < 512) {
+        $value = @io_multi[tid, $i];
+
+        // In case there are multiple entries for the same (struct file *),
+        // `@inode_pending` will no longer have the `(struct file *)` entry
+        // after the first has been accounted. 
+        $start = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
+        if ($start) {
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+            @inode_map[comm, tid, $value.0, $value.1, $value.2] = (
+                @inode_map[comm, tid, $value.0, $value.1, $value.2].0 + $pending_contrib,
+                @inode_map[comm, tid, $value.0, $value.1, $value.2].1
+            );
+        }
+
+        delete(@inode_pending[comm, tid, $value.0, $value.1, $value.2]);
+        delete(@io_multi[tid, $i]);
+
+        $i++;
+        if ($i >= @fds[tid]) {
+            break;
+        }
+    }
+
+    delete(@fds[tid]);
+    delete(@io_multi_idx[tid]);
+}
+
+kfunc:do_sys_poll
+/ @pids[pid] /
+{
+    @fds[tid] = (int64) args->nfds;
+    @io_multi_idx[tid] = 0;
+}
+
+kretfunc:do_sys_poll 
+/ @fds[tid] / 
+{
+    $terminate = nsecs;
+    $i = 0;
+    while ($i < 256) {
+        $value = @io_multi[tid, $i];
+
+        // In case there are multiple entries for the same (struct file *),
+        // `@inode_pending` will no longer have the `(struct file *)` entry
+        // after the first has been accounted. 
+        $start = @inode_pending[comm, tid, $value.0, $value.1, $value.2];
+        if ($start) {
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+            @inode_map[comm, tid, $value.0, $value.1, $value.2] = (
+                @inode_map[comm, tid, $value.0, $value.1, $value.2].0 + $pending_contrib,
+                @inode_map[comm, tid, $value.0, $value.1, $value.2].1
+            );
+        }
+
+        delete(@inode_pending[comm, tid, $value.0, $value.1, $value.2]);
+        delete(@io_multi[tid, $i]);
+
+        $i++;
+        if ($i >= @fds[tid]) {
+            break;
+        }
+    }
+
+    delete(@fds[tid]);
+    delete(@io_multi_idx[tid]);
+}
+
+
+kretfunc:__fdget
+/ @fds[tid] /
+{
+    if (@io_multi_idx[tid] >= @fds[tid]) {
+        return;
+    }
+
+    $ret = retval;
+    $file = (struct file *) ($ret & (~3));
+    $fs_id = $file->f_inode->i_sb->s_id;
+    $s_dev = $file->f_inode->i_sb->s_dev;
+    $i_id = $file->f_inode->i_ino;
+
+    if(!@files[$s_dev, $i_id]) {
+        @files[$s_dev, $i_id] = 1;
+    }
+
+    @inode_pending[comm, tid, $fs_id, $s_dev, $i_id] = nsecs;
+    @io_multi[tid, @io_multi_idx[tid]] = ($fs_id, $s_dev, $i_id);
+    @io_multi_idx[tid]++;
+}
+
+/*
+ * POLL
+ */
+
+
 interval:s:1
 {
     printf("=> start map statistics\n");
@@ -670,6 +1138,8 @@ END
     clear(@start_sock);
     clear(@files);
     clear(@pids);
-    clear(@socks);
-    clear(@kfile_socket)
+    clear(@socks_ipv4);
+    clear(@socks_ipv6);
+    clear(@socks_unix);
+    clear(@kfile_socket);
 }

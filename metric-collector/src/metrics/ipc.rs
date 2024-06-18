@@ -5,7 +5,6 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs::{self, File},
     io::prelude::*,
-    net::Ipv4Addr,
     path::Path,
     rc::Rc,
     time::Duration,
@@ -13,7 +12,7 @@ use std::{
 
 use crate::execute::{
     boot_to_epoch,
-    programs::ipc::{IpcEvent, IpcProgram, TargetFile},
+    programs::ipc::{Connection, IpcEvent, IpcProgram, TargetFile},
 };
 
 use super::Collect;
@@ -34,7 +33,7 @@ impl Ipc {
         tid: usize,
         root_directory: Rc<str>,
         target_subdirectory: &str,
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     ) -> Self {
         Self {
             ipc_program,
@@ -56,7 +55,7 @@ impl Ipc {
                     self.pipes.process_event(event)?;
                 }
             }
-            IpcEvent::AcceptEnd { .. } | IpcEvent::ConnectStart { .. } => {
+            IpcEvent::AcceptEnd { .. } | IpcEvent::ConnectEnd { .. } => {
                 self.sockets.process_event(event)?;
             }
             _ => {
@@ -90,7 +89,6 @@ impl Collect for Ipc {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Stats {
     accumulated_wait: u64,
-    average_wait_ns: u64,
     count: u64,
 }
 
@@ -116,29 +114,32 @@ impl Pipes {
     fn process_event(&mut self, event: IpcEvent) -> Result<()> {
         match event {
             IpcEvent::InodeWait {
+                fs_type,
                 sb_id,
                 inode_id,
                 sample_instant_ns,
                 total_interval_wait_ns,
-                average_wait_ns,
                 count_wait,
                 ..
             } => {
                 let sample_instant_epoch_ns = boot_to_epoch(sample_instant_ns as u128);
-                let target_file = TargetFile::Inode {
-                    device: sb_id,
-                    inode_id,
+                let target_file = match &*fs_type {
+                    "epoll" => TargetFile::Epoll {
+                        address: u64::from_ne_bytes((inode_id as i64).to_ne_bytes()),
+                    },
+                    _ => TargetFile::Inode {
+                        device: sb_id,
+                        inode_id: inode_id as u64,
+                    },
                 };
                 let stat = self
                     .stream_stats_map
                     .entry(target_file.clone())
                     .or_insert(Stats {
                         accumulated_wait: 0,
-                        average_wait_ns: 0,
                         count: 0,
                     });
                 stat.accumulated_wait += total_interval_wait_ns;
-                stat.average_wait_ns = average_wait_ns.unwrap_or(0);
                 stat.count = count_wait.unwrap_or(0);
                 let snapshots = self
                     .snapshots
@@ -160,7 +161,6 @@ impl Pipes {
                     .entry(target_file.clone())
                     .or_insert(Stats {
                         accumulated_wait: 0,
-                        average_wait_ns: 0,
                         count: 0,
                     });
                 self.active.insert(target_file, contrib_snapshot);
@@ -176,7 +176,6 @@ impl Pipes {
                         .entry(target_file.clone())
                         .or_insert(Stats {
                             accumulated_wait: 0,
-                            average_wait_ns: 0,
                             count: 0,
                         });
                     let diff = if (contrib_snapshot as i64 - add_snapshot as i64) < 0 {
@@ -213,7 +212,6 @@ impl Pipes {
                         .entry(target.clone())
                         .or_insert(Stats {
                             accumulated_wait: 0,
-                            average_wait_ns: 0,
                             count: 0,
                         });
                     let contrib =
@@ -279,7 +277,6 @@ impl Pipes {
                 let sample = StreamFileSample {
                     epoch_ms: epoch_ms as u128,
                     cumulative_wait: stat.accumulated_wait,
-                    average_wait_ns: stat.average_wait_ns,
                     count: stat.count,
                 };
 
@@ -299,6 +296,14 @@ impl Pipes {
                             self.target_subdirectory,
                             (epoch_ms / (1000 * 60)) * 60,
                             name,
+                            address,
+                        )
+                    }
+                    TargetFile::Epoll { address } => {
+                        format!(
+                            "{}/streams/{:?}/epoll_{:x}.csv",
+                            self.target_subdirectory,
+                            (epoch_ms / (1000 * 60)) * 60,
                             address,
                         )
                     }
@@ -348,13 +353,8 @@ impl Pipes {
     }
 }
 
-type Endpoint = (Ipv4Addr, u64);
-type SrcEndpoint = Endpoint;
-type DstEndpoint = Endpoint;
-pub type Socket = (SrcEndpoint, Option<DstEndpoint>);
-
 struct Sockets {
-    kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+    kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     kfile_stats_map: HashMap<KFile, Stats>,
     snapshots: HashMap<KFile, VecDeque<(Option<u64>, Stats)>>,
     active: HashMap<KFile, u64>,
@@ -365,7 +365,7 @@ struct Sockets {
 impl Sockets {
     fn new(
         target_subdirectory: String,
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     ) -> Self {
         Self {
             kfile_socket_map,
@@ -379,48 +379,39 @@ impl Sockets {
 
     fn process_event(&mut self, event: IpcEvent) -> Result<()> {
         match event {
-            IpcEvent::ConnectStart {
+            IpcEvent::ConnectEnd {
                 inode_id,
                 sb_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
                 ..
             }
             | IpcEvent::AcceptEnd {
                 inode_id,
                 sb_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
                 ..
             } => {
                 let kfile = (sb_id, inode_id);
                 self.kfile_socket_map
                     .borrow_mut()
                     .entry(kfile)
-                    .or_insert(((src_host, src_port), Some((dst_host, dst_port))));
+                    .or_insert(conn);
             }
             IpcEvent::InodeWait {
                 sb_id,
                 inode_id,
                 sample_instant_ns,
                 total_interval_wait_ns,
-                average_wait_ns,
                 count_wait,
                 ..
             } => {
                 let sample_instant_epoch_ns = boot_to_epoch(sample_instant_ns as u128);
-                let kfile = (sb_id, inode_id);
+                let kfile = (sb_id, inode_id as u64);
                 let stat = self.kfile_stats_map.entry(kfile).or_insert(Stats {
                     accumulated_wait: 0,
-                    average_wait_ns: 0,
                     count: 0,
                 });
                 stat.accumulated_wait += total_interval_wait_ns;
-                stat.average_wait_ns = average_wait_ns.unwrap_or(0);
                 stat.count = count_wait.unwrap_or(0);
                 let snapshots = self
                     .snapshots
@@ -446,7 +437,6 @@ impl Sockets {
                 };
                 self.kfile_stats_map.entry(kfile).or_insert(Stats {
                     accumulated_wait: 0,
-                    average_wait_ns: 0,
                     count: 0,
                 });
                 self.active.insert(kfile, contrib_snapshot);
@@ -465,7 +455,6 @@ impl Sockets {
                 self.active.remove(&kfile).map(|add_snapshot| {
                     let stat = self.kfile_stats_map.entry(kfile).or_insert(Stats {
                         accumulated_wait: 0,
-                        average_wait_ns: 0,
                         count: 0,
                     });
                     stat.accumulated_wait += if (contrib_snapshot as i64 - add_snapshot as i64) < 0
@@ -498,7 +487,6 @@ impl Sockets {
                 for (kfile, add_time) in self.active.iter_mut() {
                     let stat = self.kfile_stats_map.entry(*kfile).or_insert(Stats {
                         accumulated_wait: 0,
-                        average_wait_ns: 0,
                         count: 0,
                     });
                     let contrib =
@@ -541,6 +529,22 @@ impl Sockets {
         Ok(())
     }
 
+    fn rename<'a>(
+        data_files: &'a mut LruCache<String, File>,
+        old: &Path,
+        new: &Path,
+    ) -> Result<()> {
+        let old = old.to_str().unwrap().into();
+        let new = new.to_str().unwrap().into();
+
+        let file = data_files.remove(old);
+        if let Some(file) = file {
+            fs::rename(&old, &new)?;
+            data_files.insert(new, file);
+        }
+        Ok(())
+    }
+
     fn get_or_create_file<'a>(
         data_files: &'a mut LruCache<String, File>,
         filepath: &Path,
@@ -580,23 +584,71 @@ impl Sockets {
                 let sample = SocketSample {
                     epoch_ms: epoch_ms as u128,
                     cumulative_wait: stat.accumulated_wait,
-                    average_wait_ns: stat.average_wait_ns,
                     count: stat.count,
                 };
-                let file_path =
-                    if let Some((src, Some(dst))) = self.kfile_socket_map.borrow().get(&kfile) {
-                        format!(
-                            "{}/sockets/{:?}/{}:{:?}_{}:{:?}.csv",
-                            self.target_subdirectory,
-                            (epoch_ms / (1000 * 60)) * 60,
-                            src.0.octets().map(|elem| elem.to_string()).join("."),
-                            src.1,
-                            dst.0.octets().map(|elem| elem.to_string()).join("."),
-                            dst.1,
-                        )
-                    } else {
-                        continue;
-                    };
+                let kfile_path = format!(
+                    "{}/sockets/{:?}/{}_{}.csv",
+                    self.target_subdirectory,
+                    (epoch_ms / (1000 * 60)) * 60,
+                    kfile.0,
+                    kfile.1,
+                );
+                let file_path = match self.kfile_socket_map.borrow().get(&kfile) {
+                    Some(Connection::Ipv4 {
+                        src_host,
+                        src_port,
+                        dst_host,
+                        dst_port,
+                    }) => format!(
+                        "{}/sockets/{:?}/ipv4_{}:{}_{}:{}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        src_host.octets().map(|elem| elem.to_string()).join("."),
+                        src_port,
+                        dst_host.octets().map(|elem| elem.to_string()).join("."),
+                        dst_port,
+                    ),
+                    Some(Connection::Ipv6 {
+                        src_host,
+                        src_port,
+                        dst_host,
+                        dst_port,
+                    }) => format!(
+                        "{}/sockets/{:?}/ipv6_[{}]:{}_[{}]:{}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        src_host.segments().map(|elem| elem.to_string()).join(":"),
+                        src_port,
+                        dst_host.segments().map(|elem| elem.to_string()).join(":"),
+                        dst_port,
+                    ),
+                    Some(Connection::Unix {
+                        src_address,
+                        dst_address,
+                    }) => format!(
+                        "{}/sockets/{:?}/unix_{:#x}_{:#x}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        src_address,
+                        dst_address
+                    ),
+                    _ => format!(
+                        "{}/sockets/{:?}/{}_{}.csv",
+                        self.target_subdirectory,
+                        (epoch_ms / (1000 * 60)) * 60,
+                        kfile.0,
+                        kfile.1,
+                    ),
+                };
+
+                if kfile_path != file_path {
+                    Self::rename(
+                        &mut self.data_files,
+                        Path::new(&kfile_path),
+                        Path::new(&file_path),
+                    )?;
+                }
+
                 let mut file = Self::get_or_create_file(
                     &mut self.data_files,
                     Path::new(&file_path),
@@ -625,7 +677,7 @@ struct EventPoll {
 
 impl EventPoll {
     fn new(
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
         data_directory: Rc<str>,
         address: u64,
     ) -> Self {
@@ -669,7 +721,7 @@ impl EventPoll {
 pub struct EventPollCollection {
     event_poll_map: HashMap<u64, EventPoll>,
     ipc_program: Rc<RefCell<IpcProgram>>,
-    kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+    kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     root_directory: Rc<str>,
     sample_instant_ns: Option<u128>,
 }
@@ -677,7 +729,7 @@ pub struct EventPollCollection {
 impl EventPollCollection {
     pub fn new(
         ipc_program: Rc<RefCell<IpcProgram>>,
-        kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+        kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
         root_directory: Rc<str>,
     ) -> Self {
         Self {
@@ -707,16 +759,12 @@ impl EventPollCollection {
             IpcEvent::NewSocketMap {
                 sb_id,
                 inode_id,
-                src_host,
-                src_port,
-                dst_host,
-                dst_port,
+                conn,
                 ..
             } => {
-                self.kfile_socket_map.borrow_mut().insert(
-                    (sb_id, inode_id),
-                    ((src_host, src_port), Some((dst_host, dst_port))),
-                );
+                self.kfile_socket_map
+                    .borrow_mut()
+                    .insert((sb_id, inode_id), conn);
             }
             _ => {
                 return Err(eyre!(format!("Expected epoll event. Got {:?}", event)));
@@ -754,20 +802,19 @@ impl Collect for EventPollCollection {
 struct SocketSample {
     epoch_ms: u128,
     cumulative_wait: u64,
-    average_wait_ns: u64,
     count: u64,
 }
 
 impl ToCsv for SocketSample {
     fn to_csv_row(&self) -> String {
         format!(
-            "{},{},{},{}\n",
-            self.epoch_ms, self.cumulative_wait, self.average_wait_ns, self.count
+            "{},{},{}\n",
+            self.epoch_ms, self.cumulative_wait, self.count
         )
     }
 
     fn csv_headers(&self) -> &'static str {
-        "epoch_ms,socket_wait,average_wait_ns,count\n"
+        "epoch_ms,socket_wait,count\n"
     }
 }
 
@@ -789,45 +836,49 @@ impl ToCsv for StreamAggregatedSample {
 struct StreamFileSample {
     epoch_ms: u128,
     cumulative_wait: u64,
-    average_wait_ns: u64,
     count: u64,
 }
 
 impl ToCsv for StreamFileSample {
     fn to_csv_row(&self) -> String {
         format!(
-            "{},{},{},{}\n",
-            self.epoch_ms, self.cumulative_wait, self.average_wait_ns, self.count
+            "{},{},{}\n",
+            self.epoch_ms, self.cumulative_wait, self.count
         )
     }
 
     fn csv_headers(&self) -> &'static str {
-        "epoch_ms,stream_wait,average_wait_ns,count\n"
+        "epoch_ms,stream_wait,count\n"
     }
 }
 
 #[cfg(test)]
 mod tests {
-    mod ipc_sockets {
-        use eyre::Result;
-        use indoc::indoc;
-        use std::{
-            cell::RefCell,
-            collections::HashMap,
-            env::temp_dir,
-            fs,
-            io::prelude::*,
-            rc::Rc,
-            sync::{Arc, Mutex},
-        };
+    use eyre::Result;
+    use indoc::indoc;
+    use std::{
+        cell::RefCell,
+        collections::HashMap,
+        env::temp_dir,
+        fs,
+        io::prelude::*,
+        rc::Rc,
+        sync::{Arc, Mutex},
+    };
 
-        use crate::{
-            execute::programs::{ipc::IpcProgram, pipe},
-            metrics::{
-                ipc::{Ipc, Stats},
-                Collect,
-            },
-        };
+    use crate::{
+        execute::programs::{
+            ipc::{IpcProgram, TargetFile},
+            pipe,
+        },
+        metrics::{
+            ipc::{EventPollCollection, Ipc, Stats},
+            Collect,
+        },
+    };
+
+    mod ipc_sockets {
+        use super::*;
 
         #[test]
         fn socket_two_consecutive_inode_samples() -> Result<()> {
@@ -840,16 +891,16 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058
-                AcceptEnd       example-applica 24239   sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                AcceptEnd       example-applica 24239   sockfs  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
-                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 2848, total 2848
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: (2848, 1)
 
                 SampleInstant   19447107025962
                 => end map statistics
 
                 => start map statistics
-                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 43106, total 43106
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: (43106, 1)
 
                 SampleInstant   19448107034740
                 => end map statistics
@@ -878,7 +929,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: 2848,
-                        average_wait_ns: 2848,
                         count: 1
                     }
                 ))
@@ -889,7 +939,6 @@ mod tests {
                     Some(19448107034740),
                     Stats {
                         accumulated_wait: 2848 + 43106,
-                        average_wait_ns: 43106,
                         count: 1
                     }
                 ))
@@ -908,17 +957,17 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058
-                AcceptEnd       example-applica 24239   sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                NewSocketMap    sockfs  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058
+                AcceptEnd       example-applica 24239   sockfs  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
-                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 2848, total 2848
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: (2848, 1)
 
                 SampleInstant   19447107025962
                 => end map statistics
 
                 => start map statistics
-                @inode_map[example-applica, 24239, sockfs, 8, 90098]: count 1, average 43106, total 43106
+                @inode_map[example-applica, 24239, sockfs, 8, 90098]: (43106, 1)
 
                 SampleInstant   19448107034740
                 => end map statistics
@@ -940,14 +989,14 @@ mod tests {
             assert!(ipc.sockets.snapshots.len() == 0);
 
             let contents = fs::read_to_string(format!(
-                "{}/thread/24239/24239/ipc/sockets/19440/127.0.0.1:7878_127.0.0.1:50058.csv",
+                "{}/thread/24239/24239/ipc/sockets/19440/ipv4_127.0.0.1:7878_127.0.0.1:50058.csv",
                 tmp_dir.path().to_str().unwrap()
             ))?;
             assert_eq!(
                 indoc! {"
-                epoch_ms,socket_wait,average_wait_ns,count
-                19447107,2848,2848,1
-                19448107,45954,43106,1
+                epoch_ms,socket_wait,count
+                19447107,2848,1
+                19448107,45954,1
             "},
                 contents
             );
@@ -957,28 +1006,7 @@ mod tests {
     }
 
     mod ipc_pipes {
-        use eyre::Result;
-        use indoc::indoc;
-        use std::{
-            cell::RefCell,
-            collections::HashMap,
-            env::temp_dir,
-            fs,
-            io::prelude::*,
-            rc::Rc,
-            sync::{Arc, Mutex},
-        };
-
-        use crate::{
-            execute::programs::{
-                ipc::{IpcProgram, TargetFile},
-                pipe,
-            },
-            metrics::{
-                ipc::{Ipc, Stats},
-                Collect,
-            },
-        };
+        use super::*;
 
         #[test]
         fn socket_two_consecutive_inode_samples() -> Result<()> {
@@ -990,16 +1018,16 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                AcceptEnd       example-applica 24239   devpts  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                AcceptEnd       example-applica 24239   devpts  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
-                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 2848, total 2848
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: (2848, 1)
 
                 SampleInstant   19447107025962
                 => end map statistics
 
                 => start map statistics
-                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 43106, total 43106
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: (43106, 1)
 
                 SampleInstant   19448107034740
                 => end map statistics
@@ -1031,7 +1059,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: 2848,
-                        average_wait_ns: 2848,
                         count: 1
                     }
                 ))
@@ -1042,7 +1069,6 @@ mod tests {
                     Some(19448107034740),
                     Stats {
                         accumulated_wait: 2848 + 43106,
-                        average_wait_ns: 43106,
                         count: 1
                     }
                 ))
@@ -1061,16 +1087,16 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                AcceptEnd       example-applica 24239   devpts  8       90098   127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                AcceptEnd       example-applica 24239   devpts  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
 
                 => start map statistics
-                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 2848, total 2848
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: (2848, 1)
 
                 SampleInstant   19447107025962
                 => end map statistics
 
                 => start map statistics
-                @inode_map[example-applica, 24239, devpts, 8, 90098]: count 1, average 43106, total 43106
+                @inode_map[example-applica, 24239, devpts, 8, 90098]: (43106, 1)
 
                 SampleInstant   19448107034740
                 => end map statistics
@@ -1098,9 +1124,9 @@ mod tests {
             ))?;
             assert_eq!(
                 indoc! {"
-                    epoch_ms,stream_wait,average_wait_ns,count
-                    19447107,2848,2848,1
-                    19448107,45954,43106,1
+                    epoch_ms,stream_wait,count
+                    19447107,2848,1
+                    19448107,45954,1
                 "},
                 contents
             );
@@ -1110,25 +1136,7 @@ mod tests {
     }
 
     mod eventpoll_sockets {
-        use eyre::Result;
-        use indoc::indoc;
-        use std::{
-            cell::RefCell,
-            collections::HashMap,
-            env::temp_dir,
-            fs,
-            io::prelude::*,
-            rc::Rc,
-            sync::{Arc, Mutex},
-        };
-
-        use crate::{
-            execute::programs::{ipc::IpcProgram, pipe},
-            metrics::{
-                ipc::{EventPollCollection, Stats},
-                Collect,
-            },
-        };
+        use super::*;
 
         #[test]
         fn socket_empty_snapshot() -> Result<()> {
@@ -1141,7 +1149,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
             "};
@@ -1172,7 +1179,6 @@ mod tests {
                     None,
                     Stats {
                         accumulated_wait: 578800067,
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1192,7 +1198,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
 
@@ -1228,7 +1233,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: 578800067,
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1248,7 +1252,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
@@ -1285,7 +1288,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1305,7 +1307,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
@@ -1345,7 +1346,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1358,7 +1358,6 @@ mod tests {
                         accumulated_wait: (1016301358 - 437501291)
                             + (289679399 - 200000000)
                             + (1016301358 - 437501291),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1378,7 +1377,6 @@ mod tests {
                 HEADER
 
                 NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
@@ -1423,7 +1421,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1436,7 +1433,6 @@ mod tests {
                         accumulated_wait: (1016301358 - 437501291)
                             + (289679399 - 200000000)
                             + (1016301358 - 437501291),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1455,8 +1451,8 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                ConnectStart    epoll_server    24354   sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
+                NewSocketMap    sockfs  8       80672   AF_INET     127.0.0.1       50046   127.0.0.1       7878
+                ConnectEnd      epoll_server    24354   sockfs  8       80672   AF_INET     127.0.0.1       50046   127.0.0.1       7878    111111111   1034
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
@@ -1497,15 +1493,15 @@ mod tests {
             assert!(snapshots.len() == 0);
 
             let contents = fs::read_to_string(format!(
-                "{}/global/epoll/ffff98dd8179e0c0/sockets/19440/127.0.0.1:50046_127.0.0.1:7878.csv",
+                "{}/global/epoll/ffff98dd8179e0c0/sockets/19440/ipv4_127.0.0.1:50046_127.0.0.1:7878.csv",
                 tmp_dir.path().to_str().unwrap()
             ))?;
             assert_eq!(
                 contents,
                 indoc! {"
-                    epoch_ms,socket_wait,average_wait_ns,count
-                    19447107,668479466,0,0
-                    19448107,1247279533,0,0
+                    epoch_ms,socket_wait,count
+                    19447107,668479466,0
+                    19448107,1247279533,0
                 "}
             );
 
@@ -1514,28 +1510,7 @@ mod tests {
     }
 
     mod eventpoll_pipes {
-        use eyre::Result;
-        use indoc::indoc;
-        use std::{
-            cell::RefCell,
-            collections::HashMap,
-            env::temp_dir,
-            fs,
-            io::prelude::*,
-            rc::Rc,
-            sync::{Arc, Mutex},
-        };
-
-        use crate::{
-            execute::programs::{
-                ipc::{IpcProgram, TargetFile},
-                pipe,
-            },
-            metrics::{
-                ipc::{EventPollCollection, Stats},
-                Collect,
-            },
-        };
+        use super::*;
 
         #[test]
         fn empty_snapshot() -> Result<()> {
@@ -1547,7 +1522,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
             "};
@@ -1581,7 +1555,6 @@ mod tests {
                     None,
                     Stats {
                         accumulated_wait: 578800067,
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1600,7 +1573,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
 
@@ -1639,7 +1611,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: 578800067,
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1658,7 +1629,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
@@ -1698,7 +1668,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1717,7 +1686,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
@@ -1760,7 +1728,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1773,7 +1740,6 @@ mod tests {
                         accumulated_wait: (1016301358 - 437501291)
                             + (289679399 - 200000000)
                             + (1016301358 - 437501291),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1792,7 +1758,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
@@ -1840,7 +1805,6 @@ mod tests {
                     Some(19447107025962),
                     Stats {
                         accumulated_wait: (1016301358 - 437501291) + (289679399 - 200000000),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1853,7 +1817,6 @@ mod tests {
                         accumulated_wait: (1016301358 - 437501291)
                             + (289679399 - 200000000)
                             + (1016301358 - 437501291),
-                        average_wait_ns: 0,
                         count: 0,
                     }
                 ))
@@ -1872,7 +1835,6 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                ConnectStart    epoll_server    24354   devpts  8       80672   127.0.0.1       50046   127.0.0.1       7878
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
                 EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
                 EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
@@ -1919,13 +1881,284 @@ mod tests {
             assert_eq!(
                 contents,
                 indoc! {"
-                    epoch_ms,stream_wait,average_wait_ns,count
-                    19447107,668479466,0,0
-                    19448107,1247279533,0,0
+                    epoch_ms,stream_wait,count
+                    19447107,668479466,0
+                    19448107,1247279533,0
                 "}
             );
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn epoll_inode() -> Result<()> {
+        let (rx, mut tx) = pipe();
+        let ipc_program = Rc::new(RefCell::new(
+            IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+        ));
+
+        let bpf_content = indoc! {"
+            HEADER
+
+            NewSocketMap    sockfs  8       2519815 AF_INET     127.0.0.1       60958   127.0.0.1       7878
+            EpollAdd        epoll_server    357171  0xffff96892f1e7b00      sockfs  8       2519815 521457873233008 861999000
+
+            => start map statistics
+            @inode_map[epoll_server, 357171,                           epoll, 0, -115959031497984]: (862007004, 12)
+            @inode_pending[epoll_server, 357171,                           epoll, 0, -115959031497984]: 521457873417016
+
+            @epoll_map[0xffff96892f1e7b00]: 861999871
+            @epoll_pending[0xffff96892f1e7b00]: 521457873417016
+            SampleInstant   521457925386742
+            => end map statistics
+        "};
+        tx.write_all(bpf_content.as_bytes())?;
+        while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+        let tmp_dir = tempdir::TempDir::new("")?;
+        let mut event_polls = EventPollCollection::new(
+            ipc_program.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+        );
+
+        event_polls.sample()?;
+        event_polls.store()?;
+
+        let event_poll = event_polls
+            .event_poll_map
+            .remove(&(0xffff96892f1e7b00 as u64));
+        assert!(event_poll.is_some());
+
+        let event_poll = event_poll.unwrap();
+        let snapshots = event_poll.sockets.snapshots;
+        assert!(snapshots.len() == 0);
+
+        let contents = fs::read_to_string(format!(
+            "{}/global/epoll/ffff96892f1e7b00/sockets/521400/ipv4_127.0.0.1:60958_127.0.0.1:7878.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            contents,
+            indoc! {"
+                epoch_ms,socket_wait,count
+                521457925,51970597,0
+            "}
+        );
+
+        let mut ipc = Ipc::new(
+            ipc_program.clone(),
+            357171,
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+            "thread/357171/357171",
+            Rc::new(RefCell::new(HashMap::new())),
+        );
+
+        ipc.sample()?;
+        ipc.store()?;
+
+        assert!(ipc.pipes.snapshots.len() == 0);
+        let contents = fs::read_to_string(format!(
+            "{}/thread/357171/357171/ipc/streams/521400/epoll_ffff96892f1e7b00.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            indoc! {"
+                epoch_ms,stream_wait,count
+                521457925,913976730,12
+            "},
+            contents
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn epoll_inode_ipv6() -> Result<()> {
+        let (rx, mut tx) = pipe();
+        let ipc_program = Rc::new(RefCell::new(
+            IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+        ));
+
+        let bpf_content = indoc! {"
+            HEADER
+
+            NewSocketMap    sockfs  8                    1031455    AF_INET6        ::1                     3001   ::1                     55774
+            AcceptEnd       epoll_server                   67967    sockfs  8                    1031455    AF_INET6     ::1     3001    ::1     55774        330488529582598
+            EpollAdd        epoll_server                   67967    0xffff9d5c4f7ca840      sockfs  8                    1031455         330488529608026               248242602
+
+            => start map statistics
+            @inode_map[epoll_server, 67967, sockfs, 8, 1031455]: (30594, 5)
+            @inode_pending[epoll_server, 67967,                           epoll, 0, -108455180588992]: 330489199386315
+            @epoll_map[0xffff9d5c4f7ca840]: 586287502
+            @epoll_pending[0xffff9d5c4f7ca840]: 330489199386315
+            SampleInstant        330489281294037
+            => end map statistics
+        "};
+        tx.write_all(bpf_content.as_bytes())?;
+        while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+        let tmp_dir = tempdir::TempDir::new("")?;
+        let mut event_polls = EventPollCollection::new(
+            ipc_program.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+        );
+
+        event_polls.sample()?;
+        event_polls.store()?;
+
+        let event_poll = event_polls
+            .event_poll_map
+            .remove(&(0xffff9d5c4f7ca840 as u64));
+        assert!(event_poll.is_some());
+
+        let event_poll = event_poll.unwrap();
+        let snapshots = event_poll.sockets.snapshots;
+        assert!(snapshots.len() == 0);
+
+        let contents = fs::read_to_string(format!(
+            "{}/global/epoll/ffff9d5c4f7ca840/sockets/330480/ipv6_[0:0:0:0:0:0:0:1]:3001_[0:0:0:0:0:0:0:1]:55774.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            contents,
+            indoc! {"
+                epoch_ms,socket_wait,count
+                330489281,419952622,0
+            "}
+        );
+
+        let mut ipc = Ipc::new(
+            ipc_program.clone(),
+            67967,
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+            "thread/67967/67967",
+            Rc::new(RefCell::new(HashMap::new())),
+        );
+
+        ipc.sample()?;
+        ipc.store()?;
+
+        assert!(ipc.sockets.snapshots.len() == 0);
+        let contents = fs::read_to_string(format!(
+            "{}/thread/67967/67967/ipc/sockets/330480/ipv6_[0:0:0:0:0:0:0:1]:3001_[0:0:0:0:0:0:0:1]:55774.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            indoc! {"
+                epoch_ms,socket_wait,count
+                330489281,30594,5
+            "},
+            contents
+        );
+
+        assert!(ipc.pipes.snapshots.len() == 0);
+        let contents = fs::read_to_string(format!(
+            "{}/thread/67967/67967/ipc/streams/330480/epoll_ffff9d5c4f7ca840.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            indoc! {"
+                epoch_ms,stream_wait,count
+                330489281,81907722,0
+            "},
+            contents
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn epoll_inode_unix() -> Result<()> {
+        let (rx, mut tx) = pipe();
+        let ipc_program = Rc::new(RefCell::new(
+            IpcProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap(),
+        ));
+
+        let bpf_content = indoc! {"
+            HEADER
+
+            NewSocketMap    sockfs  8                    1051498    AF_UNIX 0xffff9d5c5c4d3300      0xffff9d5c5c4d1100
+            => start map statistics
+            @inode_pending[unix-accept-con, 143866, sockfs, 8, 1051498]: 332665199498858
+            SampleInstant        332665569307417
+            => end map statistics
+
+            NewProcess      unix-accept-con               143868
+            NewSocketMap    sockfs  8                    1057237    AF_UNIX 0xffff9d5c5c4d1100      0xffff9d5c5c4d3300
+            => start map statistics
+            @inode_map[unix-accept-con, 143866, devpts, 24, 8]: (8184, 1)
+            @inode_map[unix-accept-con, 143866, sockfs, 8, 1051498]: (630338761, 1)
+            @inode_map[unix-accept-con, 143868, sockfs, 8, 1057237]: (5879, 1)
+            @inode_pending[unix-accept-con, 143866, sockfs, 8, 1051498]: 332666199674298
+            SampleInstant        332666569304709
+            => end map statistics
+        "};
+        tx.write_all(bpf_content.as_bytes())?;
+        while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
+
+        let tmp_dir = tempdir::TempDir::new("")?;
+        let kfile_socket_map = Rc::new(RefCell::new(HashMap::new()));
+        let mut event_polls = EventPollCollection::new(
+            ipc_program.clone(),
+            kfile_socket_map.clone(),
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+        );
+
+        event_polls.sample()?;
+        event_polls.store()?;
+
+        let mut ipc = Ipc::new(
+            ipc_program.clone(),
+            143866,
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+            "thread/143866/143866",
+            kfile_socket_map.clone(),
+        );
+
+        ipc.sample()?;
+        ipc.store()?;
+
+        assert!(ipc.sockets.snapshots.len() == 0);
+        let contents = fs::read_to_string(format!(
+            "{}/thread/143866/143866/ipc/sockets/332640/unix_0xffff9d5c5c4d3300_0xffff9d5c5c4d1100.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            indoc! {"
+                epoch_ms,socket_wait,count
+                332665569,369808559,0
+                332666569,1369777731,1
+            "},
+            contents
+        );
+
+        let mut ipc = Ipc::new(
+            ipc_program.clone(),
+            143868,
+            Rc::from(tmp_dir.path().to_str().unwrap()),
+            "thread/143868/143868",
+            kfile_socket_map,
+        );
+
+        ipc.sample()?;
+        ipc.store()?;
+
+        assert!(ipc.sockets.snapshots.len() == 0);
+        let contents = fs::read_to_string(format!(
+            "{}/thread/143868/143868/ipc/sockets/332640/unix_0xffff9d5c5c4d1100_0xffff9d5c5c4d3300.csv",
+            tmp_dir.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            indoc! {"
+                epoch_ms,socket_wait,count
+                332666569,5879,1
+            "},
+            contents
+        );
+
+        Ok(())
     }
 }

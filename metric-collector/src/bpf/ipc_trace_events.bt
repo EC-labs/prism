@@ -298,6 +298,10 @@ kretprobe:inet_csk_accept
                "NewProcess", comm, pid);
         @pids[pid] = 1;
     }
+
+    if (!@socks[$saddr, $lport, $daddr, $dport]) {
+        @socks[$saddr, $lport, $daddr, $dport] = 1;
+    }
     printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%d\t%s\t%d\t%lld\n", 
            "AcceptEnd", comm, tid, $fs_id, $s_dev, $i_id, $saddr, $lport, $daddr, $dport, nsecs - @start_sock[tid]);
     delete(@start_sock[tid]);

@@ -13,13 +13,13 @@ use std::{
 
 use crate::{
     configure::Config,
-    execute::programs::{clone::CloneEvent, ipc::IpcEvent},
+    execute::programs::{
+        clone::CloneEvent,
+        ipc::{Connection, IpcEvent},
+    },
     metrics::{iowait::IOWait, Collect},
 };
-use crate::{
-    execute::Executor,
-    metrics::ipc::{KFile, Socket},
-};
+use crate::{execute::Executor, metrics::ipc::KFile};
 use crate::{metrics::ipc::EventPollCollection, target::Target};
 
 pub struct Extractor {
@@ -28,7 +28,7 @@ pub struct Extractor {
     targets: HashMap<usize, Target>,
     system_metrics: Vec<Box<dyn Collect>>,
     rx_timer: Option<Receiver<bool>>,
-    kfile_socket_map: Rc<RefCell<HashMap<KFile, Socket>>>,
+    kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
 }
 
 impl Extractor {
@@ -75,7 +75,8 @@ impl Extractor {
                         ),
                     );
                 }
-                CloneEvent::NewProcess(comm, pid) => {
+                CloneEvent::NewProcess(_, pid) => {
+                    executor.monitor(pid);
                     if let Ok(targets) = Target::get_threads(pid) {
                         targets.into_iter().for_each(|tid| {
                             self.targets.insert(
@@ -103,8 +104,7 @@ impl Extractor {
             });
 
         let new_pids = executor.futex.borrow_mut().take_new_pid_events()?;
-        for (comm, pid) in new_pids {
-            let comm = comm.replace("/", "|");
+        for (_, pid) in new_pids {
             executor.monitor(pid);
             if let Ok(targets) = Target::get_threads(pid) {
                 targets.into_iter().for_each(|tid| {
@@ -125,8 +125,7 @@ impl Extractor {
 
         let events = executor.ipc.borrow_mut().take_process_events()?;
         for event in events {
-            if let IpcEvent::NewProcess { comm, pid } = event {
-                let comm = comm.replace("/", "|");
+            if let IpcEvent::NewProcess { pid, .. } = event {
                 executor.monitor(pid);
                 if let Ok(targets) = Target::get_threads(pid) {
                     targets.into_iter().for_each(|tid| {
