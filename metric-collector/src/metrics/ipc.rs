@@ -617,9 +617,15 @@ impl Sockets {
                         "{}/sockets/{:?}/ipv6_[{}]:{}_[{}]:{}.csv",
                         self.target_subdirectory,
                         (epoch_ms / (1000 * 60)) * 60,
-                        src_host.segments().map(|elem| elem.to_string()).join(":"),
+                        src_host
+                            .segments()
+                            .map(|elem| format!("{:x}", elem))
+                            .join(":"),
                         src_port,
-                        dst_host.segments().map(|elem| elem.to_string()).join(":"),
+                        dst_host
+                            .segments()
+                            .map(|elem| format!("{:x}", elem))
+                            .join(":"),
                         dst_port,
                     ),
                     Some(Connection::Unix {

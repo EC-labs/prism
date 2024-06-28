@@ -1,5 +1,6 @@
 use chrono::prelude::*;
 use clap::ArgMatches;
+use eyre::eyre;
 use std::rc::Rc;
 
 pub struct Config {
@@ -9,10 +10,21 @@ pub struct Config {
     pub process_name: Option<String>,
 }
 
-impl From<ArgMatches> for Config {
-    fn from(mut matches: ArgMatches) -> Self {
+impl TryFrom<ArgMatches> for Config {
+    type Error = Box<dyn std::error::Error>;
+    fn try_from(mut matches: ArgMatches) -> Result<Self, Self::Error> {
         let pid = matches.remove_one::<usize>("pid");
         let process_name = matches.remove_one::<String>("process-name");
+        match (&pid, &process_name) {
+            (None, None) => return Err(eyre!("Pass --process-name or --pid arg required").into()),
+            (Some(_), Some(_)) => {
+                return Err(
+                    eyre!("Arguments --process-name and --pid are mutually exclusive").into(),
+                )
+            }
+            _ => {}
+        }
+
         let period: u64 = matches
             .remove_one::<u64>("period")
             .expect("Missing period")
@@ -25,11 +37,11 @@ impl From<ArgMatches> for Config {
             .expect("Required field");
         data_directory += &format!("/{}/system-metrics", utc.to_rfc3339());
 
-        Self {
+        Ok(Self {
             pid,
             period,
             data_directory: Rc::from(data_directory),
             process_name,
-        }
+        })
     }
 }
