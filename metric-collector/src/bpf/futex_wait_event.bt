@@ -64,9 +64,11 @@ tracepoint:syscalls:sys_enter_futex
     $op = args->op&(~FUTEX_PRIVATE_FLAG);
     $op = $op&(~FUTEX_CLOCK_REALTIME);
     if (($op == FUTEX_WAIT_BITSET) || ($op == FUTEX_WAIT)) {
-        @wait_pending[tid] = (nsecs, $root_pid, $uaddr);
+        @start[tid] = (nsecs, $root_pid, $uaddr);
+        printf("%-15s\t%20lld\t%lld\t%lx\t%20lld\n", 
+               "WaitStart", tid, $root_pid, $uaddr, @start[tid].0);
     } else if (($op == FUTEX_WAKE) || ($op == FUTEX_WAKE_BITSET)) {
-        @inwake[tid] = ((uint64) 1, $root_pid, $uaddr);
+        @wake[tid] = (nsecs, $root_pid, $uaddr);
     } else {
         printf("%-15s\t%d\n", "UnhandledOpcode", args->op);
     }
@@ -74,40 +76,31 @@ tracepoint:syscalls:sys_enter_futex
 
 tracepoint:syscalls:sys_exit_futex 
 {
-    if (@wait_pending[tid].0) {
-        $data = @wait_pending[tid];
-        $pending_contrib = $data.0 > @sample_instant ? nsecs - $data.0 : nsecs - @sample_instant;
-        @wait_elapsed[tid, $data.1, $data.2] += $pending_contrib;
-        delete(@wait_pending[tid]);
-    } else if (@inwake[tid].0) {
-        if (args->ret > 0) {
-            $data = @inwake[tid];
-            @wake[tid, $data.1, $data.2] = count();
-        }
-        delete(@inwake[tid]);
+    if (@start[tid].0) {
+        $data = @start[tid];
+        $since_boot = nsecs;
+        $diff = (uint64)($since_boot - $data.0);
+        printf("%-15s\t%20lld\t%lld\t%lx\t%20lld\t%lld\t%d\n", 
+               "WaitElapsed", tid, $data.1, $data.2, $since_boot, $diff, args->ret);
+        delete(@start[tid]);
+    }
+
+    if (@wake[tid].0) {
+        $data = @wake[tid];
+        printf("%-15s\t%20lld\t%lld\t%lx\t%20lld\t%d\n", 
+               "Wake", tid, $data.1, $data.2, $data.0, args->ret);
+        delete(@wake[tid]);
     }
 }
 
 interval:s:1
 {
-    printf("=> start map statistics\n");
-    print(@wait_elapsed);
-    print(@wait_pending);
-    print(@wake);
-
-    @sample_instant = nsecs; 
-    printf("%-15s\t%lld\n", "SampleInstant", @sample_instant);
-    
-    printf("=> end map statistics\n");
-
-    clear(@wait_elapsed);
-    clear(@wake);
+    printf("%-15s\t%20lld\n", "SampleInstant", nsecs);
 }
 
 END {
-    clear(@wait_elapsed);
-    clear(@wait_pending);
-    clear(@wake);
+    clear(@start);
+    clear(@pids);
     clear(@futex);
-    clear(@inwake);
+    clear(@wake);
 }
