@@ -164,7 +164,7 @@ impl From<Vec<u8>> for FutexBpfEvent {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum FutexEvent {
     Wait {
         tid: usize,
@@ -357,7 +357,7 @@ enum StatsClosureValue {
 }
 
 pub struct FutexProgram {
-    child: Child,
+    child: Option<Child>,
     rx: Receiver<Arc<[u8]>>,
     events: HashMap<usize, Vec<FutexEvent>>,
     new_pids: Option<Vec<(Rc<str>, usize)>>,
@@ -404,7 +404,7 @@ impl FutexProgram {
             .stdout(writer)
             .spawn()?;
         Ok(Self {
-            child,
+            child: Some(child),
             rx,
             events: HashMap::new(),
             header_lines: 0,
@@ -412,6 +412,26 @@ impl FutexProgram {
             new_pids: None,
             state: FutexProgramState::OutStatClosure,
             stats_closure_events: HashMap::new(),
+            prev_instant_ns: None,
+        })
+    }
+
+    fn custom_reader<R: Read + Send + 'static>(
+        reader: R,
+        terminate_flag: Arc<Mutex<bool>>,
+    ) -> Result<Self> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Self::start_bpf_reader(tx, reader, terminate_flag);
+
+        Ok(Self {
+            rx,
+            child: None,
+            header_lines: 0,
+            current_event: None,
+            events: HashMap::new(),
+            new_pids: None,
+            stats_closure_events: HashMap::new(),
+            state: FutexProgramState::OutStatClosure,
             prev_instant_ns: None,
         })
     }
@@ -441,7 +461,7 @@ impl FutexProgram {
         });
     }
 
-    pub fn poll_events(&mut self) -> Result<()> {
+    pub fn poll_events(&mut self) -> Result<usize> {
         loop {
             let res = self.rx.try_recv();
             let buf = match res {
@@ -562,7 +582,7 @@ impl FutexProgram {
                 }
             }
         }
-        Ok(())
+        Ok(self.events.len())
     }
 
     pub fn take_futex_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
@@ -583,7 +603,11 @@ impl FutexProgram {
 
 impl Drop for FutexProgram {
     fn drop(&mut self) {
-        if let Err(why) = self.child.kill() {
+        if let None = self.child {
+            return;
+        }
+
+        if let Err(why) = self.child.as_mut().unwrap().kill() {
             println!("Failed to kill futex {}", why);
         }
     }
@@ -591,7 +615,7 @@ impl Drop for FutexProgram {
 
 #[cfg(test)]
 mod tests {
-    use super::FutexBpfEvent;
+    use super::{FutexBpfEvent, FutexProgram};
     use eyre::{eyre, Result};
 
     mod futex_event {
@@ -686,6 +710,232 @@ mod tests {
             } else {
                 return Err(eyre!("Incorrect FutexBpfEvent"));
             }
+
+            Ok(())
+        }
+    }
+
+    mod futex_program {
+        use indoc::indoc;
+        use std::{
+            io::prelude::*,
+            rc::Rc,
+            sync::{Arc, Mutex},
+        };
+
+        use super::super::FutexEvent;
+        use super::*;
+        use crate::execute::programs;
+
+        #[test]
+        fn single_wait_elapsed() -> Result<()> {
+            let (rx, mut tx) = programs::pipe();
+            let mut program = FutexProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap();
+            let bpf_content = indoc! {"
+                HEADER 
+
+                => start map statistics
+                @wait_elapsed[8955, 8877, 0x7c3dd4f85fb0]: (847638877, 4)
+                SampleInstant  	65384570945103
+                => end map statistics
+            "};
+            tx.write(bpf_content.as_bytes())?;
+            while let Ok(0) = program.poll_events() {}
+
+            let event = program
+                .take_futex_events(8955)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            assert_eq!(
+                event,
+                FutexEvent::Wait {
+                    tid: 8955,
+                    root_pid: 8877,
+                    uaddr: Rc::from("0x7c3dd4f85fb0"),
+                    sample_instant_ns: 65384570945103,
+                    total_interval_wait_ns: 847638877,
+                    count: 4
+                }
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn single_wait_elapsed_and_pending() -> Result<()> {
+            let (rx, mut tx) = programs::pipe();
+            let mut program = FutexProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap();
+            let bpf_content = indoc! {"
+                HEADER 
+
+                => start map statistics
+                @wait_elapsed[8955, 8877, 0x7c3dd4f85fb0]: (847638877, 4)
+                @wait_pending[8955]: (65384418811815, 8877, 0x7c3dd4f85fb0)
+                SampleInstant  	65384570945103
+                => end map statistics
+            "};
+            tx.write(bpf_content.as_bytes())?;
+            while let Ok(0) = program.poll_events() {}
+
+            let event = program
+                .take_futex_events(8955)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            assert_eq!(
+                event,
+                FutexEvent::Wait {
+                    tid: 8955,
+                    root_pid: 8877,
+                    uaddr: Rc::from("0x7c3dd4f85fb0"),
+                    sample_instant_ns: 65384570945103,
+                    total_interval_wait_ns: 847638877 + (65384570945103 - 65384418811815),
+                    count: 4
+                }
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn single_pending() -> Result<()> {
+            let (rx, mut tx) = programs::pipe();
+            let mut program = FutexProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap();
+            let bpf_content = indoc! {"
+                HEADER 
+
+                => start map statistics
+                @wait_pending[8955]: (65384418811815, 8877, 0x7c3dd4f85fb0)
+                SampleInstant  	65384570945103
+                => end map statistics
+            "};
+            tx.write(bpf_content.as_bytes())?;
+            while let Ok(0) = program.poll_events() {}
+
+            let event = program
+                .take_futex_events(8955)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            assert_eq!(
+                event,
+                FutexEvent::Wait {
+                    tid: 8955,
+                    root_pid: 8877,
+                    uaddr: Rc::from("0x7c3dd4f85fb0"),
+                    sample_instant_ns: 65384570945103,
+                    total_interval_wait_ns: 65384570945103 - 65384418811815,
+                    count: 0
+                }
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn single_wake() -> Result<()> {
+            let (rx, mut tx) = programs::pipe();
+            let mut program = FutexProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap();
+            let bpf_content = indoc! {"
+                HEADER 
+
+                => start map statistics
+                @wake[8986, 8877, 0x7c3cfc00560c]: 1
+                SampleInstant  	65384570945103
+                => end map statistics
+            "};
+            tx.write(bpf_content.as_bytes())?;
+            while let Ok(0) = program.poll_events() {}
+
+            let event = program
+                .take_futex_events(8986)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            assert_eq!(
+                event,
+                FutexEvent::Wake {
+                    tid: 8986,
+                    root_pid: 8877,
+                    uaddr: Rc::from("0x7c3cfc00560c"),
+                    sample_instant_ns: 65384570945103,
+                    count: 1
+                }
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn two_consecutive_map_stat_closures() -> Result<()> {
+            let (rx, mut tx) = programs::pipe();
+            let mut program = FutexProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap();
+            let bpf_content = indoc! {"
+                HEADER 
+
+                => start map statistics
+                @wait_elapsed[8955, 8877, 0x7c3dd4f85fb0]: (847638877, 4)
+                @wait_pending[8955]: (65384418811815, 8877, 0x7c3dd4f85fb0)
+                SampleInstant  	65384570945103
+                => end map statistics
+
+                => start map statistics
+                @wait_elapsed[8955, 8877, 0x7c3dd4f85fb0]: (748486373, 4)
+                @wait_pending[8955]: (65385319694788, 8877, 0x7c3dd4f85fb0)
+                SampleInstant  	65385570860594
+                => end map statistics
+            "};
+            tx.write(bpf_content.as_bytes())?;
+            while let Ok(0) = program.poll_events() {}
+
+            let mut events = program.take_futex_events(8955).unwrap();
+            events.sort_by(|a, b| {
+                let a_instant = match a {
+                    FutexEvent::Wake {
+                        sample_instant_ns, ..
+                    }
+                    | FutexEvent::Wait {
+                        sample_instant_ns, ..
+                    } => sample_instant_ns,
+                };
+                let b_instant = match b {
+                    FutexEvent::Wake {
+                        sample_instant_ns, ..
+                    }
+                    | FutexEvent::Wait {
+                        sample_instant_ns, ..
+                    } => sample_instant_ns,
+                };
+                a_instant.partial_cmp(b_instant).unwrap()
+            });
+            let mut events_iter = events.into_iter();
+            assert_eq!(
+                events_iter.next().unwrap(),
+                FutexEvent::Wait {
+                    tid: 8955,
+                    root_pid: 8877,
+                    uaddr: Rc::from("0x7c3dd4f85fb0"),
+                    sample_instant_ns: 65384570945103,
+                    total_interval_wait_ns: 847638877 + (65384570945103 - 65384418811815),
+                    count: 4
+                }
+            );
+            assert_eq!(
+                events_iter.next().unwrap(),
+                FutexEvent::Wait {
+                    tid: 8955,
+                    root_pid: 8877,
+                    uaddr: Rc::from("0x7c3dd4f85fb0"),
+                    sample_instant_ns: 65385570860594,
+                    total_interval_wait_ns: 748486373 + (65385570860594 - 65385319694788),
+                    count: 4
+                }
+            );
 
             Ok(())
         }
