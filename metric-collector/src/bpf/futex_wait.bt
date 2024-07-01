@@ -77,7 +77,10 @@ tracepoint:syscalls:sys_exit_futex
     if (@wait_pending[tid].0) {
         $data = @wait_pending[tid];
         $pending_contrib = $data.0 > @sample_instant ? nsecs - $data.0 : nsecs - @sample_instant;
-        @wait_elapsed[tid, $data.1, $data.2] += $pending_contrib;
+        @wait_elapsed[tid, $data.1, $data.2] = (
+            @wait_elapsed[tid, $data.1, $data.2].0 + $pending_contrib,
+            @wait_elapsed[tid, $data.1, $data.2].1 + 1
+        );
         delete(@wait_pending[tid]);
     } else if (@inwake[tid].0) {
         if (args->ret > 0) {

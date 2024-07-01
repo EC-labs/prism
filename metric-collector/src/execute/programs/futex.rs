@@ -1,7 +1,9 @@
-use eyre::Result;
+use eyre::{eyre, Result};
+use regex::Regex;
 use std::{
     collections::HashMap,
     io::prelude::*,
+    mem,
     process::{Child, Command},
     rc::Rc,
     sync::{
@@ -11,135 +13,347 @@ use std::{
     thread,
 };
 
-use super::BOOT_EPOCH_NS;
 use crate::{execute::BpfReader, metrics::ToCsv};
 
-#[derive(Debug)]
-pub enum FutexEvent {
-    Start {
-        tid: usize,
-        root_pid: usize,
-        uaddr: Rc<str>,
-        ns_since_boot: u128,
+#[derive(PartialEq, Eq, Debug)]
+enum FutexBpfEvent {
+    NoOp,
+    NewProcess {
+        comm: Rc<str>,
+        pid: usize,
     },
-    Elapsed {
+    Unexpected {
+        data: String,
+    },
+    UnhandledOpcode {
+        opcode: String,
+    },
+    WaitElapsed {
         tid: usize,
         root_pid: usize,
         uaddr: Rc<str>,
-        ns_since_boot: u128,
-        ns_elapsed: u128,
-        ret: i32,
+        total_interval_wait_ns: u64,
+        count_interval_wait: usize,
+    },
+    WaitPending {
+        tid: usize,
+        root_pid: usize,
+        uaddr: Rc<str>,
+        ns_since_boot: u64,
     },
     Wake {
         tid: usize,
         root_pid: usize,
         uaddr: Rc<str>,
-        ns_since_boot: u128,
-        ret: i32,
+        count: usize,
     },
     SampleInstant {
-        ns_since_boot: u128,
+        ns_since_boot: u64,
     },
-    NewProcess {
-        comm: Rc<str>,
-        pid: usize,
-    },
-    UnhandledOpcode {
-        opcode: String,
-    },
-    Unexpected {
-        data: String,
-    },
+    MapStatsStart,
+    MapStatsEnd,
 }
 
-impl From<Vec<u8>> for FutexEvent {
-    fn from(value: Vec<u8>) -> Self {
-        let event_string = String::from_utf8(value).unwrap();
-        let event_string = event_string.replace(" ", "");
+impl FutexBpfEvent {
+    fn parse_line(event_string: &str) -> Result<Self> {
+        if event_string.starts_with("@") {
+            Self::from_summary_stats_string(event_string)
+        } else if event_string.starts_with("=>") {
+            Self::from_stats_closure_string(event_string)
+        } else {
+            Self::from_trace_string(event_string)
+        }
+    }
 
-        let mut elements = event_string.split("\t");
+    fn from_summary_stats_string(event_string: &str) -> Result<Self> {
+        let re = Regex::new(r"^@(\w+)\[(.*)\]: (.*)$").unwrap();
+        let captures = re
+            .captures(&event_string)
+            .ok_or(eyre!("Unexpected event string"))?;
+        let mut cap_iter = captures.iter();
+        cap_iter.next();
+
+        let map_type = cap_iter.next().unwrap().unwrap().as_str();
+        match map_type {
+            "wait_elapsed" => {
+                let key = cap_iter.next().unwrap().unwrap().as_str();
+                let mut key_elements = key.split(", ");
+
+                let value = cap_iter.next().unwrap().unwrap().as_str();
+                let value = &value[1..value.len() - 1];
+                let mut value_elements = value.split(", ");
+
+                Ok(Self::WaitElapsed {
+                    tid: key_elements.next().unwrap().parse().unwrap(),
+                    root_pid: key_elements.next().unwrap().parse().unwrap(),
+                    uaddr: key_elements.next().unwrap().into(),
+                    total_interval_wait_ns: value_elements.next().unwrap().parse().unwrap(),
+                    count_interval_wait: value_elements.next().unwrap().parse().unwrap(),
+                })
+            }
+            "wait_pending" => {
+                let key = cap_iter.next().unwrap().unwrap().as_str();
+                let mut key_elements = key.split(", ");
+
+                let value = cap_iter.next().unwrap().unwrap().as_str();
+                let value = &value[1..value.len() - 1];
+                let mut value_elements = value.split(", ");
+
+                Ok(Self::WaitPending {
+                    tid: key_elements.next().unwrap().parse().unwrap(),
+                    ns_since_boot: value_elements.next().unwrap().parse().unwrap(),
+                    root_pid: value_elements.next().unwrap().parse().unwrap(),
+                    uaddr: value_elements.next().unwrap().into(),
+                })
+            }
+            "wake" => {
+                let key = cap_iter.next().unwrap().unwrap().as_str();
+                let mut key_elements = key.split(", ");
+
+                let value = cap_iter.next().unwrap().unwrap().as_str();
+                let mut value_elements = value.split(", ");
+
+                Ok(Self::Wake {
+                    tid: key_elements.next().unwrap().parse().unwrap(),
+                    root_pid: key_elements.next().unwrap().parse().unwrap(),
+                    uaddr: key_elements.next().unwrap().into(),
+                    count: value_elements.next().unwrap().parse().unwrap(),
+                })
+            }
+            _ => Err(eyre!("Invalid map type")),
+        }
+    }
+
+    fn from_stats_closure_string(event_string: &str) -> Result<Self> {
+        if event_string.starts_with("=> start") {
+            Ok(Self::MapStatsStart {})
+        } else if event_string.starts_with("=> end") {
+            Ok(Self::MapStatsEnd {})
+        } else {
+            Err(eyre!(""))
+        }
+    }
+
+    fn from_trace_string(event_string: &str) -> Result<Self> {
+        let mut elements = event_string.split_whitespace();
         match elements.next().unwrap() {
-            "WaitStart" => Self::Start {
-                tid: elements.next().unwrap().parse().unwrap(),
-                root_pid: elements.next().unwrap().parse().unwrap(),
-                uaddr: Rc::from(elements.next().unwrap()),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-            },
-            "WaitElapsed" => Self::Elapsed {
-                tid: elements.next().unwrap().parse().unwrap(),
-                root_pid: elements.next().unwrap().parse().unwrap(),
-                uaddr: Rc::from(elements.next().unwrap()),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                ns_elapsed: elements.next().unwrap().parse().unwrap(),
-                ret: elements.next().unwrap().parse().unwrap(),
-            },
-            "Wake" => Self::Wake {
-                tid: elements.next().unwrap().parse().unwrap(),
-                root_pid: elements.next().unwrap().parse().unwrap(),
-                uaddr: Rc::from(elements.next().unwrap()),
-                ns_since_boot: elements.next().unwrap().parse().unwrap(),
-                ret: elements.next().unwrap().parse().unwrap(),
-            },
-            "UnhandledOpcode" => Self::UnhandledOpcode {
+            "UnhandledOpcode" => Ok(Self::UnhandledOpcode {
                 opcode: elements.next().unwrap().into(),
-            },
-            "NewProcess" => Self::NewProcess {
+            }),
+            "NewProcess" => Ok(Self::NewProcess {
                 comm: elements.next().unwrap().into(),
                 pid: elements.next().unwrap().parse().unwrap(),
-            },
-            "SampleInstant" => Self::SampleInstant {
+            }),
+            "SampleInstant" => Ok(Self::SampleInstant {
                 ns_since_boot: elements.next().unwrap().parse().unwrap(),
-            },
-            _ => Self::Unexpected { data: event_string },
+            }),
+            _ => Ok(Self::Unexpected {
+                data: event_string.into(),
+            }),
         }
     }
 }
 
-impl ToCsv for FutexEvent {
-    fn to_csv_row(&self) -> String {
-        match self {
-            FutexEvent::Wake {
-                tid,
-                root_pid,
-                uaddr,
-                ns_since_boot,
-                ..
-            } => {
-                let epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
-                format!("{},{},{},{}\n", epoch_ns, tid, root_pid, uaddr,)
-            }
-            FutexEvent::Elapsed {
-                tid,
-                root_pid,
-                uaddr,
-                ns_since_boot,
-                ns_elapsed,
-                ..
-            } => {
-                let end_epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
-                let start_epoch_ns = end_epoch_ns - ns_elapsed;
-                format!(
-                    "{},{},{},{},{},{}\n",
-                    start_epoch_ns, end_epoch_ns, ns_elapsed, tid, root_pid, uaddr,
-                )
-            }
-            _ => {
-                todo!()
-            }
+impl From<Vec<u8>> for FutexBpfEvent {
+    fn from(value: Vec<u8>) -> Self {
+        let event_string = String::from_utf8(value).unwrap();
+        if event_string.len() == 0 {
+            return Self::NoOp {};
         }
+        Self::parse_line(&event_string).unwrap_or(Self::Unexpected { data: event_string })
     }
+}
 
-    fn csv_headers(&self) -> &'static str {
-        match self {
-            FutexEvent::Wake { .. } => "epoch_ns,tid,root_pid,uaddr\n",
-            FutexEvent::Elapsed { .. } => {
-                "start_epoch_ns,end_epoch_ns,elapsed_ns,tid,root_pid,uaddr\n"
+#[derive(Debug)]
+pub enum FutexEvent {
+    Wait {
+        tid: usize,
+        root_pid: usize,
+        uaddr: Rc<str>,
+        sample_instant_ns: u64,
+        total_interval_wait_ns: u64,
+        count: usize,
+    },
+    Wake {
+        tid: usize,
+        root_pid: usize,
+        uaddr: Rc<str>,
+        sample_instant_ns: u64,
+        count: usize,
+    },
+}
+
+impl FutexEvent {
+    fn from_futex_bpf_event(
+        entry: StatsClosureValue,
+        current_instant_ns: u64,
+        previous_instant_ns: Option<u64>,
+    ) -> Result<Self> {
+        match entry {
+            StatsClosureValue::Wait(
+                None,
+                Some(FutexBpfEvent::WaitPending {
+                    tid,
+                    root_pid,
+                    uaddr,
+                    ns_since_boot,
+                }),
+            ) => {
+                let pending = if let Some(prev) = previous_instant_ns {
+                    if ns_since_boot > prev {
+                        current_instant_ns - ns_since_boot
+                    } else {
+                        current_instant_ns - prev
+                    }
+                } else {
+                    current_instant_ns - ns_since_boot
+                };
+
+                Ok(Self::Wait {
+                    tid,
+                    root_pid,
+                    uaddr,
+                    sample_instant_ns: current_instant_ns,
+                    total_interval_wait_ns: pending,
+                    count: 0,
+                })
             }
-            _ => {
-                todo!()
+            StatsClosureValue::Wait(
+                Some(FutexBpfEvent::WaitElapsed {
+                    tid,
+                    root_pid,
+                    uaddr,
+                    total_interval_wait_ns,
+                    count_interval_wait,
+                }),
+                None,
+            ) => Ok(Self::Wait {
+                tid,
+                root_pid,
+                uaddr,
+                sample_instant_ns: current_instant_ns,
+                total_interval_wait_ns,
+                count: count_interval_wait,
+            }),
+            StatsClosureValue::Wait(
+                Some(FutexBpfEvent::WaitElapsed {
+                    tid,
+                    root_pid,
+                    uaddr,
+                    total_interval_wait_ns,
+                    count_interval_wait,
+                }),
+                Some(FutexBpfEvent::WaitPending { ns_since_boot, .. }),
+            ) => {
+                let pending = if let Some(prev) = previous_instant_ns {
+                    if ns_since_boot > prev {
+                        current_instant_ns - ns_since_boot
+                    } else {
+                        current_instant_ns - prev
+                    }
+                } else {
+                    current_instant_ns - ns_since_boot
+                };
+
+                Ok(Self::Wait {
+                    tid,
+                    root_pid,
+                    uaddr,
+                    sample_instant_ns: current_instant_ns,
+                    total_interval_wait_ns: total_interval_wait_ns + pending,
+                    count: count_interval_wait,
+                })
             }
+            StatsClosureValue::Wake(FutexBpfEvent::Wake {
+                tid,
+                root_pid,
+                uaddr,
+                count,
+            }) => Ok(Self::Wake {
+                tid,
+                root_pid,
+                uaddr,
+                count,
+                sample_instant_ns: current_instant_ns,
+            }),
+            _ => Err(eyre!(format!(
+                "Inconsistent stat closure value state {:?}.",
+                entry
+            ))),
         }
     }
+}
+
+// impl ToCsv for FutexEvent {
+//     fn to_csv_row(&self) -> String {
+//         match self {
+//             FutexEvent::Wake {
+//                 tid,
+//                 root_pid,
+//                 uaddr,
+//                 ns_since_boot,
+//                 ..
+//             } => {
+//                 let epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
+//                 format!("{},{},{},{}\n", epoch_ns, tid, root_pid, uaddr,)
+//             }
+//             FutexEvent::Elapsed {
+//                 tid,
+//                 root_pid,
+//                 uaddr,
+//                 ns_since_boot,
+//                 ns_elapsed,
+//                 ..
+//             } => {
+//                 let end_epoch_ns = *BOOT_EPOCH_NS.read().unwrap() + ns_since_boot;
+//                 let start_epoch_ns = end_epoch_ns - ns_elapsed;
+//                 format!(
+//                     "{},{},{},{},{},{}\n",
+//                     start_epoch_ns, end_epoch_ns, ns_elapsed, tid, root_pid, uaddr,
+//                 )
+//             }
+//             _ => {
+//                 todo!()
+//             }
+//         }
+//     }
+
+//     fn csv_headers(&self) -> &'static str {
+//         match self {
+//             FutexEvent::Wake { .. } => "epoch_ns,tid,root_pid,uaddr\n",
+//             FutexEvent::Elapsed { .. } => {
+//                 "start_epoch_ns,end_epoch_ns,elapsed_ns,tid,root_pid,uaddr\n"
+//             }
+//             _ => {
+//                 todo!()
+//             }
+//         }
+//     }
+// }
+
+enum FutexProgramState {
+    OutStatClosure,
+    InStatClosure(Option<u64>),
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum StatsClosureKey {
+    Wait {
+        tid: usize,
+        root_pid: usize,
+        uaddr: Rc<str>,
+    },
+    Wake {
+        tid: usize,
+        root_pid: usize,
+        uaddr: Rc<str>,
+    },
+}
+
+#[derive(Debug)]
+enum StatsClosureValue {
+    Wait(Option<FutexBpfEvent>, Option<FutexBpfEvent>),
+    Wake(FutexBpfEvent),
 }
 
 pub struct FutexProgram {
@@ -149,7 +363,9 @@ pub struct FutexProgram {
     new_pids: Option<Vec<(Rc<str>, usize)>>,
     header_lines: u8,
     current_event: Option<Vec<u8>>,
-    latest_instant_ns: Option<u128>,
+    state: FutexProgramState,
+    stats_closure_events: HashMap<StatsClosureKey, StatsClosureValue>,
+    prev_instant_ns: Option<u64>,
 }
 
 impl BpfReader for FutexProgram {
@@ -194,7 +410,9 @@ impl FutexProgram {
             header_lines: 0,
             current_event: None,
             new_pids: None,
-            latest_instant_ns: None,
+            state: FutexProgramState::OutStatClosure,
+            stats_closure_events: HashMap::new(),
+            prev_instant_ns: None,
         })
     }
 
@@ -239,54 +457,120 @@ impl FutexProgram {
                 self.handle_header(&mut iterator);
             }
             while let Some(event) = self.handle_event(&mut iterator) {
-                let event = FutexEvent::from(event);
-                match &event {
-                    FutexEvent::Start {
-                        tid, ns_since_boot, ..
+                let event = FutexBpfEvent::from(event);
+                match event {
+                    FutexBpfEvent::NewProcess { pid, comm } => {
+                        let new_pids = self.new_pids.get_or_insert_with(|| Vec::new());
+                        new_pids.push((comm.clone(), pid));
                     }
-                    | FutexEvent::Elapsed {
-                        tid, ns_since_boot, ..
+                    FutexBpfEvent::MapStatsStart => {
+                        self.state = FutexProgramState::InStatClosure(None);
                     }
-                    | FutexEvent::Wake {
-                        tid, ns_since_boot, ..
-                    } => {
-                        let tid_events = self.events.get_mut(tid);
-                        if let None = tid_events {
-                            self.events.insert(*tid, Vec::new());
+                    FutexBpfEvent::SampleInstant { ns_since_boot } => {
+                        if let FutexProgramState::InStatClosure(sample_instant_ns) = &mut self.state
+                        {
+                            *sample_instant_ns = Some(ns_since_boot);
                         }
+                    }
+                    FutexBpfEvent::MapStatsEnd => {
+                        let ns_since_boot =
+                            if let FutexProgramState::InStatClosure(Some(ns_since_boot)) =
+                                self.state
+                            {
+                                ns_since_boot
+                            } else {
+                                return Err(eyre!("Inconsistent ipc program state"));
+                            };
+                        self.state = FutexProgramState::OutStatClosure;
 
-                        let tid_events = self.events.get_mut(tid).unwrap();
-                        self.latest_instant_ns = Some(*ns_since_boot);
-                        tid_events.push(event);
+                        let events = mem::replace(&mut self.stats_closure_events, HashMap::new());
+                        events.into_iter().for_each(|(_, entry)| {
+                            let event = FutexEvent::from_futex_bpf_event(
+                                entry,
+                                ns_since_boot,
+                                self.prev_instant_ns,
+                            )
+                            .expect("Unsuccesful conversion from stat closure entry to FutexEvent");
+                            if let FutexEvent::Wait { tid, .. } | FutexEvent::Wake { tid, .. } =
+                                event
+                            {
+                                let tevents = self.events.entry(tid).or_insert_with(|| Vec::new());
+                                tevents.push(event);
+                            }
+                        });
                     }
-                    FutexEvent::NewProcess { pid, comm } => {
-                        if let None = self.new_pids {
-                            self.new_pids = Some(Vec::new());
-                        }
-                        let new_pids = self.new_pids.as_mut().unwrap();
-                        new_pids.push((comm.clone(), *pid));
-                    }
-                    FutexEvent::SampleInstant { ns_since_boot } => {
-                        self.latest_instant_ns = Some(*ns_since_boot);
-                    }
-                    FutexEvent::UnhandledOpcode { .. } => {
+                    FutexBpfEvent::UnhandledOpcode { .. } => {
                         println!("Futex unhandled opcode. {:?}", event);
                     }
-                    FutexEvent::Unexpected { .. } => {
+                    FutexBpfEvent::Unexpected { .. } => {
                         println!("Futex unexpected event. {:?}", event);
                     }
+                    FutexBpfEvent::WaitElapsed {
+                        tid,
+                        root_pid,
+                        ref uaddr,
+                        ..
+                    } => {
+                        let key = StatsClosureKey::Wait {
+                            tid,
+                            root_pid,
+                            uaddr: uaddr.clone(),
+                        };
+                        let entry = self
+                            .stats_closure_events
+                            .entry(key)
+                            .or_insert(StatsClosureValue::Wait(None, None));
+                        if let StatsClosureValue::Wait(elapsed, _pending) = entry {
+                            *elapsed = Some(event);
+                        }
+                    }
+                    FutexBpfEvent::WaitPending {
+                        tid,
+                        root_pid,
+                        ref uaddr,
+                        ..
+                    } => {
+                        let key = StatsClosureKey::Wait {
+                            tid,
+                            root_pid,
+                            uaddr: uaddr.clone(),
+                        };
+                        let entry = self
+                            .stats_closure_events
+                            .entry(key)
+                            .or_insert(StatsClosureValue::Wait(None, None));
+                        if let StatsClosureValue::Wait(_elapsed, pending) = entry {
+                            *pending = Some(event);
+                        }
+                    }
+                    FutexBpfEvent::Wake {
+                        tid,
+                        root_pid,
+                        ref uaddr,
+                        ..
+                    } => {
+                        let key = StatsClosureKey::Wake {
+                            tid,
+                            root_pid,
+                            uaddr: uaddr.clone(),
+                        };
+                        self.stats_closure_events
+                            .entry(key)
+                            .or_insert(StatsClosureValue::Wake(event));
+                    }
+                    FutexBpfEvent::NoOp => {}
                 }
             }
         }
         Ok(())
     }
 
-    pub fn take_futex_events(&mut self, tid: usize) -> Result<(Vec<FutexEvent>, Option<u128>)> {
+    pub fn take_futex_events(&mut self, tid: usize) -> Result<Vec<FutexEvent>> {
         let res = self.poll_events();
         let events = self.events.remove(&tid).unwrap_or(Vec::new());
         match (res, events.len() > 0) {
-            (_, true) => Ok((events, self.latest_instant_ns)),
-            (Ok(_), false) => Ok((events, self.latest_instant_ns)),
+            (_, true) => Ok(events),
+            (Ok(_), false) => Ok(events),
             (Err(e), false) => Err(e),
         }
     }
@@ -301,6 +585,109 @@ impl Drop for FutexProgram {
     fn drop(&mut self) {
         if let Err(why) = self.child.kill() {
             println!("Failed to kill futex {}", why);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FutexBpfEvent;
+    use eyre::{eyre, Result};
+
+    mod futex_event {
+        use super::*;
+
+        #[test]
+        fn trace_map_stats_start() {
+            let line = "=> start map statistics";
+            let event = FutexBpfEvent::from(Vec::from(line.as_bytes()));
+            assert_eq!(event, FutexBpfEvent::MapStatsStart);
+        }
+
+        #[test]
+        fn trace_map_stats_end() {
+            let line = "=> end map statistics";
+            let event = FutexBpfEvent::from(Vec::from(line.as_bytes()));
+            assert_eq!(event, FutexBpfEvent::MapStatsEnd);
+        }
+
+        #[test]
+        fn trace_sample_instant() {
+            let line = "SampleInstant  	65383570923944";
+            let event = FutexBpfEvent::from(Vec::from(line.as_bytes()));
+            assert_eq!(
+                event,
+                FutexBpfEvent::SampleInstant {
+                    ns_since_boot: 65383570923944
+                }
+            );
+        }
+
+        #[test]
+        fn map_wait_elapsed() -> Result<()> {
+            let line = "@wait_elapsed[8955, 8877, 0x7c3dd4f85fb0]: (847638877, 4)";
+            let event = FutexBpfEvent::from(Vec::from(line.as_bytes()));
+            if let FutexBpfEvent::WaitElapsed {
+                tid,
+                root_pid,
+                uaddr,
+                total_interval_wait_ns,
+                count_interval_wait,
+            } = event
+            {
+                assert_eq!(tid, 8955);
+                assert_eq!(root_pid, 8877);
+                assert_eq!(&*uaddr, "0x7c3dd4f85fb0");
+                assert_eq!(total_interval_wait_ns, 847638877);
+                assert_eq!(count_interval_wait, 4);
+            } else {
+                return Err(eyre!("Incorrect FutexBpfEvent"));
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn map_wait_pending() -> Result<()> {
+            let line = "@wait_pending[8955]: (65384418811815, 8877, 0x7c3dd4f85fb0)";
+            let event = FutexBpfEvent::from(Vec::from(line.as_bytes()));
+            if let FutexBpfEvent::WaitPending {
+                tid,
+                root_pid,
+                uaddr,
+                ns_since_boot,
+            } = event
+            {
+                assert_eq!(tid, 8955);
+                assert_eq!(root_pid, 8877);
+                assert_eq!(&*uaddr, "0x7c3dd4f85fb0");
+                assert_eq!(ns_since_boot, 65384418811815);
+            } else {
+                return Err(eyre!("Incorrect FutexBpfEvent"));
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn map_wake() -> Result<()> {
+            let line = "@wake[8986, 8877, 0x7c3cfc00560c]: 1";
+            let event = FutexBpfEvent::from(Vec::from(line.as_bytes()));
+            if let FutexBpfEvent::Wake {
+                tid,
+                root_pid,
+                uaddr,
+                count,
+            } = event
+            {
+                assert_eq!(tid, 8986);
+                assert_eq!(root_pid, 8877);
+                assert_eq!(&*uaddr, "0x7c3cfc00560c");
+                assert_eq!(count, 1);
+            } else {
+                return Err(eyre!("Incorrect FutexBpfEvent"));
+            }
+
+            Ok(())
         }
     }
 }
