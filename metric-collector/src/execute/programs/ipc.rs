@@ -38,7 +38,7 @@ pub enum Connection {
 }
 
 #[derive(Debug, Clone)]
-pub enum IpcBpfEvent {
+enum IpcBpfEvent {
     NoOp,
     NewProcess {
         comm: Rc<str>,
@@ -82,7 +82,6 @@ pub enum IpcBpfEvent {
         inode_id: u64,
         family: u32,
     },
-
     EpollItemAdd {
         comm: Rc<str>,
         tid: usize,
@@ -1118,12 +1117,12 @@ impl IpcProgram {
         }
     }
 
-    pub fn take_global_events(&mut self) -> Result<(Vec<IpcEvent>, Option<u64>)> {
+    pub fn take_global_events(&mut self) -> Result<Vec<IpcEvent>> {
         let res = self.poll_events();
         let events = self.global_events.take().unwrap_or(Vec::new());
         match (res, events.len() > 0) {
-            (_, true) => Ok((events, self.latest_instant_ns)),
-            (Ok(_), false) => Ok((events, self.latest_instant_ns)),
+            (_, true) => Ok(events),
+            (Ok(_), false) => Ok(events),
             (Err(e), false) => Err(e),
         }
     }

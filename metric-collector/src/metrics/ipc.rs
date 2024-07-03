@@ -729,7 +729,6 @@ pub struct EventPollCollection {
     ipc_program: Rc<RefCell<IpcProgram>>,
     kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
     root_directory: Rc<str>,
-    sample_instant_ns: Option<u128>,
 }
 
 impl EventPollCollection {
@@ -743,7 +742,6 @@ impl EventPollCollection {
             kfile_socket_map,
             root_directory: Rc::from(format!("{}/global/epoll", root_directory)),
             event_poll_map: HashMap::new(),
-            sample_instant_ns: None,
         }
     }
 
@@ -783,12 +781,7 @@ impl EventPollCollection {
 
 impl Collect for EventPollCollection {
     fn sample(&mut self) -> Result<()> {
-        let (events, sample_instant_since_boot) =
-            self.ipc_program.borrow_mut().take_global_events()?;
-
-        let sample_instant_epoch_ns =
-            sample_instant_since_boot.map(|instant| boot_to_epoch(instant as u128));
-        self.sample_instant_ns = sample_instant_epoch_ns;
+        let events = self.ipc_program.borrow_mut().take_global_events()?;
 
         for event in events {
             self.process_event(event)?;
