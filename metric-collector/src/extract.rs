@@ -192,7 +192,7 @@ impl Extractor {
         fs::create_dir_all(&*self.config.data_directory)?;
         fs::write(
             format!("{}/version.txt", self.config.data_directory),
-            "0.1.0\n",
+            "0.2.0\n",
         )?;
         Ok(())
     }

@@ -35,12 +35,13 @@ struct FutexKey {
     uaddr: Rc<str>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct WaitStat {
     accumulated_wait: u64,
     count: usize,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum SnapshotStat {
     Wait(WaitStat),
     Wake { count: usize },
@@ -178,7 +179,7 @@ impl Collect for Futex {
                     }
                     SnapshotStat::Wake { count } => {
                         let sample = Box::new(FutexWakeSample {
-                            epoch_ms: boot_to_epoch(sample_instant_ns as u128),
+                            epoch_ms: sample_epoch_ms,
                             count,
                         });
                         let filename = format!(
@@ -243,6 +244,367 @@ impl ToCsv for FutexWakeSample {
 #[cfg(test)]
 mod tests {
 
+    use eyre::Result;
+    use indoc::indoc;
+    use std::{
+        cell::RefCell,
+        fs,
+        fs::File,
+        io::prelude::*,
+        rc::Rc,
+        sync::{Arc, Mutex},
+    };
+    use tempdir::TempDir;
+
+    use super::Futex;
+    use crate::metrics::{
+        futex::{SnapshotStat, WaitStat},
+        Collect,
+    };
+    use crate::{
+        execute::programs::{self, futex::FutexProgram},
+        metrics::futex::FutexKey,
+    };
+
+    fn new_custom_futex() -> (FutexProgram, File) {
+        let (rx, tx) = programs::pipe();
+        let program = FutexProgram::custom_reader(rx, Arc::new(Mutex::new(false))).unwrap();
+        (program, tx)
+    }
+
+    fn write_and_poll(program: &mut FutexProgram, tx: &mut File, data: &[u8]) -> Result<()> {
+        tx.write(data)?;
+        while let Ok(0) = program.poll_events() {}
+        Ok(())
+    }
+
     #[test]
-    fn tmp() {}
+    fn single_snapshot_wait() -> Result<()> {
+        let bpf_content = indoc! {"
+            HEADER 
+
+            => start map statistics
+            @wait_elapsed[8955, 8877, 0x7c3dd4f85fb0]: (847638877, 4)
+            SampleInstant  	65384570945103
+            => end map statistics
+        "};
+        let (mut program, mut tx) = new_custom_futex();
+        write_and_poll(&mut program, &mut tx, bpf_content.as_bytes())?;
+
+        let root_directory = TempDir::new("")?;
+        let mut futex = Futex::new(
+            Rc::new(RefCell::new(program)),
+            8955,
+            Rc::from(root_directory.path().to_str().unwrap()),
+            &format!("thread/{}/{}", 8877, 8955),
+        );
+
+        futex.sample()?;
+        let snapshots = futex
+            .snapshots
+            .get(&FutexKey {
+                root_pid: 8877,
+                uaddr: Rc::from("0x7c3dd4f85fb0"),
+            })
+            .unwrap();
+        assert_eq!(
+            snapshots[0],
+            (
+                65384570945103,
+                SnapshotStat::Wait(WaitStat {
+                    accumulated_wait: 847638877,
+                    count: 4
+                })
+            )
+        );
+
+        futex.store()?;
+        let content = fs::read_to_string(format!(
+            "{}/thread/8877/8955/futex/wait/65340/8877-0x7c3dd4f85fb0",
+            root_directory.path().to_str().unwrap()
+        ))?;
+        assert_eq!(
+            content,
+            indoc! {"
+                epoch_ms,futex_wait_ns,futex_count
+                65384570,847638877,4
+            "}
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn single_snapshot_wake() -> Result<()> {
+        let bpf_content = indoc! {"
+            HEADER 
+
+            => start map statistics
+            @wake[8986, 8877, 0x7c3cfc00560c]: 1
+            SampleInstant  	65384570945103
+            => end map statistics
+        "};
+        let (pid, tid, address): (usize, usize, Rc<str>) = (8877, 8986, Rc::from("0x7c3cfc00560c"));
+        let (mut program, mut tx) = new_custom_futex();
+        write_and_poll(&mut program, &mut tx, bpf_content.as_bytes())?;
+
+        let root_directory = TempDir::new("")?;
+        let mut futex = Futex::new(
+            Rc::new(RefCell::new(program)),
+            tid,
+            Rc::from(root_directory.path().to_str().unwrap()),
+            &format!("thread/{}/{}", pid, tid),
+        );
+
+        futex.sample()?;
+        let snapshots = futex
+            .snapshots
+            .get(&FutexKey {
+                root_pid: pid,
+                uaddr: address.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            snapshots[0],
+            (65384570945103, SnapshotStat::Wake { count: 1 })
+        );
+
+        futex.store()?;
+        let content = fs::read_to_string(format!(
+            "{}/thread/{}/{}/futex/wake/65340/{}-{}",
+            root_directory.path().to_str().unwrap(),
+            pid,
+            tid,
+            pid,
+            address.clone(),
+        ))?;
+        assert_eq!(
+            content,
+            indoc! {"
+                epoch_ms,futex_count
+                65384570,1
+            "}
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn double_snapshot_wait() -> Result<()> {
+        let bpf_content = indoc! {"
+            HEADER 
+
+            => start map statistics
+            @wait_elapsed[8955, 8877, 0x7c3dd4f85fb0]: (847638877, 4)
+            SampleInstant  	65384570945103
+            => end map statistics
+
+            => start map statistics
+            @wait_elapsed[8955, 8877, 0x7c3dd4f85fb0]: (847638877, 4)
+            SampleInstant  	65385570945103
+            => end map statistics
+        "};
+        let (pid, tid, address): (usize, usize, Rc<str>) = (8877, 8955, Rc::from("0x7c3dd4f85fb0"));
+        let (mut program, mut tx) = new_custom_futex();
+        write_and_poll(&mut program, &mut tx, bpf_content.as_bytes())?;
+
+        let root_directory = TempDir::new("")?;
+        let mut futex = Futex::new(
+            Rc::new(RefCell::new(program)),
+            tid,
+            Rc::from(root_directory.path().to_str().unwrap()),
+            &format!("thread/{}/{}", pid, tid),
+        );
+
+        futex.sample()?;
+        let snapshots = futex
+            .snapshots
+            .get(&FutexKey {
+                root_pid: pid,
+                uaddr: address.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            snapshots[0],
+            (
+                65384570945103,
+                SnapshotStat::Wait(WaitStat {
+                    accumulated_wait: 847638877,
+                    count: 4
+                })
+            )
+        );
+        assert_eq!(
+            snapshots[1],
+            (
+                65385570945103,
+                SnapshotStat::Wait(WaitStat {
+                    accumulated_wait: 847638877 * 2,
+                    count: 4
+                })
+            )
+        );
+
+        futex.store()?;
+        let content = fs::read_to_string(format!(
+            "{}/thread/{}/{}/futex/wait/65340/{}-{}",
+            root_directory.path().to_str().unwrap(),
+            pid,
+            tid,
+            pid,
+            address.clone(),
+        ))?;
+        assert_eq!(
+            content,
+            indoc! {"
+                epoch_ms,futex_wait_ns,futex_count
+                65384570,847638877,4
+                65385570,1695277754,4
+            "}
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn double_snapshot_wake() -> Result<()> {
+        let bpf_content = indoc! {"
+            HEADER 
+
+            => start map statistics
+            @wake[8986, 8877, 0x7c3cfc00560c]: 1
+            SampleInstant  	65384570945103
+            => end map statistics
+
+            => start map statistics
+            @wake[8986, 8877, 0x7c3cfc00560c]: 1
+            SampleInstant  	65385570945103
+            => end map statistics
+        "};
+        let (pid, tid, address): (usize, usize, Rc<str>) = (8877, 8986, Rc::from("0x7c3cfc00560c"));
+        let (mut program, mut tx) = new_custom_futex();
+        write_and_poll(&mut program, &mut tx, bpf_content.as_bytes())?;
+
+        let root_directory = TempDir::new("")?;
+        let mut futex = Futex::new(
+            Rc::new(RefCell::new(program)),
+            tid,
+            Rc::from(root_directory.path().to_str().unwrap()),
+            &format!("thread/{}/{}", pid, tid),
+        );
+
+        futex.sample()?;
+        let snapshots = futex
+            .snapshots
+            .get(&FutexKey {
+                root_pid: pid,
+                uaddr: address.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            snapshots[0],
+            (65384570945103, SnapshotStat::Wake { count: 1 })
+        );
+        assert_eq!(
+            snapshots[1],
+            (65385570945103, SnapshotStat::Wake { count: 1 })
+        );
+
+        futex.store()?;
+        let content = fs::read_to_string(format!(
+            "{}/thread/{}/{}/futex/wake/65340/{}-{}",
+            root_directory.path().to_str().unwrap(),
+            pid,
+            tid,
+            pid,
+            address.clone(),
+        ))?;
+        assert_eq!(
+            content,
+            indoc! {"
+                epoch_ms,futex_count
+                65384570,1
+                65385570,1
+            "}
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn single_wait_and_wake() -> Result<()> {
+        let bpf_content = indoc! {"
+            HEADER 
+
+            => start map statistics
+            @wake[8955, 8877, 0x7c3cfc00560c]: 1
+            @wait_elapsed[8955, 8877, 0x7c3cfc00560c]: (847638877, 4)
+            SampleInstant  	65384570945103
+            => end map statistics
+        "};
+        let (pid, tid, address): (usize, usize, Rc<str>) = (8877, 8955, Rc::from("0x7c3cfc00560c"));
+        let (mut program, mut tx) = new_custom_futex();
+        write_and_poll(&mut program, &mut tx, bpf_content.as_bytes())?;
+
+        let root_directory = TempDir::new("")?;
+        let mut futex = Futex::new(
+            Rc::new(RefCell::new(program)),
+            tid,
+            Rc::from(root_directory.path().to_str().unwrap()),
+            &format!("thread/{}/{}", pid, tid),
+        );
+
+        futex.sample()?;
+        let snapshots = futex
+            .snapshots
+            .get(&FutexKey {
+                root_pid: pid,
+                uaddr: address.clone(),
+            })
+            .unwrap();
+        println!("{:?}", snapshots);
+        assert!(snapshots.contains(&(65384570945103, SnapshotStat::Wake { count: 1 })));
+        assert!(snapshots.contains(&(
+            65384570945103,
+            SnapshotStat::Wait(WaitStat {
+                accumulated_wait: 847638877,
+                count: 4
+            })
+        )));
+
+        futex.store()?;
+        let content = fs::read_to_string(format!(
+            "{}/thread/{}/{}/futex/wake/65340/{}-{}",
+            root_directory.path().to_str().unwrap(),
+            pid,
+            tid,
+            pid,
+            address.clone(),
+        ))?;
+        assert_eq!(
+            content,
+            indoc! {"
+                epoch_ms,futex_count
+                65384570,1
+            "}
+        );
+
+        let content = fs::read_to_string(format!(
+            "{}/thread/{}/{}/futex/wait/65340/{}-{}",
+            root_directory.path().to_str().unwrap(),
+            pid,
+            tid,
+            pid,
+            address.clone(),
+        ))?;
+        assert_eq!(
+            content,
+            indoc! {"
+                epoch_ms,futex_wait_ns,futex_count
+                65384570,847638877,4
+            "}
+        );
+
+        Ok(())
+    }
 }

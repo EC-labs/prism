@@ -416,7 +416,7 @@ impl FutexProgram {
         })
     }
 
-    fn custom_reader<R: Read + Send + 'static>(
+    pub fn custom_reader<R: Read + Send + 'static>(
         reader: R,
         terminate_flag: Arc<Mutex<bool>>,
     ) -> Result<Self> {
