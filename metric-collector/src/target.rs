@@ -22,6 +22,12 @@ use std::{
     fmt::{self, Display},
     fs,
     rc::Rc,
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc, Mutex,
+    },
+    thread,
+    time::Duration,
 };
 
 #[derive(Debug)]
@@ -37,7 +43,7 @@ impl Error for NotFound {}
 
 pub struct Target {
     pub tid: usize,
-    collectors: [Box<dyn Collect>; 4],
+    collectors: [Box<dyn Collect>; 2],
 }
 
 impl Target {
@@ -48,19 +54,24 @@ impl Target {
         root_directory: Rc<str>,
         target_subdirectory: &str,
         kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
+        time_sensitive_collector_tx: Sender<Box<dyn Collect + Send>>,
     ) -> Self {
         println!("Register new target {}", tid);
+        time_sensitive_collector_tx
+            .send(Box::new(SchedStat::new(
+                tid,
+                &format!("{}/{}", root_directory, target_subdirectory),
+            )))
+            .expect("Failed to send time sensitive collector");
+        time_sensitive_collector_tx
+            .send(Box::new(Sched::new(
+                tid,
+                &format!("{}/{}", root_directory, target_subdirectory),
+            )))
+            .expect("Failed to send time sensitive collector");
         Self {
             tid,
             collectors: [
-                Box::new(SchedStat::new(
-                    tid,
-                    &format!("{}/{}", root_directory, target_subdirectory),
-                )),
-                Box::new(Sched::new(
-                    tid,
-                    &format!("{}/{}", root_directory, target_subdirectory),
-                )),
                 Box::new(Futex::new(
                     futex_program,
                     tid,
@@ -84,6 +95,7 @@ impl Target {
         data_directory: Rc<str>,
         executor: &mut Executor,
         kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
+        time_sensitive_collector_tx: Sender<Box<dyn Collect + Send>>,
     ) -> Result<Vec<Self>> {
         let mut targets = Vec::new();
 
@@ -134,6 +146,7 @@ impl Target {
                             data_directory.clone(),
                             &format!("thread/{}/{}", pid, tid),
                             kfile_socket_map.clone(),
+                            time_sensitive_collector_tx.clone(),
                         ))
                     })
                     .collect::<Result<Vec<Target>>>()?,
@@ -161,5 +174,58 @@ impl Target {
             collector.store()?;
         }
         Ok(())
+    }
+}
+
+pub struct TimeSensitive;
+
+impl TimeSensitive {
+    pub fn init_thread(
+        terminate_flag: Arc<Mutex<bool>>,
+        sample_interval: Duration,
+    ) -> Sender<Box<dyn Collect + Send>> {
+        let sample_rx = Self::start_timer_thread(terminate_flag.clone(), sample_interval);
+        let (collector_tx, collector_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut collectors: Vec<Box<dyn Collect + Send>> = Vec::new();
+            loop {
+                sample_rx.recv()?;
+                if *terminate_flag.lock().unwrap() == true {
+                    break;
+                }
+                if let Ok(collector) = collector_rx.try_recv() {
+                    collectors.push(collector);
+                }
+                println!(
+                    "{:?} - Start time sensitive collect",
+                    chrono::offset::Utc::now()
+                );
+                for collector in collectors.iter_mut() {
+                    collector.sample();
+                    collector.store();
+                }
+                println!(
+                    "{:?} - End time sensitive collect",
+                    chrono::offset::Utc::now()
+                );
+            }
+            Ok(()) as Result<()>
+        });
+        collector_tx
+    }
+
+    fn start_timer_thread(
+        terminate_flag: Arc<Mutex<bool>>,
+        sample_interval: Duration,
+    ) -> Receiver<bool> {
+        let (sample_tx, sample_rx) = mpsc::channel();
+        thread::spawn(move || loop {
+            thread::sleep(sample_interval);
+            if *terminate_flag.lock().unwrap() == true {
+                break;
+            }
+            sample_tx.send(true).expect("Failed to send timer signal");
+        });
+        sample_rx
     }
 }

@@ -6,18 +6,19 @@ use std::{
     collections::HashMap,
     fs,
     rc::Rc,
-    sync::{mpsc::Receiver, Arc, Mutex},
+    sync::{
+        mpsc::{Receiver, Sender},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
 
 use crate::{
     configure::Config,
-    execute::programs::{
-        clone::CloneEvent,
-        ipc::{Connection, IpcEvent},
-    },
+    execute::programs::{clone::CloneEvent, ipc::Connection},
     metrics::{iowait::IOWait, Collect},
+    target::TimeSensitive,
 };
 use crate::{execute::Executor, metrics::ipc::KFile};
 use crate::{metrics::ipc::EventPollCollection, target::Target};
@@ -52,7 +53,11 @@ impl Extractor {
         .expect("Error setting Ctrl-C handler");
     }
 
-    fn register_new_targets(&mut self, executor: &mut Executor) -> Result<()> {
+    fn register_new_targets(
+        &mut self,
+        executor: &mut Executor,
+        time_sensitive_collector_tx: Sender<Box<dyn Collect + Send>>,
+    ) -> Result<()> {
         executor
             .clone
             .poll_events()?
@@ -72,6 +77,7 @@ impl Extractor {
                             self.config.data_directory.clone(),
                             &format!("thread/{}/{}", pid, tid),
                             self.kfile_socket_map.clone(),
+                            time_sensitive_collector_tx.clone(),
                         ),
                     );
                 }
@@ -88,6 +94,7 @@ impl Extractor {
                                     self.config.data_directory.clone(),
                                     &format!("thread/{}/{}", pid, tid),
                                     self.kfile_socket_map.clone(),
+                                    time_sensitive_collector_tx.clone(),
                                 ),
                             );
                         });
@@ -117,6 +124,7 @@ impl Extractor {
                             self.config.data_directory.clone(),
                             &format!("thread/{}/{}", pid, tid),
                             self.kfile_socket_map.clone(),
+                            time_sensitive_collector_tx.clone(),
                         ),
                     );
                 });
@@ -202,6 +210,10 @@ impl Extractor {
         self.register_sighandler();
         let mut executor = Executor::new(self.terminate_flag.clone())?;
         self.start_timer_thread();
+        let time_sensitive_collector_tx = TimeSensitive::init_thread(
+            self.terminate_flag.clone(),
+            Duration::from_millis(self.config.period),
+        );
 
         let targets = Target::search_targets_regex(
             "jbd2",
@@ -209,6 +221,7 @@ impl Extractor {
             self.config.data_directory.clone(),
             &mut executor,
             self.kfile_socket_map.clone(),
+            time_sensitive_collector_tx.clone(),
         )?;
         targets.into_iter().for_each(|target| {
             self.targets.insert(target.tid, target);
@@ -221,6 +234,7 @@ impl Extractor {
                 self.config.data_directory.clone(),
                 &mut executor,
                 self.kfile_socket_map.clone(),
+                time_sensitive_collector_tx.clone(),
             )?;
             targets.into_iter().for_each(|target| {
                 self.targets.insert(target.tid, target);
@@ -238,6 +252,7 @@ impl Extractor {
                         self.config.data_directory.clone(),
                         &format!("thread/{}/{}", pid, tid),
                         self.kfile_socket_map.clone(),
+                        time_sensitive_collector_tx.clone(),
                     ),
                 );
             });
@@ -260,11 +275,9 @@ impl Extractor {
                 break;
             }
 
-            println!("{:?} - Start collect", chrono::offset::Utc::now());
             self.sample_targets();
             self.sample_system_metrics()?;
-            self.register_new_targets(&mut executor)?;
-            println!("{:?} - End collect", chrono::offset::Utc::now());
+            self.register_new_targets(&mut executor, time_sensitive_collector_tx.clone())?;
         }
 
         Ok(())
