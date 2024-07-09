@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 
 hdrhistogram = "7.5.4"
+clap = { version = "4", features = ["derive", "cargo"]}
+eyre = "0.6.12"
