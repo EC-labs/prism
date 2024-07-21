@@ -22,10 +22,10 @@ pub enum CloneEvent {
 impl From<Vec<u8>> for CloneEvent {
     fn from(value: Vec<u8>) -> Self {
         let event_string = String::from_utf8(value).unwrap();
-        let mut elements = event_string.split_whitespace();
-        match elements.next().unwrap() {
+        let mut elements = event_string.split("\t");
+        match elements.next().unwrap().trim() {
             "NewThread" => Self::NewThread {
-                comm: Rc::from(elements.next().unwrap()),
+                comm: Rc::from(elements.next().unwrap().trim()),
                 pid: elements.next().unwrap().parse().unwrap(),
                 tid: elements.next().unwrap().parse().unwrap(),
             },
