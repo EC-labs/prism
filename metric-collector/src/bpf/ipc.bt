@@ -287,7 +287,7 @@ kretfunc:vmlinux:__sys_connect_file
         @socks_unix[$sk, $peer] = 1;
 
         if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\tconnect\n",
                    "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
@@ -402,7 +402,7 @@ kretfunc:vmlinux:do_accept
         @socks_unix[$sk, $peer] = 1;
 
         if (!@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\taccept\n",
                    "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
@@ -519,7 +519,7 @@ kfunc:vmlinux:sock_recvmsg
         }
 
         if (@pids[pid] && !@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\trecv_msg\n",
                    "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
@@ -753,7 +753,7 @@ kfunc:vmlinux:unix*sendmsg
         }
 
         if (@pids[pid] && !@kfile_socket[$fs_id, $s_dev, $i_id]) {
-            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\n",
+            printf("%-15s\t%s\t%d\t%lld\t%s\t%p\t%p\tsendmsg\n",
                    "NewSocketMap", $fs_id, $s_dev, $i_id, "AF_UNIX", $sk, $peer);
             @kfile_socket[$fs_id, $s_dev, $i_id] = 1;
         }
