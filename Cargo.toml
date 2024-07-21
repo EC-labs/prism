@@ -5,5 +5,7 @@ resolver = "2"
 members = [
     "metric-collector",
     "example-application",
-    "poc", "percentile-ps",
+    "poc", "percentile-ps"
 ]
+
+exclude = ["benchmarks/goose", "benchmarks/goose-test", "benchmarks/kafka/scrape-cc2023-producer"]
