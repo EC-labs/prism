@@ -4,7 +4,7 @@ use eyre::eyre;
 use std::rc::Rc;
 
 pub struct Config {
-    pub pid: Option<usize>,
+    pub pids: Option<Vec<u64>>,
     pub period: u64,
     pub data_directory: Rc<str>,
     pub process_name: Option<String>,
@@ -13,9 +13,12 @@ pub struct Config {
 impl TryFrom<ArgMatches> for Config {
     type Error = Box<dyn std::error::Error>;
     fn try_from(mut matches: ArgMatches) -> Result<Self, Self::Error> {
-        let pid = matches.remove_one::<usize>("pid");
+        let pids: Option<Vec<u64>> = matches
+            .remove_many::<u64>("pids")
+            .map(|pids| pids.collect());
+
         let process_name = matches.remove_one::<String>("process-name");
-        match (&pid, &process_name) {
+        match (&pids, &process_name) {
             (None, None) => return Err(eyre!("Pass --process-name or --pid arg required").into()),
             (Some(_), Some(_)) => {
                 return Err(
@@ -38,7 +41,7 @@ impl TryFrom<ArgMatches> for Config {
         data_directory += &format!("/{}/system-metrics", utc.to_rfc3339());
 
         Ok(Self {
-            pid,
+            pids,
             period,
             data_directory: Rc::from(data_directory),
             process_name,

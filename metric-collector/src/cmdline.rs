@@ -4,11 +4,12 @@ pub fn register_args() -> Command {
     command!() // requires `cargo` feature
         .next_line_help(true)
         .arg(
-            Arg::new("pid")
+            Arg::new("pids")
                 .required(false)
-                .long("pid")
+                .long("pids")
                 .action(ArgAction::Set)
-                .value_parser(value_parser!(usize))
+                .value_parser(value_parser!(u64))
+                .value_delimiter(',')
                 .help("PID of the main process to monitor"),
         )
         .arg(

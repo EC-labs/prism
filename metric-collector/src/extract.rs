@@ -242,23 +242,25 @@ impl Extractor {
             targets.into_iter().for_each(|target| {
                 self.targets.insert(target.tid, target);
             });
-        } else if let Some(pid) = self.config.pid {
-            executor.monitor(pid);
-            let tids = Target::get_threads(pid)?;
-            tids.into_iter().for_each(|tid| {
-                self.targets.insert(
-                    tid,
-                    Target::new(
+        } else if let Some(pids) = &self.config.pids {
+            for pid in pids {
+                executor.monitor(*pid as usize);
+                let tids = Target::get_threads(*pid as usize)?;
+                tids.into_iter().for_each(|tid| {
+                    self.targets.insert(
                         tid,
-                        executor.futex.clone(),
-                        executor.ipc.clone(),
-                        self.config.data_directory.clone(),
-                        &format!("thread/{}/{}", pid, tid),
-                        self.kfile_socket_map.clone(),
-                        time_sensitive_collector_tx.clone(),
-                    ),
-                );
-            });
+                        Target::new(
+                            tid,
+                            executor.futex.clone(),
+                            executor.ipc.clone(),
+                            self.config.data_directory.clone(),
+                            &format!("thread/{}/{}", pid, tid),
+                            self.kfile_socket_map.clone(),
+                            time_sensitive_collector_tx.clone(),
+                        ),
+                    );
+                });
+            }
         }
 
         self.system_metrics.push(Box::new(IOWait::new(
