@@ -21,10 +21,13 @@ tracepoint:syscalls:sys_enter_clone*
 }
 
 tracepoint:syscalls:sys_exit_clone*
-/ @enter[tid] /
+/ @pids[pid] /
 {
-    printf("%-15s\t%-15s\t%lld\t%ld\n", "NewThread", comm, pid, args->ret);
-    delete(@enter[tid]);
+    if (@enter[tid]) {
+        delete(@enter[tid]);
+    } else {
+        printf("%-15s\t%-15s\t%lld\t%ld\n", "NewThread", comm, pid, tid);
+    }
 }
 
 tracepoint:syscalls:sys_enter_*fork
