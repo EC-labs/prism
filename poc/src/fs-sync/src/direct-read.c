@@ -8,7 +8,7 @@
 #include <time.h>
 
 
-void direct_read() {
+void main() {
     const char *filename = "/etc/passwd";
     const size_t buffer_size = 4096;  // Adjust the buffer size as needed
     char *buffer;
