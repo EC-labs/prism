@@ -1,4 +1,5 @@
 use eyre::{eyre, Result};
+use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::HashMap;
 use std::os::unix::prelude::*;
@@ -12,6 +13,10 @@ use std::{
 };
 
 use crate::execute::BpfReader;
+
+lazy_static! {
+    static ref REGEX_PATTERN: Regex = Regex::new(r"^@(\w+)\[(.*)\]: (.*)$").unwrap();
+}
 
 #[derive(Debug)]
 pub enum IowaitEvent {
@@ -110,8 +115,7 @@ impl IowaitBpfEvent {
     }
 
     fn from_summary_stats_string(event_string: &str) -> Result<Self> {
-        let re = Regex::new(r"^@(\w+)\[(.*)\]: (.*)$").unwrap();
-        let captures = re
+        let captures = REGEX_PATTERN
             .captures(&event_string)
             .ok_or(eyre!("Unexpected event string"))?;
         let mut cap_iter = captures.iter();
