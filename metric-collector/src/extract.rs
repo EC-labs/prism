@@ -177,14 +177,17 @@ impl Extractor {
         let period = self.config.period;
         let terminate_flag = self.terminate_flag.clone();
 
-        thread::spawn(move || {
-            while *terminate_flag.lock().unwrap() == false {
-                thread::sleep(Duration::from_millis(period));
-                if let Err(_) = tx_timer.send(true) {
-                    break;
-                };
-            }
-        });
+        thread::Builder::new()
+            .name("interval-timer".to_string())
+            .spawn(move || {
+                while *terminate_flag.lock().unwrap() == false {
+                    thread::sleep(Duration::from_millis(period));
+                    if let Err(_) = tx_timer.send(true) {
+                        break;
+                    };
+                }
+            })
+            .expect("Failed to create interval-timer thread");
     }
 
     fn sample_system_metrics(&mut self) -> Result<()> {

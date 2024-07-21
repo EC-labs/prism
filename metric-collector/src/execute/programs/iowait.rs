@@ -222,22 +222,25 @@ impl IOWaitProgram {
     ) where
         R: Read + Send + 'static,
     {
-        thread::spawn(move || loop {
-            if *terminate_flag.lock().unwrap() == true {
-                break;
-            }
-            let mut buf: [u8; 65536] = [0; 65536];
-            let res = bpf_pipe_rx.read(&mut buf);
-            if let Ok(bytes) = res {
-                if bytes == 0 {
+        thread::Builder::new()
+            .name("iowait_recv".to_string())
+            .spawn(move || loop {
+                if *terminate_flag.lock().unwrap() == true {
                     break;
                 }
+                let mut buf: [u8; 65536] = [0; 65536];
+                let res = bpf_pipe_rx.read(&mut buf);
+                if let Ok(bytes) = res {
+                    if bytes == 0 {
+                        break;
+                    }
 
-                if let Err(_) = tx.send(Arc::from(&buf[..bytes])) {
-                    break;
-                };
-            }
-        });
+                    if let Err(_) = tx.send(Arc::from(&buf[..bytes])) {
+                        break;
+                    };
+                }
+            })
+            .unwrap();
     }
 }
 

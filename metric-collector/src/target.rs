@@ -186,31 +186,34 @@ impl TimeSensitive {
     ) -> Sender<Box<dyn Collect + Send>> {
         let sample_rx = Self::start_timer_thread(terminate_flag.clone(), sample_interval);
         let (collector_tx, collector_rx) = mpsc::channel();
-        thread::spawn(move || {
-            let mut collectors: Vec<Box<dyn Collect + Send>> = Vec::new();
-            loop {
-                sample_rx.recv()?;
-                if *terminate_flag.lock().unwrap() == true {
-                    break;
+        thread::Builder::new()
+            .name("time-sensitive-collect".to_string())
+            .spawn(move || {
+                let mut collectors: Vec<Box<dyn Collect + Send>> = Vec::new();
+                loop {
+                    sample_rx.recv()?;
+                    if *terminate_flag.lock().unwrap() == true {
+                        break;
+                    }
+                    if let Ok(collector) = collector_rx.try_recv() {
+                        collectors.push(collector);
+                    }
+                    println!(
+                        "{:?} - Start time sensitive collect",
+                        chrono::offset::Utc::now()
+                    );
+                    for collector in collectors.iter_mut() {
+                        collector.sample();
+                        collector.store();
+                    }
+                    println!(
+                        "{:?} - End time sensitive collect",
+                        chrono::offset::Utc::now()
+                    );
                 }
-                if let Ok(collector) = collector_rx.try_recv() {
-                    collectors.push(collector);
-                }
-                println!(
-                    "{:?} - Start time sensitive collect",
-                    chrono::offset::Utc::now()
-                );
-                for collector in collectors.iter_mut() {
-                    collector.sample();
-                    collector.store();
-                }
-                println!(
-                    "{:?} - End time sensitive collect",
-                    chrono::offset::Utc::now()
-                );
-            }
-            Ok(()) as Result<()>
-        });
+                Ok(()) as Result<()>
+            })
+            .expect("Failed to create time-sensitive-collect thread");
         collector_tx
     }
 
@@ -219,13 +222,16 @@ impl TimeSensitive {
         sample_interval: Duration,
     ) -> Receiver<bool> {
         let (sample_tx, sample_rx) = mpsc::channel();
-        thread::spawn(move || loop {
-            thread::sleep(sample_interval);
-            if *terminate_flag.lock().unwrap() == true {
-                break;
-            }
-            sample_tx.send(true).expect("Failed to send timer signal");
-        });
+        thread::Builder::new()
+            .name("time-sensitive-timer".to_string())
+            .spawn(move || loop {
+                thread::sleep(sample_interval);
+                if *terminate_flag.lock().unwrap() == true {
+                    break;
+                }
+                sample_tx.send(true).expect("Failed to send timer signal");
+            })
+            .expect("Failed to create time-sensitive-timer thread");
         sample_rx
     }
 }
