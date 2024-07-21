@@ -392,17 +392,16 @@ impl BpfReader for FutexProgram {
 
 impl FutexProgram {
     pub fn new(pid: u32, terminate_flag: Arc<Mutex<bool>>) -> Result<Self> {
-        let (mut reader, writer) = super::pipe();
-        super::fcntl_setfd(&mut reader, libc::O_RDONLY | libc::O_NONBLOCK);
+        let (bpf_pipe_rx, bpf_pipe_tx) = super::bpf_pipe(1_048_576);
         let (tx, rx) = mpsc::channel();
-        Self::start_bpf_reader(tx, reader, terminate_flag);
         let child = Command::new("bpftrace")
             .args([
                 "./metric-collector/src/bpf/futex_wait.bt",
                 &format!("{}", pid),
             ])
-            .stdout(writer)
+            .stdout(bpf_pipe_tx)
             .spawn()?;
+        Self::start_bpf_reader(tx, bpf_pipe_rx, terminate_flag);
         Ok(Self {
             child: Some(child),
             rx,
@@ -443,22 +442,25 @@ impl FutexProgram {
     ) where
         R: Read + Send + 'static,
     {
-        thread::spawn(move || loop {
-            if *terminate_flag.lock().unwrap() == true {
-                break;
-            }
-            let mut buf: [u8; 65536] = [0; 65536];
-            let res = bpf_pipe_rx.read(&mut buf);
-            if let Ok(bytes) = res {
-                if bytes == 0 {
+        thread::Builder::new()
+            .name("futex_recv".to_string())
+            .spawn(move || loop {
+                if *terminate_flag.lock().unwrap() == true {
                     break;
                 }
+                let mut buf: [u8; 65536] = [0; 65536];
+                let res = bpf_pipe_rx.read(&mut buf);
+                if let Ok(bytes) = res {
+                    if bytes == 0 {
+                        break;
+                    }
 
-                if let Err(_) = tx.send(Arc::from(&buf[..bytes])) {
-                    break;
-                };
-            }
-        });
+                    if let Err(_) = tx.send(Arc::from(&buf[..bytes])) {
+                        break;
+                    };
+                }
+            })
+            .unwrap();
     }
 
     pub fn poll_events(&mut self) -> Result<usize> {
