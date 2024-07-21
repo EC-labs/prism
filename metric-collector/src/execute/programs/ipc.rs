@@ -55,6 +55,7 @@ enum IpcBpfEvent {
         inode_id: u64,
         conn: Connection,
     },
+    AcceptStart,
     AcceptEnd {
         comm: Rc<str>,
         tid: usize,
@@ -63,6 +64,7 @@ enum IpcBpfEvent {
         inode_id: u64,
         conn: Connection,
     },
+    ConnectStart,
     ConnectEnd {
         comm: Rc<str>,
         tid: usize,
@@ -250,8 +252,9 @@ impl IpcBpfEvent {
     }
 
     fn from_trace_string(event_string: &str) -> Result<Self> {
-        let mut elements = event_string.split_whitespace();
-        let event = match elements.next().unwrap() {
+        let mut elements = event_string.split("\t");
+        let event = match elements.next().unwrap().trim() {
+            "AcceptStart" => Self::AcceptStart,
             "AcceptEnd" => {
                 let comm = Rc::from(elements.next().unwrap());
                 let tid = elements.next().unwrap().parse().unwrap();
@@ -280,8 +283,7 @@ impl IpcBpfEvent {
                         dst_address: u64::from_str_radix(
                             elements.next().unwrap().trim_start_matches("0x"),
                             16,
-                        )
-                        .unwrap(),
+                        )?,
                     },
                     _ => return Err(eyre!("Unexpected socket family type")),
                 };
@@ -294,6 +296,7 @@ impl IpcBpfEvent {
                     conn,
                 }
             }
+            "ConnectStart" => Self::ConnectStart,
             "ConnectEnd" => {
                 let comm = Rc::from(elements.next().unwrap());
                 let tid = elements.next().unwrap().parse().unwrap();
@@ -443,8 +446,7 @@ impl IpcBpfEvent {
                         dst_address: u64::from_str_radix(
                             elements.next().unwrap().trim_start_matches("0x"),
                             16,
-                        )
-                        .unwrap(),
+                        )?,
                     },
                     _ => return Err(eyre!("Unexpected socket family type")),
                 };
@@ -1104,7 +1106,7 @@ impl IpcProgram {
                         let entry = self.stats_closure_events.entry(key).or_insert((None, None));
                         entry.1 = Some(event)
                     }
-                    IpcBpfEvent::NoOp => {}
+                    IpcBpfEvent::NoOp | IpcBpfEvent::AcceptStart | IpcBpfEvent::ConnectStart => {}
                     _ => {
                         println!("Unexpected ipc event {:?}", event);
                     }
