@@ -3,6 +3,19 @@
 `CONFIG_TASK_DELAY_ACCT` && `sysctl "kernel.task_delayacct=1`: Enables taskstats metrics from `struct taskstats` in `include/uapi/linux/taskstats.h`.
 `CONFIG_SCHEDSTATS` && `sysctl "kernel.sched_schedstats=1"`: Enables schedular statistics in the form of `struct sched_statistics` in `include/linux/sched.h`.
 
+```bash
+sudo sysctl "kernel.sched_schedstats=1"
+sudo sysctl "fs.pipe-max-size=2097152"
+```
+
+```bash
+ulimit -n 32768
+```
+
+```bash 
+top -d 1 -H -p "$(ps -ef | grep -E 'target/.*metric-collector|bpftrace' | head -n -1 | awk '{print $2}' | paste -s -d ,)"
+```
+
 # Metrics
 
 ## Sched
@@ -127,3 +140,14 @@ with some activity on the journaling kernel thread.
 # TODO
 
 Consider limits
+
+# Experiments
+
+docker run --rm --name mysqldb -p 127.0.0.1:3306:3306  -e MYSQL_ROOT_PASSWORD=my-secret-pw -d mysql:8.4.0
+
+## Commands
+
+```bash
+tail -n +0 data/2024-06-19T06:08:33.622419748+00:00/system-metrics/thread/348509/*/ipc/sockets/*/*
+tail -n +0 data/2024-06-19T06:08:33.622419748+00:00/system-metrics/thread/348509/*/futex/*
+```
