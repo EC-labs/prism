@@ -1313,7 +1313,7 @@ mod tests {
 
         #[test]
         fn accept_end() -> Result<()> {
-            let line = "AcceptEnd       epoll_server    339840  sockfs  8       16067228        AF_INET     127.0.0.1       3001    127.0.0.1   53520   535862448460614     1111111111";
+            let line = "AcceptEnd  \tepoll_server\t339840\tsockfs\t8\t16067228\tAF_INET\t127.0.0.1\t3001\t127.0.0.1\t53520\t535862448460614\t1111111111";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
 
             let conn_cmp = Connection::Ipv4 {
@@ -1339,7 +1339,7 @@ mod tests {
                 assert_eq!(inode_id, 16067228);
                 assert_eq!(conn, conn_cmp);
             } else {
-                return Err(eyre!("Incorrect bpf event"));
+                return Err(eyre!(format!("Incorrect bpf event. {:?}", event)));
             }
 
             Ok(())
@@ -1348,7 +1348,7 @@ mod tests {
         #[test]
         fn connect_start() -> Result<()> {
             let line =
-                "ConnectEnd   	epoll_server   	339840	sockfs	8	16052952	AF_INET     127.0.0.1	39432	127.0.0.1	7878    111111111111    1034";
+                "ConnectEnd\tepoll_server\t339840\tsockfs\t8\t16052952\tAF_INET\t127.0.0.1\t39432\t127.0.0.1\t7878\t111111111111\t1034";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
 
             let conn_cmp = Connection::Ipv4 {
@@ -1382,7 +1382,8 @@ mod tests {
 
         #[test]
         fn new_socket_map() -> Result<()> {
-            let line = "NewSocketMap   	sockfs	8	16052952	AF_INET     127.0.0.1	39432	127.0.0.1	7878";
+            let line =
+                "NewSocketMap\tsockfs\t8\t16052952\tAF_INET\t127.0.0.1\t39432\t127.0.0.1\t7878";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
             let conn_cmp = Connection::Ipv4 {
                 src_host: Ipv4Addr::new(127, 0, 0, 1),
@@ -1411,7 +1412,7 @@ mod tests {
 
         #[test]
         fn new_process() -> Result<()> {
-            let line = "NewProcess	example-applica	334444";
+            let line = "NewProcess\texample-applica\t334444";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
             if let IpcBpfEvent::NewProcess { comm, pid } = event {
                 assert_eq!(&*comm, "example-applica");
@@ -1425,7 +1426,7 @@ mod tests {
 
         #[test]
         fn epoll_add() -> Result<()> {
-            let line = "EpollAdd       	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	16052950	534439341112792	600572454";
+            let line = "EpollAdd\tepoll_server\t339840\t0xffff8b2c5b49c000\tsockfs\t8\t16052950\t534439341112792\t600572454";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
 
             if let IpcBpfEvent::EpollItemAdd {
@@ -1460,7 +1461,7 @@ mod tests {
 
         #[test]
         fn epoll_remove() -> Result<()> {
-            let line = "EpollRemove    	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	16052952	534439657922636	1206546100";
+            let line = "EpollRemove\tepoll_server\t339840\t0xffff8b2c5b49c000\tsockfs\t8\t16052952\t534439657922636\t1206546100";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
 
             if let IpcBpfEvent::EpollItemRemove {
@@ -1495,7 +1496,7 @@ mod tests {
 
         #[test]
         fn epoll_item_inode() -> Result<()> {
-            let line = "EpiPoll        	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	3754233	538189292768153	948293676";
+            let line = "EpiPoll\tepoll_server\t339840\t0xffff8b2c5b49c000\tsockfs\t8\t3754233\t538189292768153\t948293676";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
 
             if let IpcBpfEvent::EpollItem {
@@ -1530,7 +1531,7 @@ mod tests {
 
         #[test]
         fn epoll_item_anon_inode() -> Result<()> {
-            let line = "EpiPoll        	epoll_server   	339840	0xffff8b2c5b49c000	anon_inodefs	[eventfd]	0xffff8b2c5fb38000	538285701874848	159578";
+            let line = "EpiPoll\tepoll_server\t339840\t0xffff8b2c5b49c000\tanon_inodefs\t[eventfd]\t0xffff8b2c5fb38000\t538285701874848\t159578";
             let event = IpcBpfEvent::from(Vec::from(line.as_bytes()));
 
             if let IpcBpfEvent::EpollItem {
@@ -1582,7 +1583,7 @@ mod tests {
             let block = indoc! {"
                 HEADER
 
-                EpollAdd       	epoll_server   	339840	0xffff8b2c5b49c000	sockfs	8	16052950	125     25721222
+                EpollAdd\tepoll_server\t339840\t0xffff8b2c5b49c000\tsockfs\t8\t16052950\t125\t25721222
             "};
             tx.write(block.as_bytes())?;
             for _ in 0..5 {

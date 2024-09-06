@@ -889,19 +889,19 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       90098   127.0.0.1       7878    127.0.0.1       50058
-                AcceptEnd       example-applica 24239   sockfs  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                NewSocketMap\tsockfs\t8\t90098\tAF_INET\t127.0.0.1\t7878\t127.0.0.1\t50058
+                AcceptEnd\texample-applica\t24239\tsockfs\t8\t90098\tAF_INET\t127.0.0.1\t7878\t127.0.0.1\t50058\t19446862145009
 
                 => start map statistics
                 @inode_map[example-applica, 24239, sockfs, 8, 90098]: (2848, 1)
 
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
                 => start map statistics
                 @inode_map[example-applica, 24239, sockfs, 8, 90098]: (43106, 1)
 
-                SampleInstant   19448107034740
+                SampleInstant\t19448107034740
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -956,19 +956,19 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058
-                AcceptEnd       example-applica 24239   sockfs  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                NewSocketMap\tsockfs\t8\t90098\tAF_INET\t127.0.0.1\t7878\t127.0.0.1\t50058
+                AcceptEnd\texample-applica\t24239\tsockfs\t8\t90098\tAF_INET\t127.0.0.1\t7878\t127.0.0.1\t50058\t19446862145009
 
                 => start map statistics
                 @inode_map[example-applica, 24239, sockfs, 8, 90098]: (2848, 1)
 
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
                 => start map statistics
                 @inode_map[example-applica, 24239, sockfs, 8, 90098]: (43106, 1)
 
-                SampleInstant   19448107034740
+                SampleInstant\t19448107034740
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1017,18 +1017,18 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                AcceptEnd       example-applica 24239   devpts  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                AcceptEnd\texample-applica\t24239\tdevpts\t8\t90098\tAF_INET\t127.0.0.1\t7878\t127.0.0.1\t50058\t19446862145009
 
                 => start map statistics
                 @inode_map[example-applica, 24239, devpts, 8, 90098]: (2848, 1)
 
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
                 => start map statistics
                 @inode_map[example-applica, 24239, devpts, 8, 90098]: (43106, 1)
 
-                SampleInstant   19448107034740
+                SampleInstant\t19448107034740
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1086,18 +1086,18 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                AcceptEnd       example-applica 24239   devpts  8       90098   AF_INET     127.0.0.1       7878    127.0.0.1       50058   19446862145009
+                AcceptEnd\texample-applica\t24239\tdevpts\t8\t90098\tAF_INET\t127.0.0.1\t7878\t127.0.0.1\t50058\t19446862145009
 
                 => start map statistics
                 @inode_map[example-applica, 24239, devpts, 8, 90098]: (2848, 1)
 
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
                 => start map statistics
                 @inode_map[example-applica, 24239, devpts, 8, 90098]: (43106, 1)
 
-                SampleInstant   19448107034740
+                SampleInstant\t19448107034740
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1147,9 +1147,9 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+                NewSocketMap\tsockfs\t8\t80672\t127.0.0.1\t50046\t127.0.0.1\t7878
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446834063942\t1016301358
             "};
             tx.write_all(bpf_content.as_bytes())?;
             while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
@@ -1196,13 +1196,13 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+                NewSocketMap\tsockfs\t8\t80672\t127.0.0.1\t50046\t127.0.0.1\t7878
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446834063942\t1016301358
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1250,14 +1250,14 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
+                NewSocketMap\tsockfs\t8\t80672\t127.0.0.1\t50046\t127.0.0.1\t7878
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446834063942\t1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t200000000
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1305,18 +1305,18 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
+                NewSocketMap\tsockfs\t8\t80672\t127.0.0.1\t50046\t127.0.0.1\t7878
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446834063942\t1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t200000000
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446834063942\t1016301358
             "};
             tx.write_all(bpf_content.as_bytes())?;
             while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
@@ -1375,22 +1375,22 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       80672   127.0.0.1       50046   127.0.0.1       7878
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
+                NewSocketMap\tsockfs\t8\t80672\t127.0.0.1\t50046\t127.0.0.1\t7878
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446834063942\t1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t200000000
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446834063942\t1016301358
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 914973709
-                SampleInstant   19448107034740
+                SampleInstant\t19448107034740
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1450,23 +1450,23 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                NewSocketMap    sockfs  8       80672   AF_INET     127.0.0.1       50046   127.0.0.1       7878
-                ConnectEnd      epoll_server    24354   sockfs  8       80672   AF_INET     127.0.0.1       50046   127.0.0.1       7878    111111111   1034
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  200000000
+                NewSocketMap\tsockfs\t8\t80672\tAF_INET\t127.0.0.1\t50046\t127.0.0.1\t7878
+                ConnectEnd\tepoll_server\t24354\tsockfs\t8\t80672\tAF_INET\t127.0.0.1\t50046\t127.0.0.1\t7878\t111111111\t1034
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446834063942\t1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t200000000
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      sockfs  8       80672   19446834063942  1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tsockfs\t8\t80672\t19446834063942\t1016301358
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 914973709
-                SampleInstant   19448107034740
+                SampleInstant\t19448107034740
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1521,8 +1521,8 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446834063942\t1016301358
             "};
             tx.write_all(bpf_content.as_bytes())?;
             while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
@@ -1572,12 +1572,12 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446834063942\t1016301358
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1628,13 +1628,13 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446834063942\t1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t200000000
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1685,17 +1685,17 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446834063942\t1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t200000000
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446834063942\t1016301358
             "};
             tx.write_all(bpf_content.as_bytes())?;
             while let Ok(0) = ipc_program.borrow_mut().poll_events() {}
@@ -1757,21 +1757,21 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446834063942\t1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t200000000
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446834063942\t1016301358
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 914973709
-                SampleInstant   19448107034740
+                SampleInstant\t19448107034740
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1834,21 +1834,21 @@ mod tests {
             let bpf_content = indoc! {"
                 HEADER
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  200000000
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446834063942\t1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t200000000
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 289679399
-                SampleInstant   19447107025962
+                SampleInstant\t19447107025962
                 => end map statistics
 
-                EpollAdd        epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446544512965  437501291
-                EpollRemove     epoll_server    24354   0xffff98dd8179e0c0      devpts  8       80672   19446834063942  1016301358
+                EpollAdd\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446544512965\t437501291
+                EpollRemove\tepoll_server\t24354\t0xffff98dd8179e0c0\tdevpts\t8\t80672\t19446834063942\t1016301358
 
                 => start map statistics
                 @epoll_map[0xffff98dd8179e0c0]: 914973709
-                SampleInstant   19448107034740
+                SampleInstant\t19448107034740
                 => end map statistics
             "};
             tx.write_all(bpf_content.as_bytes())?;
@@ -1900,8 +1900,8 @@ mod tests {
         let bpf_content = indoc! {"
             HEADER
 
-            NewSocketMap    sockfs  8       2519815 AF_INET     127.0.0.1       60958   127.0.0.1       7878
-            EpollAdd        epoll_server    357171  0xffff96892f1e7b00      sockfs  8       2519815 521457873233008 861999000
+            NewSocketMap\tsockfs\t8\t2519815\tAF_INET\t127.0.0.1\t60958\t127.0.0.1\t7878
+            EpollAdd\tepoll_server\t357171\t0xffff96892f1e7b00\tsockfs\t8\t2519815\t521457873233008\t861999000
 
             => start map statistics
             @inode_map[epoll_server, 357171,                           epoll, 0, -115959031497984]: (862007004, 12)
@@ -1909,7 +1909,7 @@ mod tests {
 
             @epoll_map[0xffff96892f1e7b00]: 861999871
             @epoll_pending[0xffff96892f1e7b00]: 521457873417016
-            SampleInstant   521457925386742
+            SampleInstant\t521457925386742
             => end map statistics
         "};
         tx.write_all(bpf_content.as_bytes())?;
@@ -1983,16 +1983,16 @@ mod tests {
         let bpf_content = indoc! {"
             HEADER
 
-            NewSocketMap    sockfs  8                    1031455    AF_INET6        ::1                     3001   ::1                     55774
-            AcceptEnd       epoll_server                   67967    sockfs  8                    1031455    AF_INET6     ::1     3001    ::1     55774        330488529582598
-            EpollAdd        epoll_server                   67967    0xffff9d5c4f7ca840      sockfs  8                    1031455         330488529608026               248242602
+            NewSocketMap\tsockfs\t8\t1031455\tAF_INET6\t::1\t3001\t::1\t55774
+            AcceptEnd\tepoll_server\t67967\tsockfs\t8\t1031455\tAF_INET6\t::1\t3001\t::1\t55774\t330488529582598
+            EpollAdd\tepoll_server\t67967\t0xffff9d5c4f7ca840\tsockfs\t8\t1031455\t330488529608026\t248242602
 
             => start map statistics
             @inode_map[epoll_server, 67967, sockfs, 8, 1031455]: (30594, 5)
             @inode_pending[epoll_server, 67967,                           epoll, 0, -108455180588992]: 330489199386315
             @epoll_map[0xffff9d5c4f7ca840]: 586287502
             @epoll_pending[0xffff9d5c4f7ca840]: 330489199386315
-            SampleInstant        330489281294037
+            SampleInstant\t330489281294037
             => end map statistics
         "};
         tx.write_all(bpf_content.as_bytes())?;
@@ -2079,20 +2079,20 @@ mod tests {
         let bpf_content = indoc! {"
             HEADER
 
-            NewSocketMap    sockfs  8                    1051498    AF_UNIX 0xffff9d5c5c4d3300      0xffff9d5c5c4d1100
+            NewSocketMap\tsockfs\t8\t1051498\tAF_UNIX\t0xffff9d5c5c4d3300\t0xffff9d5c5c4d1100
             => start map statistics
             @inode_pending[unix-accept-con, 143866, sockfs, 8, 1051498]: 332665199498858
-            SampleInstant        332665569307417
+            SampleInstant\t332665569307417
             => end map statistics
 
-            NewProcess      unix-accept-con               143868
-            NewSocketMap    sockfs  8                    1057237    AF_UNIX 0xffff9d5c5c4d1100      0xffff9d5c5c4d3300
+            NewProcess\tunix-accept-con\t143868
+            NewSocketMap\tsockfs\t8\t1057237\tAF_UNIX\t0xffff9d5c5c4d1100\t0xffff9d5c5c4d3300
             => start map statistics
             @inode_map[unix-accept-con, 143866, devpts, 24, 8]: (8184, 1)
             @inode_map[unix-accept-con, 143866, sockfs, 8, 1051498]: (630338761, 1)
             @inode_map[unix-accept-con, 143868, sockfs, 8, 1057237]: (5879, 1)
             @inode_pending[unix-accept-con, 143866, sockfs, 8, 1051498]: 332666199674298
-            SampleInstant        332666569304709
+            SampleInstant\t332666569304709
             => end map statistics
         "};
         tx.write_all(bpf_content.as_bytes())?;
