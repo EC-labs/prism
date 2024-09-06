@@ -457,12 +457,18 @@ impl Sockets {
                         accumulated_wait: 0,
                         count: 0,
                     });
-                    stat.accumulated_wait += if (contrib_snapshot as i64 - add_snapshot as i64) < 0
-                    {
+                    let contrib = if (contrib_snapshot as i64 - add_snapshot as i64) < 0 {
                         contrib_snapshot
                     } else {
                         contrib_snapshot - add_snapshot
                     };
+                    if contrib > 1_500_000_000 {
+                        println!(
+                            "Unexpected remove contrib size. {:?} {:?}",
+                            contrib_snapshot, add_snapshot
+                        );
+                    }
+                    stat.accumulated_wait += contrib;
                     let snapshots = self
                         .snapshots
                         .entry(kfile)
@@ -491,6 +497,9 @@ impl Sockets {
                     });
                     let contrib =
                         i64::max(total_interval_wait_ns as i64 - *add_time as i64, 0) as u64;
+                    if contrib > 1_500_000_000 {
+                        println!("Unexpected epoll wait contrib size. {:?}", event);
+                    }
                     stat.accumulated_wait += contrib;
                     *add_time = 0;
 
