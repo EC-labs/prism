@@ -169,7 +169,7 @@ impl Collect for Futex {
                             count: wait.count,
                         });
                         let filename = format!(
-                            "{}/wait/{}/{}-{}",
+                            "{}/wait/{}/{}-{}.csv",
                             self.target_subdirectory,
                             (sample_epoch_ms / (1000 * 60)) * 60,
                             futex.root_pid,
@@ -183,7 +183,7 @@ impl Collect for Futex {
                             count,
                         });
                         let filename = format!(
-                            "{}/wake/{}/{}-{}",
+                            "{}/wake/{}/{}-{}.csv",
                             self.target_subdirectory,
                             (sample_epoch_ms / (1000 * 60)) * 60,
                             futex.root_pid,
@@ -320,7 +320,7 @@ mod tests {
 
         futex.store()?;
         let content = fs::read_to_string(format!(
-            "{}/thread/8877/8955/futex/wait/65340/8877-0x7c3dd4f85fb0",
+            "{}/thread/8877/8955/futex/wait/65340/8877-0x7c3dd4f85fb0.csv",
             root_directory.path().to_str().unwrap()
         ))?;
         assert_eq!(
@@ -371,7 +371,7 @@ mod tests {
 
         futex.store()?;
         let content = fs::read_to_string(format!(
-            "{}/thread/{}/{}/futex/wake/65340/{}-{}",
+            "{}/thread/{}/{}/futex/wake/65340/{}-{}.csv",
             root_directory.path().to_str().unwrap(),
             pid,
             tid,
@@ -447,7 +447,7 @@ mod tests {
 
         futex.store()?;
         let content = fs::read_to_string(format!(
-            "{}/thread/{}/{}/futex/wait/65340/{}-{}",
+            "{}/thread/{}/{}/futex/wait/65340/{}-{}.csv",
             root_directory.path().to_str().unwrap(),
             pid,
             tid,
@@ -512,7 +512,7 @@ mod tests {
 
         futex.store()?;
         let content = fs::read_to_string(format!(
-            "{}/thread/{}/{}/futex/wake/65340/{}-{}",
+            "{}/thread/{}/{}/futex/wake/65340/{}-{}.csv",
             root_directory.path().to_str().unwrap(),
             pid,
             tid,
@@ -574,7 +574,7 @@ mod tests {
 
         futex.store()?;
         let content = fs::read_to_string(format!(
-            "{}/thread/{}/{}/futex/wake/65340/{}-{}",
+            "{}/thread/{}/{}/futex/wake/65340/{}-{}.csv",
             root_directory.path().to_str().unwrap(),
             pid,
             tid,
@@ -590,7 +590,7 @@ mod tests {
         );
 
         let content = fs::read_to_string(format!(
-            "{}/thread/{}/{}/futex/wait/65340/{}-{}",
+            "{}/thread/{}/{}/futex/wait/65340/{}-{}.csv",
             root_directory.path().to_str().unwrap(),
             pid,
             tid,
