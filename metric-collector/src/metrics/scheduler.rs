@@ -1,4 +1,5 @@
 use eyre::Result;
+use lazy_static::lazy_static;
 use nix::time::{self, ClockId};
 use regex::Regex;
 use std::fmt::Debug;
@@ -11,6 +12,20 @@ use std::{
 };
 
 use super::{Collect, MissingSample, ToCsv};
+
+lazy_static! {
+    static ref REGEX_PATTERN: Regex = Regex::new(concat!(
+        r"se.sum_exec_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
+        r"sum_sleep_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
+        r"sum_block_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
+        r"wait_start\s*:\s*(\d+\.\d+)\n(.*\n)*",
+        r"sleep_start\s*:\s*(\d+\.\d+)\n(.*\n)*",
+        r"block_start\s*:\s*(\d+\.\d+)\n(.*\n)*",
+        r"wait_sum\s*:\s*(\d+\.\d+)\n(.*\n)*",
+        r"iowait_sum\s*:\s*(\d+\.\d+)\n(.*\n)*",
+    ))
+    .unwrap();
+}
 
 pub struct SchedStat {
     proc_file: String,
@@ -132,7 +147,7 @@ impl Sched {
 impl Collect for Sched {
     fn sample(&mut self) -> Result<()> {
         let contents = fs::read_to_string(&self.proc_file)?;
-        let sample = SchedSample::from(contents);
+        let sample = SchedSample::from(contents.as_str());
         self.sample = Some(sample);
         Ok(())
     }
@@ -178,26 +193,15 @@ pub struct SchedSample {
     iowait_time: f64,
 }
 
-impl From<String> for SchedSample {
-    fn from(content: String) -> Self {
+impl From<&str> for SchedSample {
+    fn from(content: &str) -> Self {
         let start = SystemTime::now();
         let epoch = start
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
             .as_millis();
 
-        let re = Regex::new(concat!(
-            r"se.sum_exec_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
-            r"sum_sleep_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
-            r"sum_block_runtime\s*:\s*(\d+\.\d+)\n(.*\n)*",
-            r"wait_start\s*:\s*(\d+\.\d+)\n(.*\n)*",
-            r"sleep_start\s*:\s*(\d+\.\d+)\n(.*\n)*",
-            r"block_start\s*:\s*(\d+\.\d+)\n(.*\n)*",
-            r"wait_sum\s*:\s*(\d+\.\d+)\n(.*\n)*",
-            r"iowait_sum\s*:\s*(\d+\.\d+)\n(.*\n)*",
-        ))
-        .unwrap();
-        let captures = re.captures(&content).unwrap();
+        let captures = REGEX_PATTERN.captures(&content).unwrap();
         let time_since_boot = Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap())
             .as_millis() as f64;
 

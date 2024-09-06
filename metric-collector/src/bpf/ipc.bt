@@ -814,7 +814,9 @@ kfunc:vmlinux:ep_insert
             @epoll_anon_inode_map[args->ep, $fs_id, $name, $priv_data] = 1;
             $epoll_cached = @epoll_map[args->ep];
             $start = @epoll_pending[args->ep];
-            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+            if ($start) {
+                $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+            }
 
             printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\t%lld\n",
                    "EpollAdd", comm, tid, args->ep, $fs_id, $name, args->tfile->private_data, nsecs, $epoll_cached + $pending_contrib);
@@ -827,7 +829,9 @@ kfunc:vmlinux:ep_insert
             @epoll_inode_map[args->ep, $fs_id, $s_dev, $i_id] = 1;
             $epoll_cached = @epoll_map[args->ep];
             $start = @epoll_pending[args->ep];
-            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+            if ($start) {
+                $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+            }
 
             printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\t%lld\n",
                    "EpollAdd", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs, $epoll_cached + $pending_contrib);
@@ -854,7 +858,9 @@ kfunc:vmlinux:__ep_remove
             @epoll_anon_inode_map[args->ep, $fs_id, $name, $priv_data] = 1;
             $epoll_cached = @epoll_map[args->ep];
             $start = @epoll_pending[args->ep];
-            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+            if ($start) {
+                $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+            }
 
             printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\t%lld\n",
                    "EpollRemove", comm, tid, args->ep, $fs_id, $name, $ffd.file->private_data, nsecs, $epoll_cached + $pending_contrib);
@@ -868,10 +874,11 @@ kfunc:vmlinux:__ep_remove
             @epoll_inode_map[args->ep, $fs_id, $s_dev, $i_id] = 1;
             $epoll_cached = @epoll_map[args->ep];
             $start = @epoll_pending[args->ep];
-            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
-
-            printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\t%lld\n",
-                   "EpollRemove", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs, $epoll_cached + $pending_contrib);
+            if ($start) {
+                $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+            }
+            printf("%-15s\t%-15s\t%lld\t%p\t%s\t%d\t%lld\t%lld\t%lld\t%lld\t%lld\t%lld\n",
+                   "EpollRemove", comm, tid, args->ep, $fs_id, $s_dev, $i_id, nsecs, $epoll_cached + $pending_contrib, $start, $epoll_cached, @sample_instant);
             delete(@epoll_inode_map[args->ep, $fs_id, $s_dev, $i_id]);
         }
     }
@@ -910,13 +917,17 @@ kretfunc:vmlinux:ep_poll
      * not want to account for the time spent waiting before the current interval.
      */
     $start = @epoll_pending[args->ep];
-    $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    if ($start) {
+        $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    }
     @epoll_map[args->ep] = @epoll_map[args->ep] + $pending_contrib;
     delete(@epoll_pending[args->ep]);
 
     $epoll = "                          epoll";
     $start = @inode_pending[comm, tid, $epoll, 0, (uint64) args->ep];
-    $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    if ($start) {
+        $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+    }
     @inode_map[comm, tid, $epoll, 0, (uint64) args->ep] = (
         @inode_map[comm, tid, $epoll, 0, (uint64) args->ep].0 + $pending_contrib,
         @inode_map[comm, tid, $epoll, 0, (uint64) args->ep].1 + 1
@@ -960,7 +971,9 @@ kprobe:ep_item_poll*
         @epoll_anon_inode_map[$epoll, $fs_id, $name, $priv_data] = 1;
         $epoll_cached = @epoll_map[$epoll];
         $start = @epoll_pending[$epoll];
-        $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+        if($start) {
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+        }
 
         printf("%-15s\t%-15s\t%lld\t%p\t%s\t%s\t%p\t%lld\t%lld\n", 
                "EpiPoll", comm, tid, @epoll_send[tid], $fs_id, $name, $ffd.file->private_data, nsecs, $epoll_cached + $pending_contrib);
@@ -976,7 +989,9 @@ kprobe:ep_item_poll*
         @epoll_anon_inode_map[$epoll, $fs_id, $name, $priv_data] = 1;
         $epoll_cached = @epoll_map[$epoll];
         $start = @epoll_pending[$epoll];
-        $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+        if ($start) {
+            $pending_contrib = $start > @sample_instant ? nsecs - $start : nsecs - @sample_instant;
+        }
         @epoll_inode_map[$epoll, $fs_id, $s_dev, $i_id] = 1;
 
         printf("%-15s\t%-15s\t%lld\t%p\t%s\t%lld\t%lld\t%lld\t%lld\n", 
