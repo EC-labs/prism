@@ -185,9 +185,9 @@ impl TimeSensitive {
         sample_interval: Duration,
     ) -> Sender<Box<dyn Collect + Send>> {
         let sample_rx = Self::start_timer_thread(terminate_flag.clone(), sample_interval);
-        let (collector_tx, collector_rx) = mpsc::channel();
+        let (collector_tx, collector_rx) = mpsc::channel::<Box<dyn Collect + Send>>();
         thread::Builder::new()
-            .name("time-sensitive-collect".to_string())
+            .name("ts-collect".to_string())
             .spawn(move || {
                 let mut collectors: Vec<Box<dyn Collect + Send>> = Vec::new();
                 loop {
@@ -195,7 +195,7 @@ impl TimeSensitive {
                     if *terminate_flag.lock().unwrap() == true {
                         break;
                     }
-                    if let Ok(collector) = collector_rx.try_recv() {
+                    while let Ok(collector) = collector_rx.try_recv() {
                         collectors.push(collector);
                     }
                     println!(
@@ -213,7 +213,7 @@ impl TimeSensitive {
                 }
                 Ok(()) as Result<()>
             })
-            .expect("Failed to create time-sensitive-collect thread");
+            .expect("Failed to create ts-collect thread");
         collector_tx
     }
 
@@ -223,7 +223,7 @@ impl TimeSensitive {
     ) -> Receiver<bool> {
         let (sample_tx, sample_rx) = mpsc::channel();
         thread::Builder::new()
-            .name("time-sensitive-timer".to_string())
+            .name("ts-timer".to_string())
             .spawn(move || loop {
                 thread::sleep(sample_interval);
                 if *terminate_flag.lock().unwrap() == true {
@@ -231,7 +231,7 @@ impl TimeSensitive {
                 }
                 sample_tx.send(true).expect("Failed to send timer signal");
             })
-            .expect("Failed to create time-sensitive-timer thread");
+            .expect("Failed to create ts-timer thread");
         sample_rx
     }
 }
