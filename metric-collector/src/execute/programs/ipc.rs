@@ -896,7 +896,7 @@ pub struct IpcProgram {
 impl IpcProgram {
     pub fn new(terminate_flag: Arc<Mutex<bool>>, pid: u32) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel();
-        let (bpf_pipe_rx, bpf_pipe_tx) = super::bpf_pipe(1_048_576);
+        let (bpf_pipe_rx, bpf_pipe_tx) = super::bpf_pipe(1 << 21);
         let child = Command::new("bpftrace")
             .args(["./metric-collector/src/bpf/ipc.bt", &format!("{:?}", pid)])
             .stdout(bpf_pipe_tx)
