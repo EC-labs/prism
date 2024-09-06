@@ -188,7 +188,7 @@ pub enum FutexEvent {
 }
 
 impl FutexEvent {
-    fn from_futex_bpf_event(
+    fn from_stats_closure_value(
         entry: StatsClosureValue,
         current_instant_ns: u64,
         previous_instant_ns: Option<u64>,
@@ -205,12 +205,12 @@ impl FutexEvent {
             ) => {
                 let pending = if let Some(prev) = previous_instant_ns {
                     if ns_since_boot > prev {
-                        current_instant_ns - ns_since_boot
+                        i64::max(current_instant_ns as i64 - ns_since_boot as i64, 0) as u64
                     } else {
                         current_instant_ns - prev
                     }
                 } else {
-                    current_instant_ns - ns_since_boot
+                    i64::max(current_instant_ns as i64 - ns_since_boot as i64, 0) as u64
                 };
 
                 Ok(Self::Wait {
@@ -251,12 +251,12 @@ impl FutexEvent {
             ) => {
                 let pending = if let Some(prev) = previous_instant_ns {
                     if ns_since_boot > prev {
-                        current_instant_ns - ns_since_boot
+                        i64::max(current_instant_ns as i64 - ns_since_boot as i64, 0) as u64
                     } else {
                         current_instant_ns - prev
                     }
                 } else {
-                    current_instant_ns - ns_since_boot
+                    i64::max(current_instant_ns as i64 - ns_since_boot as i64, 0) as u64
                 };
 
                 Ok(Self::Wait {
@@ -511,7 +511,7 @@ impl FutexProgram {
 
                         let events = mem::replace(&mut self.stats_closure_events, HashMap::new());
                         events.into_iter().for_each(|(_, entry)| {
-                            let event = FutexEvent::from_futex_bpf_event(
+                            let event = FutexEvent::from_stats_closure_value(
                                 entry,
                                 ns_since_boot,
                                 self.prev_instant_ns,
@@ -524,6 +524,7 @@ impl FutexProgram {
                                 tevents.push(event);
                             }
                         });
+                        self.prev_instant_ns = Some(ns_since_boot);
                     }
                     FutexBpfEvent::UnhandledOpcode { .. } => {
                         println!("Futex unhandled opcode. {:?}", event);
