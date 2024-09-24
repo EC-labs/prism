@@ -1,0 +1,1172 @@
+[
+    {
+        "start_time": 0,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 0,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 0,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 0,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 0,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 30,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 30,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 30,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 30,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 30,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 30,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 30,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 30,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 30,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 32,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 32,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 32,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 32,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 32,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 32,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 60,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 62,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 25,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 90,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 4,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    },
+    {
+        "start_time": 92,
+        "researcher": "d.landau@uu.nl",
+        "num_sensors": 10000,
+        "sample_rate": 1000,
+        "start_temperature": 0,
+        "stabilization_samples": 2,
+        "carry_out_samples": 60,
+        "temp_range": {
+            "lower_threshold": 50,
+            "upper_threshold": 60
+        }
+    }
+]

@@ -1,0 +1,21 @@
+[submodule "benchmarks/redis"]
+	path = benchmarks/redis
+	url = git@github.com:landaudiogo/redis.git
+[submodule "benchmarks/memtier_benchmark"]
+	path = benchmarks/memtier_benchmark
+	url = git@github.com:landaudiogo/memtier_benchmark.git
+[submodule "benchmarks/goose"]
+	path = benchmarks/goose
+	url = git@github.com:landaudiogo/goose.git
+[submodule "benchmarks/benchbase"]
+	path = benchmarks/benchbase
+	url = https://github.com/cmu-db/benchbase.git
+[submodule "benchmarks/cloudsuite"]
+	path = benchmarks/cloudsuite
+	url = git@github.com:parsa-epfl/cloudsuite.git
+[submodule "benchmarks/solr-benchmark"]
+	path = benchmarks/solr-benchmark
+	url = git@github.com:landaudiogo/cloudsuite-solr-benchmark
+[submodule "benchmarks/teastore"]
+	path = benchmarks/teastore
+	url = git@github.com:landaudiogo/teastore.git
