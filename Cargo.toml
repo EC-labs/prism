@@ -8,4 +8,4 @@ members = [
     "poc", "percentile-ps"
 ]
 
-exclude = ["benchmarks/goose", "benchmarks/goose-test", "benchmarks/kafka/scrape-cc2023-producer"]
+exclude = ["benchmarks/kafka/scrape-experiment-producer", "benchmarks/dependencies/goose", "benchmarks/dependencies/solr-benchmark", "benchmarks/kafka/scrape-cc2023-producer"]

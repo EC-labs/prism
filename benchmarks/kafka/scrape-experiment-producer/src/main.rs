@@ -85,7 +85,7 @@ async fn scrape_loop(mut rx: Receiver<bool>, stop_flag: Arc<Mutex<bool>>) {
         if let Ok(res) = res {
             let body = res.text().await.unwrap();
             let metrics = parse_prometheus_client(&body);
-            println!("{:?}", metrics.to_row().join(" "));
+            println!("{}", metrics.to_row().join(","));
             writer.write_record(metrics.to_row()).unwrap();
         } else {
             let data = writer.into_inner().unwrap();
