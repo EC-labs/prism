@@ -1,153 +1,71 @@
-# Kernel Configurations
+# 🔎 Prism: Deconstructing Performance Degradation
 
-`CONFIG_TASK_DELAY_ACCT` && `sysctl "kernel.task_delayacct=1`: Enables taskstats metrics from `struct taskstats` in `include/uapi/linux/taskstats.h`.
-`CONFIG_SCHEDSTATS` && `sysctl "kernel.sched_schedstats=1"`: Enables schedular statistics in the form of `struct sched_statistics` in `include/linux/sched.h`.
+Prism is a fine-grained metric collection tool that aims to facilitate uncovering the cause of an application's performance degradation through a generalisable set of metrics. E.g. In a scenario where a database is under lock contention through simultaneous access to the same dataset, Prism will highlight the database threads and futex resource behind this activity. Currently Prism supports discovering and tracing co-located processes that have communicated (through IPC mechanisms such as pipes, sockets, and futexes) with the initial target application.
 
+Usenix ATC'25 Artifact: `Prism: Application-agnostic Granular Instrumentation Approach to Deconstruct Performance Degradation`
+
+# Dependencies
+
+Prism has been tested on x86 Ubuntu 22.04 machines, with kernel version 6.8.12. We plan to extend the documentation to support other distributions and kernel versions.
+
+## Ubuntu 
+
+These are the software requirements to run Prism
+```
+# Install Rust and Cargo
+curl https://sh.rustup.rs -sSf | sh 
+
+# Install bpftrace
+sudo apt install -y bpftrace
+```
+
+# How-to-use
+
+Make sure Prism's dependencies are installed before proceeding.
+
+## Basic Usage Example
+
+Before we start Prism, we have to make sure we have configured the kernel and our environment with the following options:
 ```bash
 sudo sysctl "kernel.sched_schedstats=1"
 sudo sysctl "fs.pipe-max-size=2097152"
-```
-
-```bash
 ulimit -n 32768
 ```
 
-```bash 
-top -d 1 -H -p "$(ps -ef | grep -E 'target/.*metric-collector|bpftrace' | head -n -1 | awk '{print $2}' | paste -s -d ,)"
-```
-
-# Metrics
-
-## Sched
-
-Metric description: 
-
-* `wait`:  The time spent in the runqueue without running
-* `iowait`: Time the task spends in the `in_iowait` state (Check
-  `kernel/sched/stats.c`)
-* `block`: The time the task spent in the `TASK_UNINTERRUPTIBLE` state while
-  sleeping.
-* `sleep`: The time the task spent in both `TASK_UNINTERRUPTIBLE` and
-  `TASK_INTERRUPTIBLE` sleep.
-
-Observations: 
-
-* `sleep` is a superset of `block` which in turn is a superset of `iowait`.
-
-# Scenarios
-
-## CPU
-
-## Disk
-
-This section refers to any operations that operate on regular files, i.e.,
-files in a filesystem that are persisted on block devices.
-
-### Direct Read
-
-The first workload created to test this scenario has a thread read a file's
-data directly from disk. To do so, the file is opened with the flags 
-`O_DIRECT | O_RDONLY`. The read operation is then performed in a loop,
-providing no interval between 2 consecutive calls. In these conditions, the
-task is expected to run on CPU, followed by chaning into kernel context where
-it must perform the read operation. The read operation will have to put the
-process in *uninterruptible* sleep until the data is fetched from the disk. As
-soon as that occurs, the task is then re-scheduled, and the read operation
-terminates. The userspace program performs another read request, and the cycle
-repeats.
-
-**Metrics**
-
-- [x] active_time = cpu_runtime + wait_time + block_time ~ 1
-- [x] iowait_time / active_time -> close to 1
-- [x] block_time / active_time -> close to 1
-
-jbd2 thread inactive almost irrelevant
-
-### Synchronous Edit
-
-A thread continuously edits data in a file, without generating new data. The
-file is still opened with the same flags as for the previous case 
-(`O_CREAT | O_SYNC | O_WRONLY`), however the fact that the thread simply edits
-data that already exists on the disk, the amount of file metadata to be
-synchronised with the disk is reduced. This activity manifests itself with the
-iowait_time occupying most of the active_time, and there being additional
-unaccounted block_time due to the synchronisation performed by the journaling
-thread (jbd2). The jbd2 thread no longer presents bottleneck behaviour, but is
-performing useful work. As such vfs_fsync_time should be lower when compared to
-the previous case. 
-
-**Metrics**
-
-- [x] active_time = cpu_runtime + wait_time + block_time ~ 1
-- [x] iowait_time / active_time -> > 75%
-- [x] block_time / active_time -> close to 1
-vfs_fsync_time / active_time -> close to 0
-
-- [x] jbd2_active_time = cpu_runtime + wait_time + block_time ~ 0.2 
-- [x] jbd2_iowait_time / jbd2_active_time -> close to 0
-
-### Synchronous Append
-
-A thread writes data to disk, sequential and synchronously. To do so it opens a
-file with the `O_CREAT | O_SYNC | O_WRONLY` flags. It then enters a loop where
-for each iteration, it performs a write system call. As soon as the system call
-is executed, it enters the kernel space where it copies the data that is to be
-written to the file, updates the pagecache, and synchronizes the page cache
-with the filesystem metadata on disk. While synchronizing the inode's data with
-the data on disk, the kernel must send the data combined with the inode's
-filesystem metadata to disk. The time it takes to perform this operation is
-what we expect to take most of the time. This activity is represented by the
-block_time dominating the active_time, and part of it being due to iowait_time.
-However, the remaining block time is due to the journaling kernel thread that
-has to synchronise the filesystem's metadata with the disk. As such, metrics
-from the `jbd2` thread are also included. 
-
-**Metrics** 
-
-active_time = cpu_runtime + wait_time + block_time ~ 1
-iowait_time / active_time -> close to 0
-block_time / active_time -> close to 1
-vfs_fsync_time / active_time -> close to 1
-
-jbd2_active_time = cpu_runtime + wait_time + block_time ~ 1 
-jbd2_iowait_time / jbd2_active_time -> close to 1
-
-### ThreadPool IO
-
-Multiple threads collect requests from a queue on a first come first serve
-basis. Only the threads that are idle are free to pick requests from the
-request queue. Up until a specific request rate, between all threads, some will
-have idle time it can use to process a new request. However, given enough
-requests, when there is no more idle time between the threads processing the
-requests, we expect the response time to start increasing. Considering each
-request is asking for IO resources, the non-idle threads will all present a
-saturated active_time. The cause for the saturation might be different
-depending on the type of requests being executed on each thread. For a high
-rate of synchronous append requests, we expect high `iowait_time` in the kernel
-journaling thread, and long `block_time` in each thread that is executing a
-request of this type. For a high rate of requests performing direct IO, we expect to
-measure high `iowait_time`s, and not much activity on the journaling thread.
-Lastly, threads executing synchronous edits should present high `iowait_time`s,
-with some activity on the journaling kernel thread.
-
-## Locking
-
-## VFS
-
-## Memory
-
-# TODO
-
-Consider limits
-
-# Experiments
-
-docker run --rm --name mysqldb -p 127.0.0.1:3306:3306  -e MYSQL_ROOT_PASSWORD=my-secret-pw -d mysql:8.4.0
-
-## Commands
+To start Prism, we have to first get the pid of our target process. In the following example, I will start the redis instance used in our benchmarks: 
 
 ```bash
-tail -n +0 data/2024-06-19T06:08:33.622419748+00:00/system-metrics/thread/348509/*/ipc/sockets/*/*
-tail -n +0 data/2024-06-19T06:08:33.622419748+00:00/system-metrics/thread/348509/*/futex/*
+# Start redis
+docker run \
+    -d --rm \
+    --name redis \
+    --user redis \
+    --network redis dclandau/prism-redis:1.0.0
+
+# Get redis' pid
+target="$(docker top redis | tail -n +2 | awk '{print $2}')"
+
+# Start Prism and the running redis instance
+cargo run -r -p metric-collector -- --pids "$target"
+```
+
+Sending a SIGINT signal (e.g. Ctrl-C) to Prism will terminate the main and child processes.
+
+## Output
+
+By default, the data collected by Prism is stored in a directory with the naming convention `<repo-root>/data/<timestamp>`, where `repo-root` points to the repository's root directory, and `timestamp` represents the time Prism was instantiated to trace a particular target.
+
+Within this directory, there is another directory named `system-metrics`, which includes a `global` and a `thread` directory. The `global` directory includes statistics that for `iowait` (block IO) which is collected system-wide, and therefore, the remainder of the path represents the `<process>/<thread>/<minute>/<device>.csv` the data was collected for. `global` includes an `epoll` directory to account for multiple threads waiting for the same epoll resource. This directory however accounts for the time waiting for a specific resources added through the `epoll_ctl` syscall. E.g. `.../global/epoll/ffff9a7a3f5e0240/sockets/1722794820/ipv4_172.26.0.2:58656_172.26.0.2:29093.csv` would indicate that the target application waited for an epoll resource with the ID ffff9a7a3f5e0240, that was tracking an ipv4 socket with 172.26.0.2:58656 source address, and 172.26.0.2:29093 destination address.
+
+On the other hand, the `thread` directory includes metrics collected at a thread granularity for multiple types of metrics. The following directories have a hierarchy that starting with the `<pid>/<tid>` of the traced thread. The next level includes directories named `sched`, `ipc` and `futex` (`schedstat` is a subset of the data included in `sched`): 
+
+* The `sched` directory includes thread scheduling statistics; 
+* The `ipc` directory includes Interprocess Communication data related with pipes and sockets. The data is tracked on a per-socket/per-pipe basis.
+* The `futex` directory includes statistics on the wake and wait frequency for a particular `futex`.
+
+# Resource Usage
+
+To check Prism's resource usage, you can run the following command:
+```bash 
+top -d 1 -H -p "$(ps -ef | grep -E 'target/.*metric-collector|bpftrace' | head -n -1 | awk '{print $2}' | paste -s -d ,)"
 ```
