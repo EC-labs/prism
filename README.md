@@ -63,6 +63,35 @@ On the other hand, the `thread` directory includes metrics collected at a thread
 * The `ipc` directory includes Interprocess Communication data related with pipes and sockets. The data is tracked on a per-socket/per-pipe basis.
 * The `futex` directory includes statistics on the wake and wait frequency for a particular `futex`.
 
+# Experimentation
+
+## Datasets
+
+To unzip the datasets, run: 
+```bash
+./scripts/unzip-datasets.sh
+```
+
+Within the `data/` directory you should now find the following directories, each corresponding to an application in the paper's experimentation section:
+
+* `2024-07-30T12:33:54.172726935+00:00`: MySQL
+* `2024-07-31T14:10:52.424946255+00:00`: Solr
+* `2024-08-03T05:51:31.266846823+00:00`: Cassandra
+* `2024-08-04T18:01:53.300127572+00:00`: Kafka
+* `2024-08-24T16:10:31.710423758+00:00`: Teastore
+* `2024-08-06T07:50:39.470480264+00:00`: ML-inference
+* `2024-05-19T13:08:15.671530744+00:00`: Redis - this directory does not follow the same structure as the other directories given it was produced with a previous version of Prism.
+
+Other than the `system-metrics` collected by Prism, these directories also include `application-metrics` which contain their target metrics and data specific to the load execution, e.g. configuration files, and a README file.
+
+## Analysis
+
+Each application has its own jupyter notebook script in the `notebooks` directory which includes the analysis presented in the paper and additional results.
+
+## Reproducibility
+
+To generate similar datasets for the same applications as those presented in the previous section, we have provided a description, and in some cases a run script in the `benchmarks/` directory for each application.
+
 # Resource Usage
 
 To check Prism's resource usage, you can run the following command:
