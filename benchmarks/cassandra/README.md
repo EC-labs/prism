@@ -2,6 +2,11 @@
 
 ## Setup
 
+**The following commands assume you are within the benchmarks/cassandra directory:**
+```bash
+cd benchmarks/cassandra
+```
+
 Create the network to be shared between the clients and the server:
 ```bash
 docker network create cassandra
@@ -14,6 +19,17 @@ docker run \
     --cpuset-cpus 0-1 --cpus 2 -d --rm --name cassandra-server \
     --net cassandra cloudsuite/data-serving:server
 ```
+
+Start tracing cassandra with Prism:
+```bash
+cd ../..
+sudo sysctl "kernel.sched_schedstats=1"
+sudo sysctl "fs.pipe-max-size=2097152"
+ulimit -n 32768
+cargo run -r -p metric-collector -- --pids "$(docker top cassandra-server | tail -n +2 | awk '{print $2}' | paste -s -d, -)" >./prism_${ts}.log 2>&1 &
+cd benchmarks/cassandra
+```
+
 
 There are two workload configuration files that define the operations the
 benchmarking clients will perform. In the following command, the workload
@@ -68,10 +84,11 @@ docker run \
 After 30 seconds terminate the ycsb-read benchmark:
 ```bash 
 docker stop cassandra-client-read cassandra-client-update cassandra-server
+docker network rm cassandra
 sudo chown -R $USER:$USER log
 ```
 
-You will find the YCSB update per-request data in `benchmark/cassandra/log/raw_response_time`.
+You will find the YCSB update per-request latency data in `benchmark/cassandra/log/raw_response_time`.
 
 ## Experiment
 

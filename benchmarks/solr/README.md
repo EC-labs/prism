@@ -21,16 +21,26 @@ To start the server:
 ```bash
 # Still in the benchmarks/dependencies/cloudsuite directory
 docker run \
-    --cpus 2 --rm \
+    --cpus 2 --rm -d \
     -it --name websearch-server \
     -p 8983:8983 -v ./websearch-dataset:/download/index_14GB/data \
     --net websearch \
     cloudsuite/web-search:server 14g 1
 ```
 
+Wait until the server has initiated, and start tracing solr with Prism:
+```bash
+docker logs -f websearch-server
+cd ../../..
+sudo sysctl "kernel.sched_schedstats=1"
+sudo sysctl "fs.pipe-max-size=2097152"
+ulimit -n 32768
+cargo run -r -p metric-collector -- --pids "$(docker top websearch-server | tail -n +2 | awk '{print $2}' | paste -s -d, -)" >./prism_${ts}.log 2>&1 &
+```
+
 Navigate to the `solr-benchmark` directory:
 ```bash
-cd ../solr-benchmark
+cd benchmarks/solr-benchmark
 ```
 
 and generate the test plan: 
