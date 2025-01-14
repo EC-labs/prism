@@ -1,49 +1,3 @@
-# TODO
-
-- [ ] Redis E1: Fill secondary thread's missing values with 0 for the duration
-  of the experiment.
-
-# Metrics
-
-1. lock statistics: 
-    1. The time a thread spends waiting for a lock
-    2. When a thread started waiting for a lock
-    3. When a thread triggered a wake on a lock
-2. scheduler statistics: 
-    1. The time a thread spends on-CPU
-    2. The time a thread spends waiting on a CPU runqueue.
-    3. The time a thread spends in a TASK_UNINTERRUPTIBLE state (block)
-    4. The time a thread spends in a TASK_INTERRUPTIBLE state (sleep)
-    5. The time a thread spends in iowait
-3. multiplexing IO:
-    1. If a thread uses poll/select this monitors the time a thread spends
-       waiting for a particular file descriptor
-    2. If using epoll, we monitor the time a thread spends waiting on the epoll
-       file descriptor, and we then track for each epoll file descriptor the
-       time it spent waiting for each file descriptor individually
-4. disk statistics: 
-    1. For each thread, the collector tracks the number of completed and in
-      flight requests for each second
-5. inter-process communication:
-    1. Process discovery. Through inter-process communication methods such as
-       FIFOs and sockets we find new processes interacting with the current set
-       of tracked processes.
-    2. Per-thread track the time spent receiving/sending data from/to sockets.
-    3. Per-thread track the time spent reading/writing data from/to FIFOs
-6. thread attribution:
-    1. Each metric is tracked on a per-thread basis.
-7. track new thread/process:
-    1. When a new thread is created within a process, we start tracking this
-       thread
-    2. When a process is forked we start tracking this process
-8. Multi target analysis
-    1. Using multiple target metrics to interpret the collected system-level
-       metrics
-
-# Interesting
-
-* Analyse the same set of metrics over different target application metrics
-
 # Experiments
 
 Each experiment aims to create a degradation scenario on the target
@@ -52,6 +6,14 @@ accurately encode this degradation behaviour. Additionally, for each experiment
 we add an expectations section that describes the behaviour we expect to
 observe, and an observations section that highlights the observed behaviour.
 
+- [x] redis: `2024-05-19T13:08:15.671530744+00:00`
+- [x] kafka: `2024-08-04T18:01:53.300127572+00:00`
+- [x] mysql: `2024-07-30T12:33:54.172726935+00:00`
+- [x] solr: `2024-07-31T14:10:52.424946255+00:00`
+- [x] cassandra: `2024-08-03T05:51:31.266846823+00:00`
+- [x] ml-inference: `2024-08-06T07:50:39.470480264+00:00`
+- [x] teastore: `2024-08-24T16:10:31.710423758+00:00`
+
 ## Redis
 
 Redis is an in memory key-value data store. It follows a multi-threaded
@@ -59,6 +21,8 @@ architecture where the main operations are performed on only one of its
 threads, while the remaining operations are performed on other threads in the
 "background". We expect scheduler statistics to be most prevalent while
 analysing the executed experiments.
+
+`2024-05-19T13:08:15.671530744+00:00`
 
 ### Experiment 1
 
@@ -108,6 +72,7 @@ Nothing abnormal
 * (2.1.) main thread on-CPU time negatively correlates with response time
 * (2.2.) main thread CPU runqueue time positively correlates with response time
 
+
 ## MySQL
 
 MySQL is a relational database that performs the common ACID operations we are
@@ -118,9 +83,10 @@ response time degradation. When handling connections, MySQL leverages what
 seems to be a thread pool of 5 threads. It seems like there is a 1-1 mapping
 between a connection and a thread.
 
-### Experiment 1
-
 `2024-06-20T14:43:31.949761868+00:00`
+`2024-07-30T12:33:54.172726935+00:00`
+
+### Experiment 1
 
 This experiment relies on the YCSB benchmark. The first YCSB benchmark runs for
 120 seconds, and is mainly read intensive. We then start a second YCSB
@@ -256,6 +222,7 @@ service to increase.
 
 `2024-07-17T14:58:27.927691753+00:00`
 `2024-07-22T14:50:21.319563176+00:00`
+`2024-08-24T16:10:31.710423758+00:00`
 
 In this experiment we apply a "double wave" load pattern, an example load
 pattern provided by locust to the system's entrypoint, while restricting the
@@ -273,6 +240,7 @@ the time the worker threads have to wait for a core (runnable state instead of
 running).
 
 `2024-07-19T09:17:30.350280302+00:00`
+`2024-08-06T07:50:39.470480264+00:00`
 
 In this experiment, we use the "double wave" load pattern, similar to the
 example load pattern provided by the locust development team.
