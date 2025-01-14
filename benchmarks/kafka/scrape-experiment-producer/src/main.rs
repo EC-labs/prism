@@ -1,6 +1,7 @@
 use csv::Writer;
 use reqwest::Client;
 use std::{
+    fs::{self, File},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -89,7 +90,7 @@ async fn scrape_loop(mut rx: Receiver<bool>, stop_flag: Arc<Mutex<bool>>) {
             writer.write_record(metrics.to_row()).unwrap();
         } else {
             let data = writer.into_inner().unwrap();
-            println!("{}", String::from_utf8(data).unwrap());
+            fs::write("throughput.csv", &data).unwrap();
             break;
         }
     }
