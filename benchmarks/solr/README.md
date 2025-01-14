@@ -28,21 +28,24 @@ docker run \
     cloudsuite/web-search:server 14g 1
 ```
 
-Navigate to the goose-test directory:
+Navigate to the `solr-benchmark` directory:
 ```bash
-cd ../goose-test
+cd ../solr-benchmark
 ```
 
 and generate the test plan: 
 ```bash
-# Navigate to the goose-test directory
 { for i in $(seq 10 20 150); do printf "%d,1s;%d,9s;" $i $i; done; echo "0,1s"; } > test-plan
 ```
 
 To start the load test: 
 ```bash
-# Navigate to the goose-test directory
 cargo r -r -- --host http://localhost:8983 --report-file report.html --test-plan "$(cat test-plan)"
+```
+
+Upon termination, a file `benchmarks/dependencies/solr-benchmark/request_stats.csv` file will contain the per-request latency data. This can be converted to a per-second 90th percentile latency with: 
+```bash
+cat benchmarks/dependencies/solr-benchmark/request_stats.csv | cargo run -r -p percentile-ps -- --time-factor 1000 --percentile 0.9
 ```
 
 ## Experiment
