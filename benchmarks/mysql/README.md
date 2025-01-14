@@ -36,6 +36,8 @@ cd benchmarks/benchbase/target/benchbase-mysql
 ./experiment.sh
 ```
 
+The benchmark outputs will be in the `benchmarks/dependencies/benchbase/target/benchbase-mysql/results` directory.
+
 ## Experiment
 
 The goal of this experiment is to combine both previous experiments to
