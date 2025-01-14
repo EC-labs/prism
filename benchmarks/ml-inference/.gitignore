@@ -1,3 +1,2 @@
-load/data
+data/
 __pycache__/
-twitter_training.csv
