@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
 use anyhow::{bail, Result};
+use duckdb::{Connection, ToSql};
+use indoc::indoc;
 use libbpf_rs::{
     libbpf_sys::{self, __u32, bpf_map_create},
     skel::{OpenSkel, Skel, SkelBuilder},
@@ -48,10 +50,13 @@ fn bump_memlock_rlimit() -> Result<()> {
 
 pub struct IOWait<'obj> {
     skel: IowaitSkel<'obj>,
+    conn: Connection,
 }
 
 impl<'obj> IOWait<'obj> {
-    pub fn new(open_object: &'obj mut MaybeUninit<OpenObject>) -> Result<Self> {
+    pub fn new(open_object: &'obj mut MaybeUninit<OpenObject>, conn: Connection) -> Result<Self> {
+        Self::init_store(&conn)?;
+
         let skel_builder = IowaitSkelBuilder::default();
 
         bump_memlock_rlimit()?;
@@ -82,10 +87,75 @@ impl<'obj> IOWait<'obj> {
         }
 
         skel.attach()?;
-        Ok(Self { skel })
+        Ok(Self { skel, conn })
     }
 
-    pub fn sample(&mut self) {
+    fn init_store(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            r"
+                CREATE OR REPLACE TABLE iowait (
+                    ts_s UBIGINT,
+                    pid UINTEGER,
+                    tid UINTEGER,
+                    part0 UBIGINT,
+                    bdev UBIGINT,
+                    total_time UBIGINT,
+                    sector_cnt UINTEGER,
+                    total_requests UINTEGER,
+                    hist UINTEGER[8],
+                );
+            ",
+        )?;
+        Ok(())
+    }
+
+    fn store<I: ExactSizeIterator<Item = (granularity, stats)>>(&self, records: I) -> Result<()> {
+        let nrecords = records.len();
+        if nrecords == 0 {
+            return Ok(());
+        }
+
+        println!("Store {} records", nrecords);
+        let params = records
+            .into_iter()
+            .map(|(granularity, stats)| {
+                let hist = stats.hist;
+                [
+                    Box::new(stats.ts_s) as Box<dyn ToSql>,
+                    Box::new(granularity.tgid),
+                    Box::new(granularity.pid),
+                    Box::new(granularity.part0),
+                    Box::new(granularity.bdev),
+                    Box::new(stats.total_time),
+                    Box::new(stats.sector_cnt),
+                    Box::new(stats.total_requests),
+                    Box::new(hist[0]),
+                    Box::new(hist[1]),
+                    Box::new(hist[2]),
+                    Box::new(hist[3]),
+                    Box::new(hist[4]),
+                    Box::new(hist[5]),
+                    Box::new(hist[6]),
+                    Box::new(hist[7]),
+                ]
+            })
+            .flatten();
+        self.conn.execute(
+            &format!(
+                r"
+                INSERT INTO iowait
+                VALUES {};
+                ",
+                ["(?, ?, ?, ?, ?, ?, ?, ?, [?, ?, ?, ?, ?, ?, ?, ?])"]
+                    .repeat(nrecords)
+                    .join(", ")
+            ),
+            duckdb::params_from_iter(params),
+        )?;
+        Ok(())
+    }
+
+    pub fn sample(&mut self) -> Result<()> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
         let curr = ts.tv_sec as u64;
@@ -180,19 +250,7 @@ impl<'obj> IOWait<'obj> {
             }
             unsafe { libc::close(mapfd) };
         }
-        for (granularity, stat) in keys.into_iter().zip(values) {
-            println!(
-                "{} || {} {} {} {} -> {} {} {} {:?}",
-                stat.ts_s,
-                granularity.part0,
-                granularity.bdev,
-                granularity.tgid,
-                granularity.pid,
-                stat.total_requests,
-                stat.total_time,
-                stat.sector_cnt,
-                stat.hist,
-            );
-        }
+        self.store(keys.into_iter().zip(values))?;
+        Ok(())
     }
 }

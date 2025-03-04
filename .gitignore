@@ -1,3 +1,4 @@
 target/
 data/
 notebooks/prelimenary
+*.skel.rs

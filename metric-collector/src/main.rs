@@ -5,6 +5,7 @@ use collector::cmdline;
 use collector::configure::Config;
 use collector::extract::Extractor;
 use collector::sub;
+use duckdb::Connection;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut command = cmdline::register_args();
@@ -17,15 +18,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(config) => config,
     };
 
+    let path = "./data/prism-db.db3";
+    let conn = Connection::open(&path)?;
+
     let mut iowait_open_object = MaybeUninit::uninit();
-    let mut iowait = sub::iowait::IOWait::new(&mut iowait_open_object).unwrap();
+    let mut iowait = sub::iowait::IOWait::new(&mut iowait_open_object, conn.try_clone()?).unwrap();
     for i in 0..20 {
-        iowait.sample();
+        iowait.sample()?;
         std::thread::sleep(Duration::from_millis(1000));
     }
-    // sub::iowait::IOWait::new(&mut open_object);
-
-    // sub::iowait::run();
     // let extractor = Extractor::new(config);
     // extractor.run()?;
 
