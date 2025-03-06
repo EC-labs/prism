@@ -154,6 +154,8 @@ int BPF_KPROBE(bio_endio, struct bio *bio)
     __sync_fetch_and_add(&stat->sector_cnt, v->size);
     __sync_fetch_and_add(stat->hist + bucket, 1);
 
+    bpf_map_delete_elem(&pending, &k);
+
     // bpf_printk("[submit_bio] %d %d %d -> +[%d] %d %d(us)\n", k.part0, k.bdev, v->pid_tgid & (((__u64)1<<32) - 1), v->size, *count, (ts - v->ts)/1000);
     // bpf_printk("[%d] %d %d %llx: %lld %d %d", (ts/1000000000)%10, gran.part0, gran.bdev, gran.pid_tgid, ns_latency, bucket, v->size);
 

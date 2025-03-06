@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { seteuid(euid) };
 
     let mut iowait_open_object = MaybeUninit::uninit();
-    let mut iowait = sub::iowait::IOWait::new(&mut iowait_open_object, conn.try_clone()?).unwrap();
+    let mut iowait = sub::iowait::IOWait::new(&mut iowait_open_object, &conn).unwrap();
     for i in 0..20 {
         iowait.sample()?;
         std::thread::sleep(Duration::from_millis(1000));

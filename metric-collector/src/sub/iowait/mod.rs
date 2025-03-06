@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
 use anyhow::{bail, Result};
-use duckdb::{Connection, ToSql};
+use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     libbpf_sys::{self, __u32, bpf_map_create},
     skel::{OpenSkel, Skel, SkelBuilder},
@@ -46,14 +46,17 @@ fn bump_memlock_rlimit() -> Result<()> {
     Ok(())
 }
 
-pub struct IOWait<'obj> {
+pub struct IOWait<'obj, 'conn> {
     skel: IowaitSkel<'obj>,
-    conn: Connection,
+    appender: Appender<'conn>,
 }
 
-impl<'obj> IOWait<'obj> {
-    pub fn new(open_object: &'obj mut MaybeUninit<OpenObject>, conn: Connection) -> Result<Self> {
-        Self::init_store(&conn)?;
+impl<'obj, 'conn> IOWait<'obj, 'conn> {
+    pub fn new(
+        open_object: &'obj mut MaybeUninit<OpenObject>,
+        conn: &'conn Connection,
+    ) -> Result<Self> {
+        Self::init_store(conn)?;
 
         let skel_builder = IowaitSkelBuilder::default();
 
@@ -85,7 +88,10 @@ impl<'obj> IOWait<'obj> {
         }
 
         skel.attach()?;
-        Ok(Self { skel, conn })
+        Ok(Self {
+            skel,
+            appender: conn.appender("iowait")?,
+        })
     }
 
     fn init_store(conn: &Connection) -> Result<()> {
@@ -115,7 +121,7 @@ impl<'obj> IOWait<'obj> {
     }
 
     fn store<'a, I: ExactSizeIterator<Item = (&'a granularity, &'a stats)>>(
-        &self,
+        &mut self,
         records: I,
     ) -> Result<()> {
         let nrecords = records.len();
@@ -144,8 +150,7 @@ impl<'obj> IOWait<'obj> {
                 &stats.hist[7],
             ]
         });
-        let mut appender = self.conn.appender("iowait")?;
-        appender.append_rows(records)?;
+        self.appender.append_rows(records)?;
 
         Ok(())
     }
