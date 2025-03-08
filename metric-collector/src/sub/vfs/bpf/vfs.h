@@ -41,7 +41,8 @@ struct inflight_value {
 };
 
 struct granularity {
-	__u64 tgid_pid;
+	__u32 tgid;
+    __u32 pid;
 	struct bri bri;
 	__u8 dir;
 };

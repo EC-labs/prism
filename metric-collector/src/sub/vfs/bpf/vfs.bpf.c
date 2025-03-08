@@ -158,7 +158,8 @@ int BPF_KRETPROBE(vfs_read_exit, ssize_t ret)
 	}
 
 	struct granularity gran = {0};
-	gran.tgid_pid = tgid_pid;
+	gran.tgid = tgid(tgid_pid);
+	gran.pid = pid(tgid_pid);
 	gran.bri.i_ino = value->bri.i_ino;
 	gran.bri.i_rdev = value->bri.i_rdev;
 	gran.dir = READ;
@@ -184,7 +185,7 @@ int BPF_KRETPROBE(vfs_read_exit, ssize_t ret)
 	to_update_acct(value->ts, ts, gran);
 	
 	bpf_printk("[pid[%d], tid[%d], fs[%s], dev[%d], ino[%lld], dir[%c]] = %lld", 
-		   tgid(gran.tgid_pid), pid(gran.tgid_pid), gran.bri.s_id, 
+		   gran.tgid, gran.pid, gran.bri.s_id,
 		   gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts - value->ts);
 	bpf_map_delete_elem(&pending, &tgid_pid);
 	return 0;

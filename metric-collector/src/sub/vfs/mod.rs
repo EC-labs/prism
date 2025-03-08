@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
 use anyhow::{bail, Result};
-use duckdb::{Appender, Connection};
+use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     libbpf_sys::{self, __u32, bpf_map_create, BPF_ANY},
     skel::{OpenSkel, Skel, SkelBuilder},
     MapCore, MapFlags, MapHandle, MapImpl, MapType, OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_MONOTONIC};
+use log::debug;
 use std::{
-    ffi::c_void,
+    ffi::{c_void, CStr},
     mem::MaybeUninit,
     os::fd::{AsFd, AsRawFd, RawFd},
     time::Duration,
@@ -98,6 +99,10 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     ts_s UBIGINT,
                     pid UINTEGER,
                     tid UINTEGER,
+                    fs_id VARCHAR,
+                    device_id UINTEGER,
+                    inode_id UBIGINT,
+                    is_write UTINYINT,
                     total_time UBIGINT,
                     total_requests UINTEGER,
                     hist0 UINTEGER,
@@ -111,6 +116,45 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 );
             ",
         )?;
+        Ok(())
+    }
+
+    fn store_samples<'a, I: ExactSizeIterator<Item = (&'a granularity, &'a stats)>>(
+        &mut self,
+        records: I,
+    ) -> Result<()> {
+        let nrecords = records.len();
+        if nrecords == 0 {
+            return Ok(());
+        }
+
+        debug!("Store {} records", records.len());
+        let records = records.map(|(granularity, stats)| {
+            let fs_id = unsafe { CStr::from_ptr(granularity.bri.s_id.as_ptr() as *const i8) };
+            let fs_id = fs_id.to_str().unwrap();
+            [
+                Box::new(&stats.ts_s) as Box<dyn ToSql>,
+                Box::new(&granularity.tgid),
+                Box::new(&granularity.pid),
+                Box::new(fs_id),
+                Box::new(&granularity.bri.i_rdev),
+                Box::new(&granularity.bri.i_ino),
+                Box::new(&granularity.dir),
+                Box::new(&stats.total_time),
+                Box::new(&stats.total_requests),
+                Box::new(&stats.hist[0]),
+                Box::new(&stats.hist[1]),
+                Box::new(&stats.hist[2]),
+                Box::new(&stats.hist[3]),
+                Box::new(&stats.hist[4]),
+                Box::new(&stats.hist[5]),
+                Box::new(&stats.hist[6]),
+                Box::new(&stats.hist[7]),
+            ]
+        });
+        self.appender.append_rows(records)?;
+        self.appender.flush();
+
         Ok(())
     }
 
@@ -219,21 +263,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
         let (keys, values) = self.read_samples(&ts);
-        for (gran, stat) in keys.into_iter().zip(values.into_iter()) {
-            println!(
-                "{} {} {} {} {} {} {} {} {} {:?}",
-                stat.ts_s,
-                gran.tgid_pid >> 32,
-                gran.tgid_pid & ((1u64 << 32) - 1),
-                String::from_utf8(gran.bri.s_id.into())?,
-                gran.bri.i_rdev,
-                gran.bri.i_ino,
-                if gran.dir == 0 { 'R' } else { 'W' },
-                stat.total_time,
-                stat.total_requests,
-                stat.hist,
-            );
-        }
+        self.store_samples(keys.iter().zip(values.iter()))?;
 
         let mut to_update = Vec::new();
         Self::read_batch::<to_update_key, u8>(
@@ -242,7 +272,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
             &mut Vec::new(),
         );
         for key in to_update {
-            println!("{} {}", key.granularity.tgid_pid >> 32, key.ts);
+            println!("{} {}", key.granularity.tgid, key.ts);
         }
         Ok(())
     }
