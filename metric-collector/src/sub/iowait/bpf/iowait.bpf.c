@@ -133,13 +133,8 @@ int BPF_KPROBE(bio_endio, struct bio *bio)
 
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
     if (stat == NULL) {
-	struct stats init = { 
-        .ts_s = ts / 1000000000,
-		.total_time = 0, 
-		.total_requests = 0, 
-		.sector_cnt = 0, 
-		.hist = {0, 0, 0, 0, 0, 0, 0, 0} 
-	};
+        struct stats init = {0};
+        init.ts_s = ts / 1000000000;
         bpf_map_update_elem(inner, &gran, &init, BPF_NOEXIST);
         stat = bpf_map_lookup_elem(inner, &gran);
 

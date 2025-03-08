@@ -161,7 +161,7 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
         let curr = ts.tv_sec as u64;
         let mut keys: Vec<granularity> = Vec::new();
         let mut values: Vec<stats> = Vec::new();
-        for ts in (curr - 9)..curr {
+        for ts in (curr - (SAMPLES - 1))..curr {
             let outer = ts % SAMPLES;
 
             let inner_id = self
