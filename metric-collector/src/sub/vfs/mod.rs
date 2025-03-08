@@ -12,6 +12,7 @@ use log::debug;
 use std::{
     collections::HashMap,
     ffi::{c_void, CStr},
+    fmt::Debug,
     mem::MaybeUninit,
     os::fd::{AsFd, AsRawFd, RawFd},
 };
@@ -42,6 +43,36 @@ fn bump_memlock_rlimit() -> Result<()> {
     Ok(())
 }
 
+trait UpdateEnd<T> {
+    fn update_end(curr: u64, pending: T) -> u64;
+}
+
+impl UpdateEnd<&u64> for &u64 {
+    fn update_end(curr: u64, pending: &u64) -> u64 {
+        *pending / 1_000_000_000 * 1_000_000_000
+    }
+}
+
+impl UpdateEnd<&inflight_value> for &inflight_value {
+    fn update_end(curr: u64, pending: &inflight_value) -> u64 {
+        curr
+    }
+}
+
+impl From<UpdatedKey> for to_update_key {
+    fn from(value: UpdatedKey) -> Self {
+        let mut key: to_update_key = unsafe { MaybeUninit::zeroed().assume_init() };
+        key.ts = value.start;
+        key.granularity.bri.s_id.copy_from_slice(&value.bri.fs_id);
+        key.granularity.bri.i_ino = value.bri.i_ino;
+        key.granularity.bri.i_rdev = value.bri.i_rdev;
+        key.granularity.pid = value.tgid_pid as u32;
+        key.granularity.tgid = (value.tgid_pid >> 32) as u32;
+        key.granularity.dir = value.is_write;
+        key
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct Bri {
     fs_id: [u8; 32],
@@ -49,7 +80,7 @@ struct Bri {
     i_rdev: u32,
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct UpdatedKey {
     bri: Bri,
     start: u64,
@@ -67,8 +98,8 @@ struct PendingRecord {
     is_write: u8,
 }
 
-impl From<(&to_update_key, &u8)> for UpdatedKey {
-    fn from((key, _): (&to_update_key, &u8)) -> Self {
+impl From<(&to_update_key, &u64)> for UpdatedKey {
+    fn from((key, _): (&to_update_key, &u64)) -> Self {
         Self {
             bri: Bri {
                 fs_id: key.granularity.bri.s_id,
@@ -148,7 +179,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
             skel,
             appender: conn.appender("vfs")?,
             staging_appender: conn.appender("vfs_staging")?,
-            conn: conn,
+            conn,
             updated: HashMap::new(),
         })
     }
@@ -338,20 +369,24 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
     ) where
         I: Iterator<Item = (K, V)>,
         UpdatedKey: From<(K, V)>,
+        V: UpdateEnd<V>,
+        K: Copy,
+        V: Copy + Debug,
     {
         let curr_sample = (now.tv_sec as u64) * 1_000_000_000;
         for (key, value) in pending {
             let updated_key = UpdatedKey::from((key, value));
             let last_sample = *self.updated.get(&updated_key).unwrap_or(&updated_key.start);
             let start = (last_sample / 1_000_000_000 * 1_000_000_000) + 1_000_000_000;
-            if curr_sample < start {
+            let end = V::update_end(curr_sample, value);
+            if end < start {
                 continue;
             }
 
-            for sample in (start..=curr_sample).step_by(1_000_000_000) {
+            for sample in (start..=end).step_by(1_000_000_000) {
                 let additional_time = u64::min(1_000_000_000, sample - last_sample);
                 records.push(PendingRecord {
-                    ts_s: sample / 1_000_000_000,
+                    ts_s: (sample - 1) / 1_000_000_000,
                     pid: (updated_key.tgid_pid & ((1 << 32) - 1)) as u32,
                     tid: (updated_key.tgid_pid >> 32) as u32,
                     bri: updated_key.bri.clone(),
@@ -360,9 +395,8 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 });
             }
 
-            assert!(curr_sample > last_sample);
-            self.updated
-                .insert(updated_key, last_sample + (curr_sample - last_sample));
+            assert!(end > last_sample);
+            self.updated.insert(updated_key, end);
         }
     }
 
@@ -422,10 +456,32 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 WHERE 
                     v.ts_s IS NULL;
 
-            DELETE FROM vfs_staging
-            WHERE true;
+            DELETE FROM vfs_staging;
             ",
         )?;
+        Ok(())
+    }
+
+    fn remove_updated_entries<'a, I: Iterator<Item = (&'a to_update_key, &'a u64)>>(
+        &mut self,
+        entries: I,
+    ) -> Result<()> {
+        for (key, value) in entries {
+            let update_key = UpdatedKey::from((key, value));
+            let Some(last_sample) = self.updated.get(&update_key) else {
+                continue;
+            };
+
+            assert!(last_sample <= value);
+            if last_sample < value {
+                continue;
+            }
+
+            self.updated.remove(&update_key);
+            let key = to_update_key::from(update_key);
+            let key = unsafe { std::mem::transmute::<_, [u8; size_of::<to_update_key>()]>(key) };
+            self.skel.maps.to_update.delete(&key)?
+        }
         Ok(())
     }
 
@@ -451,7 +507,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         debug!("after pending: {}", pending_records.len());
 
         let (mut to_update_keys, mut to_update_values) = (Vec::new(), Vec::new());
-        Self::read_batch::<to_update_key, u8>(
+        Self::read_batch::<to_update_key, u64>(
             self.skel.maps.to_update.as_fd().as_raw_fd(),
             &mut to_update_keys,
             &mut to_update_values,
@@ -463,13 +519,10 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         );
         debug!("after to_update: {}", pending_records.len());
         self.store_pending(pending_records.iter())?;
-        for record in pending_records {
-            println!("{:?}", record);
-        }
         self.staging_appender.flush();
 
         self.upsert_pending()?;
-        // self.remove_updated_entries();
+        self.remove_updated_entries(to_update_keys.iter().zip(to_update_values.iter()))?;
 
         Ok(())
     }
