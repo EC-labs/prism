@@ -110,10 +110,10 @@ int BPF_KPROBE(vfs_read, struct file *file, char *buf, size_t count, loff_t *pos
 		struct inflight_key key = {
 			.tgid_pid = tgid_pid,
 		};
-		struct inflight_value value = {
-			.bri = file,
-			.ts = bpf_ktime_get_ns(),
-		};
+        struct inflight_value value = {0};
+        value.bri = file;
+        value.ts = bpf_ktime_get_ns();
+        value.is_write = READ;
 		bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
 	}
 	return 0;

@@ -38,6 +38,7 @@ struct inflight_key {
 struct inflight_value {
 	__u64 ts;
 	struct bri bri;
+    __u8 is_write;
 };
 
 struct granularity {

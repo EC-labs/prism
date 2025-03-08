@@ -10,12 +10,13 @@ use libbpf_rs::{
 use libc::{clock_gettime, timespec, CLOCK_MONOTONIC};
 use log::debug;
 use std::{
+    collections::HashMap,
     ffi::{c_void, CStr},
     mem::MaybeUninit,
     os::fd::{AsFd, AsRawFd, RawFd},
     time::Duration,
 };
-use types::to_update_key;
+use types::{bri, inflight_key, inflight_value, to_update_key};
 
 mod vfs {
     include!(concat!(
@@ -42,9 +43,48 @@ fn bump_memlock_rlimit() -> Result<()> {
     Ok(())
 }
 
+#[derive(PartialEq, Eq, Hash, Clone)]
+struct Bri {
+    fs_id: [u8; 32],
+    i_ino: u64,
+    i_rdev: u32,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct UpdatedKey {
+    bri: Bri,
+    start: u64,
+    tgid_pid: u64,
+    is_write: u8,
+}
+
+struct PendingRecord {
+    ts_s: u64,
+    pid: u32,
+    tid: u32,
+    bri: Bri,
+    additional_time: u64,
+}
+
+impl From<(&inflight_key, &inflight_value)> for UpdatedKey {
+    fn from((key, value): (&inflight_key, &inflight_value)) -> Self {
+        Self {
+            bri: Bri {
+                fs_id: value.bri.s_id,
+                i_ino: value.bri.i_ino,
+                i_rdev: value.bri.i_rdev,
+            },
+            start: value.ts,
+            tgid_pid: key.tgid_pid,
+            is_write: value.is_write,
+        }
+    }
+}
+
 pub struct Vfs<'obj, 'conn> {
     skel: VfsSkel<'obj>,
     appender: Appender<'conn>,
+    updated: HashMap<UpdatedKey, u64>,
 }
 
 impl<'obj, 'conn> Vfs<'obj, 'conn> {
@@ -89,6 +129,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         Ok(Self {
             skel,
             appender: conn.appender("vfs")?,
+            updated: HashMap::new(),
         })
     }
 
@@ -259,11 +300,53 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         total as usize
     }
 
+    fn create_pending_records<'a, I: Iterator<Item = (&'a inflight_key, &'a inflight_value)>>(
+        &mut self,
+        pending: I,
+        now: &timespec,
+    ) -> Vec<PendingRecord> {
+        let mut records = Vec::new();
+        let curr_sample = (now.tv_sec as u64) * 1_000_000_000;
+        for (key, value) in pending {
+            let updated_key = UpdatedKey::from((key, value));
+            let last_sample = *self.updated.get(&updated_key).unwrap_or(&value.ts);
+            let start = (last_sample / 1_000_000_000 * 1_000_000_000) + 1_000_000_000;
+            if curr_sample < start {
+                continue;
+            }
+
+            for sample in (start..=curr_sample).step_by(1_000_000_000) {
+                let additional_time = u64::min(1_000_000_000, sample - last_sample);
+                records.push(PendingRecord {
+                    ts_s: sample / 1_000_000_000,
+                    pid: (updated_key.tgid_pid & ((1 << 32) - 1)) as u32,
+                    tid: (updated_key.tgid_pid >> 32) as u32,
+                    bri: updated_key.bri.clone(),
+                    additional_time,
+                });
+            }
+
+            assert!(curr_sample > last_sample);
+            self.updated
+                .insert(updated_key, last_sample + (curr_sample - last_sample));
+        }
+        records
+    }
+
     pub fn sample(&mut self) -> Result<()> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
         let (keys, values) = self.read_samples(&ts);
         self.store_samples(keys.iter().zip(values.iter()))?;
+
+        let (mut pending_keys, mut pending_values) = (Vec::new(), Vec::new());
+        Self::read_batch::<inflight_key, inflight_value>(
+            self.skel.maps.pending.as_fd().as_raw_fd(),
+            &mut pending_keys,
+            &mut pending_values,
+        );
+        let pending_records =
+            self.create_pending_records(pending_keys.iter().zip(pending_values.iter()), &ts);
 
         let mut to_update = Vec::new();
         Self::read_batch::<to_update_key, u8>(
@@ -271,9 +354,6 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
             &mut to_update,
             &mut Vec::new(),
         );
-        for key in to_update {
-            println!("{} {}", key.granularity.tgid, key.ts);
-        }
         Ok(())
     }
 }
