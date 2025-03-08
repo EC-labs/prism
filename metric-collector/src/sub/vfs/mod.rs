@@ -3,9 +3,9 @@
 use anyhow::{bail, Result};
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
-    libbpf_sys::{self, __u32, bpf_map_create, BPF_ANY},
+    libbpf_sys::{self, __u32, bpf_map_create},
     skel::{OpenSkel, Skel, SkelBuilder},
-    MapCore, MapFlags, MapHandle, MapImpl, MapType, OpenObject,
+    MapCore, MapFlags, MapHandle, OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_MONOTONIC};
 use log::debug;
@@ -14,9 +14,8 @@ use std::{
     ffi::{c_void, CStr},
     mem::MaybeUninit,
     os::fd::{AsFd, AsRawFd, RawFd},
-    time::Duration,
 };
-use types::{bri, inflight_key, inflight_value, to_update_key};
+use types::{inflight_key, inflight_value, to_update_key};
 
 mod vfs {
     include!(concat!(
@@ -43,7 +42,7 @@ fn bump_memlock_rlimit() -> Result<()> {
     Ok(())
 }
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct Bri {
     fs_id: [u8; 32],
     i_ino: u64,
@@ -58,12 +57,29 @@ struct UpdatedKey {
     is_write: u8,
 }
 
+#[derive(Debug)]
 struct PendingRecord {
     ts_s: u64,
     pid: u32,
     tid: u32,
     bri: Bri,
     additional_time: u64,
+    is_write: u8,
+}
+
+impl From<(&to_update_key, &u8)> for UpdatedKey {
+    fn from((key, _): (&to_update_key, &u8)) -> Self {
+        Self {
+            bri: Bri {
+                fs_id: key.granularity.bri.s_id,
+                i_ino: key.granularity.bri.i_ino,
+                i_rdev: key.granularity.bri.i_rdev,
+            },
+            start: key.ts,
+            tgid_pid: (key.granularity.tgid as u64) << 32 | key.granularity.pid as u64,
+            is_write: key.granularity.dir,
+        }
+    }
 }
 
 impl From<(&inflight_key, &inflight_value)> for UpdatedKey {
@@ -84,6 +100,8 @@ impl From<(&inflight_key, &inflight_value)> for UpdatedKey {
 pub struct Vfs<'obj, 'conn> {
     skel: VfsSkel<'obj>,
     appender: Appender<'conn>,
+    staging_appender: Appender<'conn>,
+    conn: &'conn Connection,
     updated: HashMap<UpdatedKey, u64>,
 }
 
@@ -129,6 +147,8 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         Ok(Self {
             skel,
             appender: conn.appender("vfs")?,
+            staging_appender: conn.appender("vfs_staging")?,
+            conn: conn,
             updated: HashMap::new(),
         })
     }
@@ -155,6 +175,17 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     hist6 UINTEGER,
                     hist7 UINTEGER,
                 );
+
+                CREATE OR REPLACE TEMP TABLE vfs_staging (
+                    ts_s UBIGINT,
+                    pid UINTEGER,
+                    tid UINTEGER,
+                    fs_id VARCHAR,
+                    device_id UINTEGER,
+                    inode_id UBIGINT,
+                    is_write UTINYINT,
+                    additional_time UBIGINT,
+                )
             ",
         )?;
         Ok(())
@@ -194,7 +225,6 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
             ]
         });
         self.appender.append_rows(records)?;
-        self.appender.flush();
 
         Ok(())
     }
@@ -300,16 +330,19 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         total as usize
     }
 
-    fn create_pending_records<'a, I: Iterator<Item = (&'a inflight_key, &'a inflight_value)>>(
+    fn create_pending_records<'a, K, V, I>(
         &mut self,
         pending: I,
         now: &timespec,
-    ) -> Vec<PendingRecord> {
-        let mut records = Vec::new();
+        records: &mut Vec<PendingRecord>,
+    ) where
+        I: Iterator<Item = (K, V)>,
+        UpdatedKey: From<(K, V)>,
+    {
         let curr_sample = (now.tv_sec as u64) * 1_000_000_000;
         for (key, value) in pending {
             let updated_key = UpdatedKey::from((key, value));
-            let last_sample = *self.updated.get(&updated_key).unwrap_or(&value.ts);
+            let last_sample = *self.updated.get(&updated_key).unwrap_or(&updated_key.start);
             let start = (last_sample / 1_000_000_000 * 1_000_000_000) + 1_000_000_000;
             if curr_sample < start {
                 continue;
@@ -323,6 +356,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     tid: (updated_key.tgid_pid >> 32) as u32,
                     bri: updated_key.bri.clone(),
                     additional_time,
+                    is_write: updated_key.is_write,
                 });
             }
 
@@ -330,7 +364,69 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
             self.updated
                 .insert(updated_key, last_sample + (curr_sample - last_sample));
         }
-        records
+    }
+
+    fn store_pending<'a, I: ExactSizeIterator<Item = &'a PendingRecord>>(
+        &mut self,
+        records: I,
+    ) -> Result<()> {
+        let nrecords = records.len();
+        if nrecords == 0 {
+            return Ok(());
+        }
+
+        debug!("Stage {} records", records.len());
+        let records = records.map(|record| {
+            let fs_id = unsafe { CStr::from_ptr(record.bri.fs_id.as_ptr() as *const i8) };
+            let fs_id = fs_id.to_str().unwrap();
+            [
+                Box::new(&record.ts_s) as Box<dyn ToSql>,
+                Box::new(&record.pid),
+                Box::new(&record.tid),
+                Box::new(fs_id),
+                Box::new(&record.bri.i_rdev),
+                Box::new(&record.bri.i_ino),
+                Box::new(&record.is_write),
+                Box::new(&record.additional_time),
+            ]
+        });
+        self.staging_appender.append_rows(records)?;
+
+        Ok(())
+    }
+
+    fn upsert_pending(&mut self) -> Result<()> {
+        self.conn.execute_batch(
+            r"
+            UPDATE 
+                vfs as v
+            SET 
+                total_time = total_time + additional_time
+            FROM 
+                vfs_staging as vs
+            WHERE
+                v.ts_s = vs.ts_s
+                AND v.pid = vs.pid
+                AND v.tid = vs.tid
+                AND v.fs_id = vs.fs_id
+                AND v.device_id = vs.device_id
+                AND v.inode_id = vs.inode_id
+                AND v.is_write = vs.is_write;
+
+            INSERT INTO vfs (ts_s, pid, tid, fs_id, device_id, inode_id, is_write, total_time)
+                SELECT 
+                    vs.*
+                FROM vfs_staging as vs
+                LEFT JOIN vfs as v
+                    USING (ts_s, pid, tid, fs_id, device_id, inode_id, is_write)
+                WHERE 
+                    v.ts_s IS NULL;
+
+            DELETE FROM vfs_staging
+            WHERE true;
+            ",
+        )?;
+        Ok(())
     }
 
     pub fn sample(&mut self) -> Result<()> {
@@ -338,22 +434,43 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
         let (keys, values) = self.read_samples(&ts);
         self.store_samples(keys.iter().zip(values.iter()))?;
+        self.appender.flush();
 
+        let mut pending_records = Vec::new();
         let (mut pending_keys, mut pending_values) = (Vec::new(), Vec::new());
         Self::read_batch::<inflight_key, inflight_value>(
             self.skel.maps.pending.as_fd().as_raw_fd(),
             &mut pending_keys,
             &mut pending_values,
         );
-        let pending_records =
-            self.create_pending_records(pending_keys.iter().zip(pending_values.iter()), &ts);
+        self.create_pending_records(
+            pending_keys.iter().zip(pending_values.iter()),
+            &ts,
+            &mut pending_records,
+        );
+        debug!("after pending: {}", pending_records.len());
 
-        let mut to_update = Vec::new();
+        let (mut to_update_keys, mut to_update_values) = (Vec::new(), Vec::new());
         Self::read_batch::<to_update_key, u8>(
             self.skel.maps.to_update.as_fd().as_raw_fd(),
-            &mut to_update,
-            &mut Vec::new(),
+            &mut to_update_keys,
+            &mut to_update_values,
         );
+        self.create_pending_records(
+            to_update_keys.iter().zip(to_update_values.iter()),
+            &ts,
+            &mut pending_records,
+        );
+        debug!("after to_update: {}", pending_records.len());
+        self.store_pending(pending_records.iter())?;
+        for record in pending_records {
+            println!("{:?}", record);
+        }
+        self.staging_appender.flush();
+
+        self.upsert_pending()?;
+        // self.remove_updated_entries();
+
         Ok(())
     }
 }
