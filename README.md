@@ -104,5 +104,9 @@ sudo cat /sys/kernel/debug/tracing/available_filter_functions
 ```
 
 ```bash
+sudo cat /sys/kernel/debug/tracing/trace_pipe
+```
+
+```bash
 cargo run --config 'target."cfg(all())".runner="sudo -E"' -- --pids 1
 ```

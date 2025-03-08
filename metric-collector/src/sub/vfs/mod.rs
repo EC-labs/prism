@@ -260,6 +260,68 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         Ok(())
     }
 
+    fn store_pending<'a, I: ExactSizeIterator<Item = &'a PendingRecord>>(
+        &mut self,
+        records: I,
+    ) -> Result<()> {
+        let nrecords = records.len();
+        if nrecords == 0 {
+            return Ok(());
+        }
+
+        debug!("Stage {} records", records.len());
+        let records = records.map(|record| {
+            let fs_id = unsafe { CStr::from_ptr(record.bri.fs_id.as_ptr() as *const i8) };
+            let fs_id = fs_id.to_str().unwrap();
+            [
+                Box::new(&record.ts_s) as Box<dyn ToSql>,
+                Box::new(&record.pid),
+                Box::new(&record.tid),
+                Box::new(fs_id),
+                Box::new(&record.bri.i_rdev),
+                Box::new(&record.bri.i_ino),
+                Box::new(&record.is_write),
+                Box::new(&record.additional_time),
+            ]
+        });
+        self.staging_appender.append_rows(records)?;
+
+        Ok(())
+    }
+
+    fn upsert_pending(&mut self) -> Result<()> {
+        self.conn.execute_batch(
+            r"
+            UPDATE 
+                vfs as v
+            SET 
+                total_time = total_time + additional_time
+            FROM 
+                vfs_staging as vs
+            WHERE
+                v.ts_s = vs.ts_s
+                AND v.pid = vs.pid
+                AND v.tid = vs.tid
+                AND v.fs_id = vs.fs_id
+                AND v.device_id = vs.device_id
+                AND v.inode_id = vs.inode_id
+                AND v.is_write = vs.is_write;
+
+            INSERT INTO vfs (ts_s, pid, tid, fs_id, device_id, inode_id, is_write, total_time)
+                SELECT 
+                    vs.*
+                FROM vfs_staging as vs
+                LEFT JOIN vfs as v
+                    USING (ts_s, pid, tid, fs_id, device_id, inode_id, is_write)
+                WHERE 
+                    v.ts_s IS NULL;
+
+            DELETE FROM vfs_staging;
+            ",
+        )?;
+        Ok(())
+    }
+
     fn read_samples(&mut self, ts: &timespec) -> (Vec<granularity>, Vec<stats>) {
         let curr = ts.tv_sec as u64;
         let mut keys: Vec<granularity> = Vec::new();
@@ -398,68 +460,6 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
             assert!(end > last_sample);
             self.updated.insert(updated_key, end);
         }
-    }
-
-    fn store_pending<'a, I: ExactSizeIterator<Item = &'a PendingRecord>>(
-        &mut self,
-        records: I,
-    ) -> Result<()> {
-        let nrecords = records.len();
-        if nrecords == 0 {
-            return Ok(());
-        }
-
-        debug!("Stage {} records", records.len());
-        let records = records.map(|record| {
-            let fs_id = unsafe { CStr::from_ptr(record.bri.fs_id.as_ptr() as *const i8) };
-            let fs_id = fs_id.to_str().unwrap();
-            [
-                Box::new(&record.ts_s) as Box<dyn ToSql>,
-                Box::new(&record.pid),
-                Box::new(&record.tid),
-                Box::new(fs_id),
-                Box::new(&record.bri.i_rdev),
-                Box::new(&record.bri.i_ino),
-                Box::new(&record.is_write),
-                Box::new(&record.additional_time),
-            ]
-        });
-        self.staging_appender.append_rows(records)?;
-
-        Ok(())
-    }
-
-    fn upsert_pending(&mut self) -> Result<()> {
-        self.conn.execute_batch(
-            r"
-            UPDATE 
-                vfs as v
-            SET 
-                total_time = total_time + additional_time
-            FROM 
-                vfs_staging as vs
-            WHERE
-                v.ts_s = vs.ts_s
-                AND v.pid = vs.pid
-                AND v.tid = vs.tid
-                AND v.fs_id = vs.fs_id
-                AND v.device_id = vs.device_id
-                AND v.inode_id = vs.inode_id
-                AND v.is_write = vs.is_write;
-
-            INSERT INTO vfs (ts_s, pid, tid, fs_id, device_id, inode_id, is_write, total_time)
-                SELECT 
-                    vs.*
-                FROM vfs_staging as vs
-                LEFT JOIN vfs as v
-                    USING (ts_s, pid, tid, fs_id, device_id, inode_id, is_write)
-                WHERE 
-                    v.ts_s IS NULL;
-
-            DELETE FROM vfs_staging;
-            ",
-        )?;
-        Ok(())
     }
 
     fn remove_updated_entries<'a, I: Iterator<Item = (&'a to_update_key, &'a u64)>>(

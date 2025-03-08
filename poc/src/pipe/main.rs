@@ -1,12 +1,10 @@
 use libc::{self, c_int};
+use nix::unistd::ForkResult;
 use std::fs::File;
-use std::io::{self, prelude::*, ErrorKind};
+use std::io::prelude::*;
 use std::os::unix::prelude::*;
-use std::process::{self, Command};
-use std::thread;
+use std::process;
 use std::time::Duration;
-
-use tokio::io::AsyncReadExt;
 
 fn pipe() -> (File, File) {
     let mut fds: [c_int; 2] = [0; 2];
@@ -19,45 +17,39 @@ fn pipe() -> (File, File) {
     (reader, writer)
 }
 
-fn fcntl_setfd(file: &mut File, flags: c_int) {
-    let res = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags) };
-    println!("fcntl result {:?}", res);
-    if res != 0 {
-        println!("res {:?}", res);
-    }
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (mut reader, writer) = pipe();
-    fcntl_setfd(&mut reader, libc::O_NONBLOCK | libc::O_RDONLY);
-
-    let mut child = Command::new("bpftrace")
-        .args(["../thread-sync/bpf/futex_wait.bt", "1"])
-        .stdout(writer)
-        .spawn()?;
-
+    let (mut reader, mut writer) = pipe();
     let mut buf: [u8; 256] = [0; 256];
-    loop {
-        let bytes = reader.read(&mut buf);
-        if let Err(error) = bytes {
-            let kind = error.kind();
-            if kind == ErrorKind::WouldBlock {
-                println!("Would Block");
+    match unsafe { nix::unistd::fork() } {
+        Ok(ForkResult::Child) => {
+            println!("child: {}", unsafe { libc::getpid() });
+
+            for i in 0..200 {
+                writer.write(format!("hello {i}").as_bytes()).unwrap();
                 std::thread::sleep(Duration::from_millis(1000));
-                continue;
             }
-            break;
         }
+        Ok(ForkResult::Parent { .. }) => {
+            println!("parent: {}", unsafe { libc::getpid() });
+            drop(writer);
 
-        let bytes = bytes.unwrap();
-        if bytes == 0 {
-            break;
+            loop {
+                let Ok(bytes) = reader.read(&mut buf) else {
+                    println!("Error");
+                    break;
+                };
+
+                if bytes == 0 {
+                    println!("No bytes");
+                    break;
+                }
+
+                let data = String::from_utf8(buf[..bytes].into()).unwrap();
+                println!("{}", data);
+            }
         }
-
-        let data = String::from_utf8(buf[..bytes].into()).unwrap();
-        println!("{:?}", data);
+        _ => {}
     }
 
-    child.kill()?;
     Ok(())
 }
