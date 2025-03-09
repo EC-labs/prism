@@ -15,6 +15,7 @@ use std::{
     fmt::Debug,
     mem::MaybeUninit,
     os::fd::{AsFd, AsRawFd, RawFd},
+    time::{Duration, SystemTime},
 };
 use types::{inflight_key, inflight_value, to_update_key};
 
@@ -188,7 +189,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE vfs (
-                    ts_s UBIGINT,
+                    ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
                     fs_id VARCHAR,
@@ -208,7 +209,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 );
 
                 CREATE OR REPLACE TEMP TABLE vfs_staging (
-                    ts_s UBIGINT,
+                    ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
                     fs_id VARCHAR,
@@ -233,10 +234,11 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
 
         debug!("Store {} records", records.len());
         let records = records.map(|(granularity, stats)| {
+            let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
             let fs_id = unsafe { CStr::from_ptr(granularity.bri.s_id.as_ptr() as *const i8) };
             let fs_id = fs_id.to_str().unwrap();
             [
-                Box::new(&stats.ts_s) as Box<dyn ToSql>,
+                Box::new(Duration::from_nanos(ts_s)) as Box<dyn ToSql>,
                 Box::new(&granularity.tgid),
                 Box::new(&granularity.pid),
                 Box::new(fs_id),
@@ -271,10 +273,11 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
 
         debug!("Stage {} records", records.len());
         let records = records.map(|record| {
+            let ts_s = crate::extract::boot_to_epoch(record.ts_s * 1_000_000_000);
             let fs_id = unsafe { CStr::from_ptr(record.bri.fs_id.as_ptr() as *const i8) };
             let fs_id = fs_id.to_str().unwrap();
             [
-                Box::new(&record.ts_s) as Box<dyn ToSql>,
+                Box::new(Duration::from_nanos(ts_s)) as Box<dyn ToSql>,
                 Box::new(&record.pid),
                 Box::new(&record.tid),
                 Box::new(fs_id),

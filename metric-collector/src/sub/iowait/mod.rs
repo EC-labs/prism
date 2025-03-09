@@ -12,6 +12,7 @@ use std::{
     ffi::c_void,
     mem::MaybeUninit,
     os::fd::{AsFd, AsRawFd},
+    time::Duration,
 };
 
 mod iowait {
@@ -98,7 +99,7 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE iowait (
-                    ts_s UBIGINT,
+                    ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
                     part0 UBIGINT,
@@ -131,23 +132,24 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
 
         debug!("Store {} records", records.len());
         let records = records.map(|(granularity, stats)| {
+            let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
             [
-                &stats.ts_s as &dyn ToSql,
-                &granularity.tgid,
-                &granularity.pid,
-                &granularity.part0,
-                &granularity.bdev,
-                &stats.total_time,
-                &stats.sector_cnt,
-                &stats.total_requests,
-                &stats.hist[0],
-                &stats.hist[1],
-                &stats.hist[2],
-                &stats.hist[3],
-                &stats.hist[4],
-                &stats.hist[5],
-                &stats.hist[6],
-                &stats.hist[7],
+                Box::new(Duration::from_nanos(ts_s)) as Box<dyn ToSql>,
+                Box::new(granularity.tgid),
+                Box::new(granularity.pid),
+                Box::new(granularity.part0),
+                Box::new(granularity.bdev),
+                Box::new(stats.total_time),
+                Box::new(stats.sector_cnt),
+                Box::new(stats.total_requests),
+                Box::new(stats.hist[0]),
+                Box::new(stats.hist[1]),
+                Box::new(stats.hist[2]),
+                Box::new(stats.hist[3]),
+                Box::new(stats.hist[4]),
+                Box::new(stats.hist[5]),
+                Box::new(stats.hist[6]),
+                Box::new(stats.hist[7]),
             ]
         });
         self.appender.append_rows(records)?;
