@@ -1,0 +1,34 @@
+#include <linux/futex.h>
+
+kfunc:vmlinux:get_futex_key 
+/comm == "writesa" || comm == "writesb"/ 
+{
+    @keys[tid] = (args->key, args->uaddr);
+}
+
+kretfunc:vmlinux:get_futex_key
+/ @keys[tid].0 /
+{
+    printf("%s %u %llu %llu %u %p\n", comm, tid, @keys[tid].0->both.ptr, @keys[tid].0->both.word, @keys[tid].0->both.offset, @keys[tid].1);
+    delete(@keys[tid]);
+}
+
+tracepoint:syscalls:sys_enter_futex 
+/ comm == "writesa" || comm == "writesb" /
+{
+    $op = args->op & (~FUTEX_PRIVATE_FLAG);
+    $op = $op & (~FUTEX_CLOCK_REALTIME);
+    if (($op == FUTEX_WAIT_BITSET) || ($op == FUTEX_WAIT)) {
+        @[tid] = ("wait", args->uaddr);
+    } else if (($op == FUTEX_WAKE) || ($op == FUTEX_WAKE_BITSET)) {
+        @[tid] = ("wake", args->uaddr);
+    } else {
+        printf("%-15s\t%d\n", "UnhandledOpcode", args->op);
+    }
+}
+
+tracepoint:syscalls:sys_exit_futex 
+/ @[tid].1 /
+{
+    printf("%s: %s %u %p %d\n", @[tid].0, comm, tid, @[tid].1, args.ret);
+}
