@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use libbpf_cargo::SkeletonBuilder;
 
-const SUBS: [&str; 2] = ["iowait", "vfs"];
+const SUBS: [&str; 3] = ["iowait", "vfs", "futex"];
 
 fn main() {
     for sub in SUBS {

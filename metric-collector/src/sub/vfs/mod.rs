@@ -14,7 +14,7 @@ use std::{
     ffi::{c_void, CStr},
     fmt::Debug,
     mem::MaybeUninit,
-    os::fd::{AsFd, AsRawFd, RawFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd},
     time::{Duration, SystemTime},
 };
 use types::{inflight_key, inflight_value, to_update_key};
@@ -141,13 +141,13 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
     pub fn new(
         open_object: &'obj mut MaybeUninit<OpenObject>,
         conn: &'conn Connection,
-        pid_map: MapHandle,
+        pid_map: BorrowedFd,
     ) -> Result<Self> {
         let skel_builder = VfsSkelBuilder::default();
 
         bump_memlock_rlimit()?;
         let mut open_skel = skel_builder.open(open_object)?;
-        open_skel.maps.pids.reuse_fd(pid_map.as_fd())?;
+        open_skel.maps.pids.reuse_fd(pid_map)?;
 
         let mut skel = open_skel.load()?;
         for i in 0..SAMPLES {

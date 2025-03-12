@@ -5,6 +5,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fs,
+    os::fd::AsFd,
     rc::Rc,
     sync::{
         mpsc::{Receiver, Sender},
@@ -17,6 +18,7 @@ use std::{
 use std::{env, mem::MaybeUninit};
 
 use crate::sub;
+use crate::sub::futex::Futex;
 use crate::sub::vfs::Vfs;
 use duckdb::Connection;
 use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
@@ -318,7 +320,10 @@ impl Extractor {
         let mut iowait = sub::iowait::IOWait::new(&mut iowait_open_object, &conn).unwrap();
 
         let mut vfs_open_object = MaybeUninit::uninit();
-        let mut vfs = Vfs::new(&mut vfs_open_object, &conn, pid_map).unwrap();
+        let mut vfs = Vfs::new(&mut vfs_open_object, &conn, pid_map.as_fd()).unwrap();
+
+        let mut futex_open_object = MaybeUninit::uninit();
+        let mut futex = Futex::new(&mut futex_open_object, pid_map.as_fd(), &conn).unwrap();
 
         // self.system_metrics.push(Box::new(IOWait::new(
         //     executor.io_wait.clone(),
@@ -339,6 +344,7 @@ impl Extractor {
 
             iowait.sample()?;
             vfs.sample()?;
+            futex.sample()?;
             // self.sample_targets();
             // self.sample_system_metrics()?;
             // self.register_new_targets(&mut executor, time_sensitive_collector_tx.clone())?;
