@@ -31,6 +31,14 @@ struct {
 } pending SEC(".maps");
 
 struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, PENDING_MAX_ENTRIES);
+    __type(key, struct to_update_key);
+    __type(value, u64);
+} to_update SEC(".maps");
+
+
+struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
@@ -178,6 +186,19 @@ int futex_enter(struct trace_event_raw_sys_enter *ctx) {
     return 0;
 }
 
+void to_update_acct(u64 start, u64 curr, struct granularity gran) {
+    u64 sample = (curr / 1000000000) * 1000000000;
+    if (start >= sample) {
+        return;
+    }
+
+    // bpf_printk("Storing in to_update: %lld %lld", start, curr);
+    struct to_update_key key = {0};
+    key.ts = start;
+    key.granularity = gran;
+    bpf_map_update_elem(&to_update, &key, &sample, BPF_ANY);
+}
+
 SEC("tp/syscalls/sys_exit_futex")
 int futex_exit(struct trace_event_raw_sys_enter *ctx) {
     u64 tgid_pid = bpf_get_current_pid_tgid();
@@ -218,11 +239,15 @@ int futex_exit(struct trace_event_raw_sys_enter *ctx) {
         __u32 bucket = log_base10_bucket(ns_latency);
         __sync_fetch_and_add(&stat->wait.total_time, sample_latency);
         __sync_fetch_and_add(stat->wait.hist + bucket, 1);
+
+        to_update_acct(value->ts, ts, gran);
     } else {
         u32 ret = BPF_CORE_READ(ctx, args[0]);
         __sync_fetch_and_add(&stat->wake.successful_count, ret > 0 ? 1 : 0);
     }
 
+
     bpf_printk("%llu %llu %d %u %llu %u %u", ts, ts - value->ts, value->op, tgid_pid >> 32, value->fkey.both.ptr, value->fkey.both.word, value->fkey.both.offset);
+    bpf_map_delete_elem(&pending, &tgid_pid);
     return 0;
 }

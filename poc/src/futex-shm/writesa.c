@@ -91,8 +91,11 @@ int main(int argc, char** argv) {
 
     printf("shared_data pointer %p\n", shared_data);
 
-    for (int i = 0; i < 10; i++) {
-        sleep(1);
+    for (int i = 0; i < 100000; i++) {
+        struct timespec sleep_time = {0}, remaining;
+
+        sleep_time.tv_sec = 5;
+        nanosleep(&sleep_time, &remaining);
 
         // Write 0xA to the shared data and wake up child.
         printf("parent writing A\n");

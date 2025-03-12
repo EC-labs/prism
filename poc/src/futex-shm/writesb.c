@@ -90,11 +90,13 @@ int main(int argc, char** argv) {
 
     printf("child shared pointer %p\n", shared_data);
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 100000; i++) {
         printf("child waiting for A\n");
         wait_on_futex_value(shared_data, 0xA);
 
-        sleep(1);
+        struct timespec sleep_time = {0}, remaining;
+        sleep_time.tv_nsec = 10000000;
+        nanosleep(&sleep_time, &remaining);
         printf("child writing B\n");
         // Write 0xB to the shared data and wake up parent.
         *shared_data = 0xB;
