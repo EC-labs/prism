@@ -452,8 +452,8 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 let additional_time = u64::min(1_000_000_000, sample - last_sample);
                 records.push(PendingRecord {
                     ts_s: (sample - 1) / 1_000_000_000,
-                    pid: (updated_key.tgid_pid & ((1 << 32) - 1)) as u32,
-                    tid: (updated_key.tgid_pid >> 32) as u32,
+                    pid: (updated_key.tgid_pid >> 32) as u32,
+                    tid: (updated_key.tgid_pid & ((1 << 32) - 1)) as u32,
                     bri: updated_key.bri.clone(),
                     additional_time,
                     is_write: updated_key.is_write,
