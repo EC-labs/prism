@@ -163,6 +163,12 @@ impl<'obj> Net<'obj> {
             skel.progs
                 .inet_recvmsg_exit
                 .attach_kprobe(true, "inet6_recvmsg")?,
+            skel.progs
+                .inet_sendmsg
+                .attach_kprobe(false, "inet6_sendmsg")?,
+            skel.progs
+                .inet_sendmsg_exit
+                .attach_kprobe(true, "inet6_sendmsg")?,
         ];
         // for i in 0..SAMPLES {
         //     let mapfd = unsafe {
