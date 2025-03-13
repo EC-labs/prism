@@ -17,9 +17,9 @@ use std::{
 
 use std::{env, mem::MaybeUninit};
 
-use crate::sub;
 use crate::sub::futex::Futex;
 use crate::sub::vfs::Vfs;
+use crate::sub::{self, net::Net};
 use duckdb::Connection;
 use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, seteuid};
@@ -325,6 +325,15 @@ impl Extractor {
         let mut futex_open_object = MaybeUninit::uninit();
         let mut futex = Futex::new(&mut futex_open_object, pid_map.as_fd(), &conn).unwrap();
 
+        let mut net_open_object = MaybeUninit::uninit();
+        let mut net = Net::new(
+            &mut net_open_object,
+            pid_map.as_fd(),
+            vfs.skel.maps.samples.as_fd(),
+            vfs.skel.maps.pending.as_fd(),
+            vfs.skel.maps.to_update.as_fd(),
+        )
+        .unwrap();
         // self.system_metrics.push(Box::new(IOWait::new(
         //     executor.io_wait.clone(),
         //     Some(self.config.data_directory.clone()),
@@ -345,6 +354,7 @@ impl Extractor {
             iowait.sample()?;
             vfs.sample()?;
             futex.sample()?;
+            net.sample()?;
             // self.sample_targets();
             // self.sample_system_metrics()?;
             // self.register_new_targets(&mut executor, time_sensitive_collector_tx.clone())?;
