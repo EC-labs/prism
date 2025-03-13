@@ -15,7 +15,7 @@ use std::{
     fmt::Debug,
     mem::MaybeUninit,
     os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 use types::{inflight_key, inflight_value, to_update_key};
 
@@ -130,7 +130,7 @@ impl From<(&inflight_key, &inflight_value)> for UpdatedKey {
 }
 
 pub struct Vfs<'obj, 'conn> {
-    skel: VfsSkel<'obj>,
+    pub skel: VfsSkel<'obj>,
     appender: Appender<'conn>,
     staging_appender: Appender<'conn>,
     conn: &'conn Connection,

@@ -90,7 +90,7 @@ u64 min(u64 x, u64 y) {
 
 
 SEC("kprobe/vfs_read")
-int BPF_KPROBE(vfs_read, struct file *file, char *buf, size_t count, loff_t *pos)
+int BPF_KPROBE(vfs_read, struct file *file)
 {
     struct inode *f_inode = BPF_CORE_READ(file, f_inode);
     umode_t i_mode = BPF_CORE_READ(f_inode, i_mode);
@@ -108,14 +108,14 @@ int BPF_KPROBE(vfs_read, struct file *file, char *buf, size_t count, loff_t *pos
         bool truth = true;
         bool *filep = bpf_map_lookup_elem(&bris, &file);
         bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
-        if (filep == NULL || *filep == false) {
-            if (pidp == NULL || *pidp == false) {
+        if (filep == NULL) {
+            if (pidp == NULL) {
                 return -1;
             }
             bpf_map_update_elem(&bris, &file, &truth, BPF_ANY);
         }
 
-        if (pidp == NULL || *pidp == false) {
+        if (pidp == NULL) {
             bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
         }
 
@@ -141,7 +141,7 @@ void to_update_acct(u64 start, u64 curr, struct granularity gran) {
         return;
     }
 
-    bpf_printk("Storing in to_update: %lld %lld", start, curr);
+    // bpf_printk("Storing in to_update: %lld %lld", start, curr);
     struct to_update_key key = {0};
     key.ts = start;
     key.granularity = gran;
@@ -237,9 +237,9 @@ int BPF_KPROBE(vfs_write, struct file *file, char *buf, size_t count, loff_t *po
         value.ts = bpf_ktime_get_ns();
         value.is_write = WRITE;
         bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
-        bpf_printk("st: %d %d %s %d %lld %c => %lld", 
-               tgid, pid(key.tgid_pid), value.bri.s_id,
-               value.bri.i_rdev, value.bri.i_ino, value.is_write == READ ? 'R' : 'W', value.ts);
+        // bpf_printk("st: %d %d %s %d %lld %c => %lld", 
+        //        tgid, pid(key.tgid_pid), value.bri.s_id,
+        //        value.bri.i_rdev, value.bri.i_ino, value.is_write == READ ? 'R' : 'W', value.ts);
     }
     return 0;
 }
@@ -288,9 +288,9 @@ int BPF_KRETPROBE(vfs_write_exit, ssize_t ret)
 
     to_update_acct(value->ts, ts, gran);
     
-    bpf_printk("en: %d %d %s %d %lld %c => %lld %lld", 
-           gran.tgid, gran.pid, gran.bri.s_id,
-           gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts, ts - value->ts);
+    // bpf_printk("en: %d %d %s %d %lld %c => %lld %lld", 
+    //        gran.tgid, gran.pid, gran.bri.s_id,
+    //        gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts, ts - value->ts);
     bpf_map_delete_elem(&pending, &tgid_pid);
     return 0;
 }

@@ -139,11 +139,11 @@ int BPF_KRETPROBE(get_futex_key_exit, int ret)
 
     if ((value != NULL) && (key_present == NULL)) {
         bpf_map_update_elem(&futex_keys, &deref_key, &truth, BPF_ANY);
-        bpf_printk("adding key: %llu %llu %u", 
-                   deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);
+        // bpf_printk("adding key: %llu %llu %u", 
+        //            deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);
     } else if ((value == NULL) && (key_present != NULL)) {
         bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
-        bpf_printk("discovered tgid: %u", tgid);
+        // bpf_printk("discovered tgid: %u", tgid);
         return 0;
     }
 
@@ -247,7 +247,8 @@ int futex_exit(struct trace_event_raw_sys_enter *ctx) {
     }
 
 
-    bpf_printk("%llu %llu %d %u %llu %u %u", ts, ts - value->ts, value->op, tgid_pid >> 32, value->fkey.both.ptr, value->fkey.both.word, value->fkey.both.offset);
+    // bpf_printk("%llu %s %u %llu %llu %u %llu", 
+    //            ts, value->op ? "wait" : "wake", tgid_pid >> 32, value->fkey.both.ptr, value->fkey.both.word, value->fkey.both.offset, ts - value->ts);
     bpf_map_delete_elem(&pending, &tgid_pid);
     return 0;
 }
