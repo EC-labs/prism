@@ -9,32 +9,29 @@ use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sock_path = "./unix.sock";
-    let listener = UnixListener::bind(sock_path)?;
-    let iters = 2;
 
     match unsafe { fork() } {
         Ok(ForkResult::Child) => {
             // child sends data
             println!("{} - In child", std::process::id());
             let mut input = String::new();
+            let mut sock = UnixStream::connect(sock_path)?;
             loop {
-                input.clear();
                 std::io::stdin().read_line(&mut input)?;
+                thread::sleep(Duration::from_millis(1000));
+                sock.write(input.trim().as_bytes()).unwrap();
+
                 if input == "exit\n" {
-                    let mut sock = UnixStream::connect(sock_path)?;
-                    let _ = sock.write("exit".as_bytes());
                     std::process::exit(0);
                 }
-                let mut sock = UnixStream::connect(sock_path)?;
-                for i in 0..iters {
-                    thread::sleep(Duration::from_millis(1000));
-                    let _ = sock.write(format!("Iteration {}", i).as_bytes());
-                }
+
+                input.truncate(0);
             }
         }
         Ok(ForkResult::Parent { child }) => {
             // parent receives data
             println!("{} - In parent {}", std::process::id(), child);
+            let listener = UnixListener::bind(sock_path)?;
             let (mut sock, _) = listener.accept()?;
             let mut buf: [u8; 256] = [0; 256];
             loop {
@@ -47,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if contents == "exit" {
                         break;
                     } else {
-                        println!("{}", contents);
+                        println!("received: {}", contents);
                     }
                 } else {
                     sock = listener.accept()?.0;

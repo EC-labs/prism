@@ -131,7 +131,6 @@ fn bump_memlock_rlimit() -> Result<()> {
 
 pub struct Net<'obj> {
     skel: NetSkel<'obj>,
-    extra_links: Vec<Link>,
     // appender: Appender<'conn>,
     // staging_appender: Appender<'conn>,
     // conn: &'conn Connection,
@@ -156,20 +155,6 @@ impl<'obj> Net<'obj> {
         open_skel.maps.to_update.reuse_fd(to_update_map)?;
 
         let mut skel = open_skel.load()?;
-        let extra_links = vec![
-            skel.progs
-                .inet_recvmsg
-                .attach_kprobe(false, "inet6_recvmsg")?,
-            skel.progs
-                .inet_recvmsg_exit
-                .attach_kprobe(true, "inet6_recvmsg")?,
-            skel.progs
-                .inet_sendmsg
-                .attach_kprobe(false, "inet6_sendmsg")?,
-            skel.progs
-                .inet_sendmsg_exit
-                .attach_kprobe(true, "inet6_sendmsg")?,
-        ];
         // for i in 0..SAMPLES {
         //     let mapfd = unsafe {
         //         bpf_map_create(
@@ -198,7 +183,6 @@ impl<'obj> Net<'obj> {
         // Self::init_store(conn)?;
         Ok(Self {
             skel,
-            extra_links,
             // appender: conn.appender("vfs")?,
             // staging_appender: conn.appender("vfs_staging")?,
             // conn,

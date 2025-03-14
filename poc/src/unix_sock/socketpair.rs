@@ -16,18 +16,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut handles = Vec::new();
     handles.push(thread::spawn(move || {
         let mut sock = sock1;
-        for _ in 0..iters {
+        for i in 0..iters {
             thread::sleep(Duration::from_millis(1000));
-            let _ = sock.write("What is your name?".as_bytes());
+            let _ = sock.write(format!("message {i}").as_bytes());
         }
     }));
     handles.push(thread::spawn(move || {
         let mut sock = sock2;
         for _ in 0..iters {
-            thread::sleep(Duration::from_millis(1000));
             let mut buf: [u8; 256] = [0; 256];
             let _ = sock.read(&mut buf);
-            println!("{}", String::from_utf8(buf.into()).unwrap())
+            println!("received: {}", String::from_utf8(buf.into()).unwrap())
         }
     }));
 
