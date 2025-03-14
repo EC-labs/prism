@@ -10,6 +10,7 @@
 
 #define READ 0
 #define WRITE 1
+#define ACCEPT 2
 
 #define S_IFMT  00170000
 #define S_IFSOCK 0140000

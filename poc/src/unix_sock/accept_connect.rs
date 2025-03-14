@@ -7,6 +7,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::thread;
 use std::time::Duration;
 
+const MAX_CONNECTIONS: usize = 3;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sock_path = "./unix.sock";
 
@@ -15,45 +17,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // child sends data
             println!("{} - In child", std::process::id());
             let mut input = String::new();
-            let mut sock = UnixStream::connect(sock_path)?;
-            loop {
-                std::io::stdin().read_line(&mut input)?;
-                thread::sleep(Duration::from_millis(1000));
-                sock.write(input.trim().as_bytes()).unwrap();
 
-                if input == "exit\n" {
-                    std::process::exit(0);
+            for _ in 0..MAX_CONNECTIONS {
+                std::thread::sleep(Duration::from_millis(1500));
+                let mut sock = UnixStream::connect(sock_path)?;
+                loop {
+                    input.truncate(0);
+                    std::io::stdin().read_line(&mut input)?;
+                    sock.write(input.trim().as_bytes()).unwrap();
+
+                    if input == "exit\n" {
+                        break;
+                    }
                 }
-
-                input.truncate(0);
             }
         }
         Ok(ForkResult::Parent { child }) => {
             // parent receives data
             println!("{} - In parent {}", std::process::id(), child);
             let listener = UnixListener::bind(sock_path)?;
-            let (mut sock, _) = listener.accept()?;
             let mut buf: [u8; 256] = [0; 256];
-            loop {
-                if let Ok(bytes) = sock.read(&mut buf) {
-                    if bytes == 0 {
-                        sock = listener.accept()?.0;
-                        continue;
-                    }
-                    let contents = String::from_utf8(buf[..bytes].into()).unwrap();
-                    if contents == "exit" {
-                        break;
+            for i in 0..MAX_CONNECTIONS {
+                println!("Server conn {i}");
+                let (mut sock, _) = listener.accept()?;
+                loop {
+                    if let Ok(bytes) = sock.read(&mut buf) {
+                        if bytes == 0 {
+                            continue;
+                        }
+                        let contents = String::from_utf8(buf[..bytes].into()).unwrap();
+                        if contents == "exit" {
+                            break;
+                        } else {
+                            println!("received: {}", contents);
+                        }
                     } else {
-                        println!("received: {}", contents);
+                        sock = listener.accept()?.0;
                     }
-                } else {
-                    sock = listener.accept()?.0;
                 }
             }
             wait::waitpid(child, None)?;
+            std::fs::remove_file(sock_path).unwrap();
         }
         _ => {}
     }
-    std::fs::remove_file(sock_path).unwrap();
     Ok(())
 }

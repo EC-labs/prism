@@ -333,3 +333,29 @@ int BPF_KPROBE(unix_seqpacket_sendmsg_exit, ssize_t ret)
 {
     return vfs_acct_end();
 }
+
+SEC("kprobe/unix_accept")
+int BPF_KPROBE(unix_accept, struct socket *sock)
+{
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    return vfs_acct_start(f_inode, ACCEPT);
+}
+
+SEC("kretprobe/unix_accept")
+int BPF_KPROBE(unix_accept_exit, ssize_t ret)
+{
+    return vfs_acct_end();
+}
+
+SEC("kprobe/inet_accept")
+int BPF_KPROBE(inet_accept, struct socket *sock)
+{
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    return vfs_acct_start(f_inode, ACCEPT);
+}
+
+SEC("kretprobe/inet_accept")
+int BPF_KPROBE(inet_accept_exit, ssize_t ret)
+{
+    return vfs_acct_end();
+}
