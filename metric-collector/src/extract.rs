@@ -328,6 +328,7 @@ impl Extractor {
         let mut net_open_object = MaybeUninit::uninit();
         let mut net = Net::new(
             &mut net_open_object,
+            &conn,
             pid_map.as_fd(),
             vfs.skel.maps.samples.as_fd(),
             vfs.skel.maps.pending.as_fd(),

@@ -5,19 +5,23 @@ use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     libbpf_sys::{self, __u32, bpf_map_create},
     skel::{OpenSkel, Skel, SkelBuilder},
-    Link, MapCore, MapFlags, MapHandle, OpenObject,
+    Link, MapCore, MapFlags, MapHandle, OpenObject, RingBuffer, RingBufferBuilder,
 };
-use libc::{clock_gettime, timespec, CLOCK_MONOTONIC};
+use libc::{
+    clock_gettime, timespec, AF_INET, AF_INET6, AF_UNIX, CLOCK_MONOTONIC, SOCK_DGRAM,
+    SOCK_SEQPACKET, SOCK_STREAM,
+};
 use log::debug;
 use std::{
     collections::HashMap,
     ffi::{c_void, CStr},
     fmt::Debug,
     mem::MaybeUninit,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd},
     time::{Duration, SystemTime},
 };
-use types::{inflight_key, inflight_value, to_update_key};
+use types::{inflight_key, inflight_value, socket_context_value, to_update_key};
 
 mod net {
     include!(concat!(
@@ -30,6 +34,74 @@ use net::types::{granularity, stats};
 use net::*;
 const BATCH_SIZE: usize = 8192;
 const SAMPLES: u64 = 10;
+
+#[derive(Debug, Default)]
+struct SocketContext {
+    netns_cookie: u64,
+    inode_id: u64,
+    sk_family: u16,
+    sk_type: u16,
+    sk_protocol: u16,
+    src_addr: Option<IpAddr>,
+    src_port: Option<u16>,
+    dst_addr: Option<IpAddr>,
+    dst_port: Option<u16>,
+}
+
+impl TryFrom<&socket_context_value> for SocketContext {
+    type Error = ();
+    fn try_from(value: &socket_context_value) -> Result<Self, Self::Error> {
+        // let mut res = SocketContext::default();
+        let mut res = Self {
+            netns_cookie: value.netns_cookie,
+            inode_id: value.inode_id,
+            sk_family: value.family,
+            sk_type: value.sk_type,
+            sk_protocol: value.sk_protocol,
+            ..Default::default()
+        };
+        match value.family as i32 {
+            AF_INET => {
+                let src_addr = unsafe { u32::from_be(value.__anon_5.ipv4.src_addr) };
+                res.src_addr = Some(IpAddr::V4(Ipv4Addr::from(src_addr)));
+
+                let dst_addr = unsafe { u32::from_be(value.__anon_5.ipv4.dst_addr) };
+                res.dst_addr = Some(IpAddr::V4(Ipv4Addr::from(dst_addr)));
+
+                match value.sk_type as i32 {
+                    SOCK_STREAM | SOCK_DGRAM | SOCK_SEQPACKET => {
+                        res.src_port = Some(value.src_port);
+                        res.dst_port = Some(u16::from_be(value.dst_port));
+                    }
+                    _ => {}
+                }
+            }
+            AF_INET6 => {
+                let src_addr = unsafe { value.__anon_5.ipv6.src_addr };
+                let src_addr: u128 = unsafe { std::mem::transmute(src_addr) };
+                let src_addr = u128::from_be(src_addr);
+                res.src_addr = Some(IpAddr::V6(Ipv6Addr::from(src_addr)));
+
+                let dst_addr = unsafe { value.__anon_5.ipv6.dst_addr };
+                let dst_addr: u128 = unsafe { std::mem::transmute(dst_addr) };
+                let dst_addr = u128::from_be(dst_addr);
+                res.dst_addr = Some(IpAddr::V6(Ipv6Addr::from(dst_addr)));
+
+                match value.sk_type as i32 {
+                    SOCK_STREAM | SOCK_DGRAM | SOCK_SEQPACKET => {
+                        res.src_port = Some(value.src_port);
+                        res.dst_port = Some(u16::from_be(value.dst_port));
+                    }
+                    _ => {}
+                }
+            }
+            AF_UNIX => {}
+            _ => return Err(()),
+        }
+
+        Ok(res)
+    }
+}
 
 fn bump_memlock_rlimit() -> Result<()> {
     let rlimit = libc::rlimit {
@@ -131,6 +203,7 @@ fn bump_memlock_rlimit() -> Result<()> {
 
 pub struct Net<'obj> {
     skel: NetSkel<'obj>,
+    rb: RingBuffer<'obj>,
     // appender: Appender<'conn>,
     // staging_appender: Appender<'conn>,
     // conn: &'conn Connection,
@@ -138,13 +211,18 @@ pub struct Net<'obj> {
 }
 
 impl<'obj> Net<'obj> {
-    pub fn new(
+    pub fn new<'conn>(
         open_object: &'obj mut MaybeUninit<OpenObject>,
+        conn: &'conn Connection,
         pid_map: BorrowedFd,
         samples_map: BorrowedFd,
         pending_map: BorrowedFd,
         to_update_map: BorrowedFd,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        'conn: 'obj,
+    {
+        Self::init_store(conn)?;
         let skel_builder = NetSkelBuilder::default();
 
         bump_memlock_rlimit()?;
@@ -177,12 +255,21 @@ impl<'obj> Net<'obj> {
         //     )?;
         //     unsafe { libc::close(mapfd) };
         // }
+        let mut builder = RingBufferBuilder::new();
+        builder.add(
+            &skel.maps.rb,
+            wrapped_callback(
+                conn.appender("socket_context").unwrap(),
+                conn.appender("socket_inet").unwrap(),
+            ),
+        )?;
+        let rb = builder.build()?;
 
         skel.attach()?;
 
-        // Self::init_store(conn)?;
         Ok(Self {
             skel,
+            rb,
             // appender: conn.appender("vfs")?,
             // staging_appender: conn.appender("vfs_staging")?,
             // conn,
@@ -190,43 +277,28 @@ impl<'obj> Net<'obj> {
         })
     }
 
-    // fn init_store(conn: &Connection) -> Result<()> {
-    //     conn.execute_batch(
-    //         r"
-    //             CREATE OR REPLACE TABLE vfs (
-    //                 ts_s TIMESTAMP,
-    //                 pid UINTEGER,
-    //                 tid UINTEGER,
-    //                 fs_id VARCHAR,
-    //                 device_id UINTEGER,
-    //                 inode_id UBIGINT,
-    //                 is_write UTINYINT,
-    //                 total_time UBIGINT,
-    //                 total_requests UINTEGER,
-    //                 hist0 UINTEGER,
-    //                 hist1 UINTEGER,
-    //                 hist2 UINTEGER,
-    //                 hist3 UINTEGER,
-    //                 hist4 UINTEGER,
-    //                 hist5 UINTEGER,
-    //                 hist6 UINTEGER,
-    //                 hist7 UINTEGER,
-    //             );
+    fn init_store(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            r"
+                CREATE OR REPLACE TABLE socket_context (
+                    socket_inode_id UBIGINT,
+                    family          USMALLINT, 
+                    type            USMALLINT, 
+                    protocol        USMALLINT, 
+                );
 
-    //             CREATE OR REPLACE TEMP TABLE vfs_staging (
-    //                 ts_s TIMESTAMP,
-    //                 pid UINTEGER,
-    //                 tid UINTEGER,
-    //                 fs_id VARCHAR,
-    //                 device_id UINTEGER,
-    //                 inode_id UBIGINT,
-    //                 is_write UTINYINT,
-    //                 additional_time UBIGINT,
-    //             )
-    //         ",
-    //     )?;
-    //     Ok(())
-    // }
+                CREATE OR REPLACE TABLE socket_inet (
+                    inode_id        UBIGINT,
+                    netns_cookie    UBIGINT,
+                    src_address     VARCHAR,
+                    src_port        USMALLINT, 
+                    dst_address     VARCHAR,
+                    dst_port        USMALLINT, 
+                );
+            ",
+        )?;
+        Ok(())
+    }
 
     // fn store_samples<'a, I: ExactSizeIterator<Item = (&'a granularity, &'a stats)>>(
     //     &mut self,
@@ -494,6 +566,7 @@ impl<'obj> Net<'obj> {
     // }
 
     pub fn sample(&mut self) -> Result<()> {
+        self.rb.consume()?;
         // let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         // unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
         // let (keys, values) = self.read_samples(&ts);
@@ -534,4 +607,83 @@ impl<'obj> Net<'obj> {
 
         Ok(())
     }
+}
+
+fn wrapped_callback<'conn>(
+    mut socket_context_appender: Appender<'conn>,
+    mut socket_inet_appender: Appender<'conn>,
+) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
+    let cb = move |data: &[u8]| {
+        let data: &[u8; size_of::<socket_context_value>()] = &data
+            [..size_of::<socket_context_value>()]
+            .try_into()
+            .unwrap();
+        let socket_context: &socket_context_value = unsafe { std::mem::transmute(data) };
+        let Ok(context) = SocketContext::try_from(socket_context) else {
+            return 0;
+        };
+
+        println!("{:?}", context);
+        socket_context_appender
+            .append_row([
+                &context.inode_id as &dyn ToSql,
+                &context.sk_family,
+                &context.sk_type,
+                &context.sk_protocol,
+            ])
+            .unwrap();
+        match (context.src_addr, context.dst_addr) {
+            (Some(IpAddr::V4(src_addr)), Some(IpAddr::V4(dst_addr))) => {
+                socket_inet_appender
+                    .append_row([
+                        &context.inode_id as &dyn ToSql,
+                        &context.netns_cookie as &dyn ToSql,
+                        &src_addr.to_string(),
+                        &context.src_port.unwrap_or(0),
+                        &dst_addr.to_string(),
+                        &context.dst_port.unwrap_or(0),
+                    ])
+                    .unwrap();
+            }
+            (Some(IpAddr::V4(src_addr)), None) => {
+                socket_inet_appender
+                    .append_row([
+                        &context.inode_id as &dyn ToSql,
+                        &context.netns_cookie as &dyn ToSql,
+                        &src_addr.to_string(),
+                        &context.src_port.unwrap_or(0),
+                        &Ipv4Addr::from(0).to_string() as &dyn ToSql,
+                        &context.dst_port.unwrap_or(0),
+                    ])
+                    .unwrap();
+            }
+            (Some(IpAddr::V6(src_addr)), Some(IpAddr::V6(dst_addr))) => {
+                socket_inet_appender
+                    .append_row([
+                        &context.inode_id as &dyn ToSql,
+                        &context.netns_cookie as &dyn ToSql,
+                        &src_addr.to_string(),
+                        &context.src_port.unwrap_or(0),
+                        &dst_addr.to_string(),
+                        &context.dst_port.unwrap_or(0),
+                    ])
+                    .unwrap();
+            }
+            (Some(IpAddr::V6(src_addr)), None) => {
+                socket_inet_appender
+                    .append_row([
+                        &context.inode_id as &dyn ToSql,
+                        &context.netns_cookie as &dyn ToSql,
+                        &src_addr.to_string(),
+                        &context.src_port.unwrap_or(0),
+                        &Ipv4Addr::from(0).to_string() as &dyn ToSql,
+                        &context.dst_port.unwrap_or(0),
+                    ])
+                    .unwrap();
+            }
+            _ => {}
+        }
+        0
+    };
+    cb
 }

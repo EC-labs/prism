@@ -12,25 +12,15 @@
 #define WRITE 1
 #define ACCEPT 2
 
-#define S_IFMT  00170000
-#define S_IFSOCK 0140000
-#define S_IFLNK	 0120000
-#define S_IFREG  0100000
-#define S_IFBLK  0060000
-#define S_IFDIR  0040000
-#define S_IFCHR  0020000
-#define S_IFIFO  0010000
-#define S_ISUID  0004000
-#define S_ISGID  0002000
-#define S_ISVTX  0001000
+#define AF_INET  2
+#define AF_INET6 10
+#define AF_UNIX  1
 
 struct bri {
 	__u8 s_id[32];
 	__u64 i_ino;
 	__u32 i_rdev;
 };
-
-
 
 struct inflight_key {
 	__u64 tgid_pid;
@@ -60,6 +50,27 @@ struct to_update_key {
 	__u64 ts;
 	struct granularity granularity;
 };
+
+struct socket_context_value {
+    __u64 inode_id;
+    __u64 netns_cookie;
+    __u16 family;
+    __u16 sk_type;
+    __u16 sk_protocol;
+    union {
+        struct {
+            __be32 src_addr; 
+            __be32 dst_addr; 
+        } ipv4;
+        struct {
+            struct in6_addr src_addr;
+            struct in6_addr dst_addr;
+        } ipv6;
+    };
+    __u16 src_port; 
+    __be16 dst_port; 
+};
+
 
 
 #endif /* __NET_H */
