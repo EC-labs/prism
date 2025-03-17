@@ -51,9 +51,31 @@ struct {
 } socket_context SEC(".maps");
 
 struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, MAX_ENTRIES * 2);
+    __type(key, u64[2]);
+    __type(value, bool);
+} socket_socket_map SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, sizeof(struct socket_context_value) * 8192);
 } rb SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, sizeof(u64[2]));
+} socket_socket_rb SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, MAX_ENTRIES);
+    __type(key, u64);
+    __type(value, struct internal_disc);
+} pending_skb SEC(".maps");
+
+static int zero = 0;
+static bool truth = true;
 
 inline u32 pid(u64 tgid_pid) {
     return tgid_pid & (((u64) 1<<32) - 1);
@@ -130,9 +152,9 @@ __always_inline int vfs_acct_start(struct inode *f_inode, u8 dir) {
     value.ts = bpf_ktime_get_ns();
     value.is_write = dir;
     bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
-    bpf_printk("acct_st: %u %u %s %u %llu %c => %lld", 
-           tgid, pid(key.tgid_pid), value.bri.s_id,
-           value.bri.i_rdev, value.bri.i_ino, value.is_write == READ ? 'R' : 'W', value.ts);
+    // bpf_printk("acct_st: %u %u %s %u %llu %c => %lld", 
+    //        tgid, pid(key.tgid_pid), value.bri.s_id,
+    //        value.bri.i_rdev, value.bri.i_ino, value.is_write == READ ? 'R' : 'W', value.ts);
     return 0;
 }
 
@@ -178,9 +200,9 @@ __always_inline int vfs_acct_end() {
 
     to_update_acct(value->ts, ts, gran);
     
-    bpf_printk("acct_en: %d %d %s %d %lld %c => %lld %lld", 
-           gran.tgid, gran.pid, gran.bri.s_id,
-           gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts, ts - value->ts);
+    // bpf_printk("acct_en: %d %d %s %d %lld %c => %lld %lld", 
+    //        gran.tgid, gran.pid, gran.bri.s_id,
+    //        gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts, ts - value->ts);
     bpf_map_delete_elem(&pending, &tgid_pid);
     return 0;
 }
@@ -231,24 +253,87 @@ __always_inline int store_socket_context(struct socket *sock, struct inode *f_in
     return 0;
 }
 
-__always_inline bool track() {
+__always_inline bool track(struct inode *f_inode) {
     u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
     u32 tgid = (u32) (tgid_pid >> 32);
-
     bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
-    if (pidp == NULL) {
-        return false;
+
+    if (pidp) 
+        return true;
+
+    u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
+    struct socket_context_value *sockp = bpf_map_lookup_elem(&socket_context, &inode_id);
+    if (sockp && !pidp) {
+        bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
+        bpf_printk("[net] discovered %u %llu", tgid, sockp->inode_id);
+        return true;
     }
-    return true;
+
+    return false;
+}
+
+__always_inline int map_sockets(u64 send_inode_id, u64 recv_inode_id) 
+{
+    u64 *event = bpf_ringbuf_reserve(&socket_socket_rb, sizeof(u64)*2, 0);
+    if (!event)
+        return -1;
+    event[0] = send_inode_id;
+    event[1] = recv_inode_id;
+	bpf_ringbuf_submit(event, 0);
+    u64 socket_socket1[2] = { send_inode_id, recv_inode_id };
+    u64 socket_socket2[2] = { recv_inode_id, send_inode_id };
+    bpf_map_update_elem(&socket_socket_map, &socket_socket1, &truth, BPF_ANY);
+    bpf_map_update_elem(&socket_socket_map, &socket_socket2, &truth, BPF_ANY);
+    return 0;
+}
+
+__always_inline int internal_discovery(struct sock *sk, struct sk_buff *skb) 
+{
+    void *head = BPF_CORE_READ(skb, head);
+    struct internal_disc *v = bpf_map_lookup_elem(&pending_skb, &head);
+    if (v == NULL) {
+        return 0;
+    }
+
+    u64 recv_inode_id = BPF_CORE_READ(sk, sk_socket, file, f_inode, i_ino);
+    if (!recv_inode_id || !v->inode_id) {
+        return 0;
+    }
+
+    u64 socket_socket[2] = { v->inode_id, recv_inode_id };
+
+    // If this socket has already been mapped we can return early
+    bool *connected = bpf_map_lookup_elem(&socket_socket_map, &socket_socket);
+    if (connected) {
+        return 0;
+    } else {
+        map_sockets(v->inode_id, recv_inode_id);
+    }
+
+    struct socket_context_value *recv = bpf_map_lookup_elem(&socket_context, &recv_inode_id);
+    struct socket_context_value *send = bpf_map_lookup_elem(&socket_context, &v->inode_id);
+
+    if (recv && !send) {
+        struct sock *sk = v->sk;
+        struct socket *sock = BPF_CORE_READ(sk, sk_socket);
+        struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+        store_socket_context(sock, f_inode);
+    } else if (send && !recv) {
+        struct socket *sock = BPF_CORE_READ(sk, sk_socket);
+        struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+        store_socket_context(sock, f_inode);
+    }
+
+    return 0;
 }
 
 SEC("kprobe/inet_recvmsg")
 int BPF_KPROBE(inet_recvmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, READ);
 }
@@ -263,10 +348,10 @@ int BPF_KRETPROBE(inet_recvmsg_exit, ssize_t ret)
 SEC("kprobe/inet_sendmsg")
 int BPF_KPROBE(inet_sendmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, (u8) WRITE);
 }
@@ -280,10 +365,10 @@ int BPF_KRETPROBE(inet_sendmsg_exit, ssize_t ret)
 SEC("kprobe/inet6_recvmsg")
 int BPF_KPROBE(inet6_recvmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, READ);
 }
@@ -298,10 +383,10 @@ int BPF_KRETPROBE(inet6_recvmsg_exit, ssize_t ret)
 SEC("kprobe/inet6_sendmsg")
 int BPF_KPROBE(inet6_sendmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, (u8) WRITE);
 }
@@ -316,10 +401,10 @@ int BPF_KRETPROBE(inet6_sendmsg_exit, ssize_t ret)
 SEC("kprobe/sock_splice_read")
 int BPF_KPROBE(sock_splice_read, struct file *f)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(f, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(f, f_inode);
     struct socket *sock = BPF_CORE_READ(f, private_data);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, READ);
@@ -334,10 +419,10 @@ int BPF_KRETPROBE(sock_splice_read_exit, ssize_t ret)
 SEC("kprobe/splice_to_socket")
 int BPF_KPROBE(splice_to_socket, struct pipe_inode_info *pipe, struct file *f)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(f, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(f, f_inode);
     struct socket *sock = BPF_CORE_READ(f, private_data);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, WRITE);
@@ -352,10 +437,10 @@ int BPF_KRETPROBE(splice_to_socket_exit, ssize_t ret)
 SEC("kprobe/unix_stream_recvmsg")
 int BPF_KPROBE(unix_stream_recvmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, READ);
 }
@@ -369,10 +454,10 @@ int BPF_KPROBE(unix_stream_recvmsg_exit, ssize_t ret)
 SEC("kprobe/unix_stream_sendmsg")
 int BPF_KPROBE(unix_stream_sendmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, WRITE);
 }
@@ -386,10 +471,10 @@ int BPF_KPROBE(unix_stream_sendmsg_exit, ssize_t ret)
 SEC("kprobe/unix_dgram_recvmsg")
 int BPF_KPROBE(unix_dgram_recvmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, READ);
 }
@@ -403,10 +488,10 @@ int BPF_KPROBE(unix_dgram_recvmsg_exit, ssize_t ret)
 SEC("kprobe/unix_dgram_sendmsg")
 int BPF_KPROBE(unix_dgram_sendmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, WRITE);
 }
@@ -420,10 +505,10 @@ int BPF_KPROBE(unix_dgram_sendmsg_exit, ssize_t ret)
 SEC("kprobe/unix_seqpacket_recvmsg")
 int BPF_KPROBE(unix_seqpacket_recvmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, READ);
 }
@@ -437,10 +522,10 @@ int BPF_KPROBE(unix_seqpacket_recvmsg_exit, ssize_t ret)
 SEC("kprobe/unix_seqpacket_sendmsg")
 int BPF_KPROBE(unix_seqpacket_sendmsg, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, WRITE);
 }
@@ -454,10 +539,10 @@ int BPF_KPROBE(unix_seqpacket_sendmsg_exit, ssize_t ret)
 SEC("kprobe/unix_accept")
 int BPF_KPROBE(unix_accept, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, ACCEPT);
 }
@@ -471,10 +556,10 @@ int BPF_KPROBE(unix_accept_exit, ssize_t ret)
 SEC("kprobe/inet_accept")
 int BPF_KPROBE(inet_accept, struct socket *sock)
 {
-    if (!track())
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
         return 0;
 
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     store_socket_context(sock, f_inode);
     return vfs_acct_start(f_inode, ACCEPT);
 }
@@ -483,4 +568,46 @@ SEC("kretprobe/inet_accept")
 int BPF_KPROBE(inet_accept_exit, ssize_t ret)
 {
     return vfs_acct_end();
+}
+
+SEC("kprobe/__dev_queue_xmit")
+int BPF_KPROBE(__dev_queue_xmit, struct sk_buff *skb) 
+{
+    struct internal_disc v = {0};
+    v.sk = BPF_CORE_READ(skb, sk);
+    v.inode_id = BPF_CORE_READ(skb, sk, sk_socket, file, f_inode, i_ino);
+    v.head = BPF_CORE_READ(skb, head);
+
+    bpf_map_update_elem(&pending_skb, &v.head, &v, BPF_ANY);
+    return 0;
+}
+
+SEC("kprobe/tcp_data_queue")
+int BPF_KPROBE(tcp_data_queue, struct sock *sk, struct sk_buff *skb) 
+{
+    return internal_discovery(sk, skb);
+}
+
+SEC("kprobe/__udp_enqueue_schedule_skb")
+int BPF_KPROBE(__udp_enqueue_schedule_skb, struct sock *sk, struct sk_buff *skb) 
+{
+    return internal_discovery(sk, skb);
+}
+
+SEC("kprobe/kfree_skb_partial") 
+int BPF_KPROBE(kfree_skb_partial, struct sk_buff *skb) 
+{
+    void *head = BPF_CORE_READ(skb, head);
+    // bpf_printk("kfree_skb_partial: %p", head);
+    bpf_map_delete_elem(&pending_skb, &head);
+    return 0;
+}
+
+SEC("kprobe/skb_free_head") 
+int BPF_KPROBE(skb_free_head, struct sk_buff *skb) 
+{
+    void *head = BPF_CORE_READ(skb, head);
+    // bpf_printk("skb_free_head: %p", head);
+    bpf_map_delete_elem(&pending_skb, &head);
+    return 0;
 }

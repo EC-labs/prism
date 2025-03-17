@@ -204,6 +204,7 @@ fn bump_memlock_rlimit() -> Result<()> {
 pub struct Net<'obj> {
     skel: NetSkel<'obj>,
     rb: RingBuffer<'obj>,
+    socket_socket_rb: RingBuffer<'obj>,
     // appender: Appender<'conn>,
     // staging_appender: Appender<'conn>,
     // conn: &'conn Connection,
@@ -265,11 +266,19 @@ impl<'obj> Net<'obj> {
         )?;
         let rb = builder.build()?;
 
+        let mut builder = RingBufferBuilder::new();
+        builder.add(
+            &skel.maps.socket_socket_rb,
+            socket_socket_callback(conn.appender("socket_map").unwrap()),
+        )?;
+        let socket_socket_rb = builder.build()?;
+
         skel.attach()?;
 
         Ok(Self {
             skel,
             rb,
+            socket_socket_rb,
             // appender: conn.appender("vfs")?,
             // staging_appender: conn.appender("vfs_staging")?,
             // conn,
@@ -281,7 +290,7 @@ impl<'obj> Net<'obj> {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE socket_context (
-                    socket_inode_id UBIGINT,
+                    inode_id UBIGINT,
                     family          USMALLINT, 
                     type            USMALLINT, 
                     protocol        USMALLINT, 
@@ -294,6 +303,11 @@ impl<'obj> Net<'obj> {
                     src_port        USMALLINT, 
                     dst_address     VARCHAR,
                     dst_port        USMALLINT, 
+                );
+
+                CREATE OR REPLACE TABLE socket_map (
+                    sock1_inode_id UBIGINT,
+                    sock2_inode_id UBIGINT,
                 );
             ",
         )?;
@@ -567,6 +581,7 @@ impl<'obj> Net<'obj> {
 
     pub fn sample(&mut self) -> Result<()> {
         self.rb.consume()?;
+        self.socket_socket_rb.consume()?;
         // let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         // unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
         // let (keys, values) = self.read_samples(&ts);
@@ -609,11 +624,24 @@ impl<'obj> Net<'obj> {
     }
 }
 
+fn socket_socket_callback<'conn>(
+    mut socket_socket_appender: Appender<'conn>,
+) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
+    move |data: &[u8]| {
+        let data: &[u8; size_of::<[u64; 2]>()] = &data[..size_of::<[u64; 2]>()].try_into().unwrap();
+        let data: &[u64; 2] = unsafe { std::mem::transmute::<_, _>(data) };
+        let (sock1, sock2) = (data[0], data[1]);
+        socket_socket_appender.append_row([sock1, sock2]).unwrap();
+        socket_socket_appender.append_row([sock2, sock1]).unwrap();
+        0
+    }
+}
+
 fn wrapped_callback<'conn>(
     mut socket_context_appender: Appender<'conn>,
     mut socket_inet_appender: Appender<'conn>,
 ) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
-    let cb = move |data: &[u8]| {
+    move |data: &[u8]| {
         let data: &[u8; size_of::<socket_context_value>()] = &data
             [..size_of::<socket_context_value>()]
             .try_into()
@@ -623,7 +651,6 @@ fn wrapped_callback<'conn>(
             return 0;
         };
 
-        println!("{:?}", context);
         socket_context_appender
             .append_row([
                 &context.inode_id as &dyn ToSql,
@@ -684,6 +711,5 @@ fn wrapped_callback<'conn>(
             _ => {}
         }
         0
-    };
-    cb
+    }
 }

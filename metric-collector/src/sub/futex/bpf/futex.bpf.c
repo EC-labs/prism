@@ -143,7 +143,7 @@ int BPF_KRETPROBE(get_futex_key_exit, int ret)
         //            deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);
     } else if ((value == NULL) && (key_present != NULL)) {
         bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
-        // bpf_printk("discovered tgid: %u", tgid);
+        bpf_printk("[futex] discovered tgid: %u %llu %llu %u", tgid, deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);
         return 0;
     }
 
@@ -177,7 +177,7 @@ int futex_enter(struct trace_event_raw_sys_enter *ctx) {
     } else if ((op == FUTEX_WAKE) || (op == FUTEX_WAKE_BITSET)) {
         v.op = FUTEX_WAKE;
     } else {
-        bpf_printk("%-15s\t%d\n", "UnhandledOpcode", op);
+        bpf_printk("%-15s\t%d", "UnhandledOpcode", op);
         return -1;
     }
 

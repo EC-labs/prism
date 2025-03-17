@@ -117,6 +117,7 @@ int BPF_KPROBE(vfs_read, struct file *file)
 
         if (pidp == NULL) {
             bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
+            bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.s_id, file.i_rdev, file.i_ino);
         }
 
         struct inflight_key key = {
@@ -127,9 +128,9 @@ int BPF_KPROBE(vfs_read, struct file *file)
         value.ts = bpf_ktime_get_ns();
         value.is_write = READ;
         bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
-        bpf_printk("st: %d %d %s %d %lld %c => %lld", 
-               tgid, pid(key.tgid_pid), value.bri.s_id,
-               value.bri.i_rdev, value.bri.i_ino, value.is_write == READ ? 'R' : 'W', value.ts);
+        // bpf_printk("st: %d %d %s %d %lld %c => %lld", 
+        //        tgid, pid(key.tgid_pid), value.bri.s_id,
+        //        value.bri.i_rdev, value.bri.i_ino, value.is_write == READ ? 'R' : 'W', value.ts);
     }
     return 0;
 }
@@ -192,9 +193,9 @@ int BPF_KRETPROBE(vfs_read_exit, ssize_t ret)
 
     to_update_acct(value->ts, ts, gran);
     
-    bpf_printk("en: %d %d %s %d %lld %c => %lld %lld", 
-           gran.tgid, gran.pid, gran.bri.s_id,
-           gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts, ts - value->ts);
+    // bpf_printk("en: %d %d %s %d %lld %c => %lld %lld", 
+    //        gran.tgid, gran.pid, gran.bri.s_id,
+    //        gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts, ts - value->ts);
     bpf_map_delete_elem(&pending, &tgid_pid);
     return 0;
 }
@@ -227,6 +228,7 @@ int BPF_KPROBE(vfs_write, struct file *file, char *buf, size_t count, loff_t *po
 
         if (pidp == NULL || *pidp == false) {
             bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
+            bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.s_id, file.i_rdev, file.i_ino);
         }
 
         struct inflight_key key = {

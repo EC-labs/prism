@@ -39,6 +39,14 @@ path = "src/sync-tcp/server.rs"
 name = "tcp-client"
 path = "src/sync-tcp/client.rs"
 
+[[bin]]
+name = "udp-server"
+path = "src/sync-udp/server.rs"
+
+[[bin]]
+name = "udp-client"
+path = "src/sync-udp/client.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"]}
 poem = "1.2"
