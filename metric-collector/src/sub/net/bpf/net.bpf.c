@@ -304,24 +304,22 @@ __always_inline int internal_discovery(struct sock *sk, struct sk_buff *skb)
 
     // If this socket has already been mapped we can return early
     bool *connected = bpf_map_lookup_elem(&socket_socket_map, &socket_socket);
-    if (connected) {
-        return 0;
-    } else {
-        map_sockets(v->inode_id, recv_inode_id);
-    }
-
     struct socket_context_value *recv = bpf_map_lookup_elem(&socket_context, &recv_inode_id);
     struct socket_context_value *send = bpf_map_lookup_elem(&socket_context, &v->inode_id);
-
-    if (recv && !send) {
-        struct sock *sk = v->sk;
-        struct socket *sock = BPF_CORE_READ(sk, sk_socket);
-        struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-        store_socket_context(sock, f_inode);
-    } else if (send && !recv) {
-        struct socket *sock = BPF_CORE_READ(sk, sk_socket);
-        struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-        store_socket_context(sock, f_inode);
+    if (!connected) {
+        if (recv) {
+            struct sock *sk = v->sk;
+            struct socket *sock = BPF_CORE_READ(sk, sk_socket);
+            struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+            store_socket_context(sock, f_inode);
+            map_sockets(v->inode_id, recv_inode_id);
+        }
+        else if (send) {
+            struct socket *sock = BPF_CORE_READ(sk, sk_socket);
+            struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+            store_socket_context(sock, f_inode);
+            map_sockets(v->inode_id, recv_inode_id);
+        }
     }
 
     return 0;
