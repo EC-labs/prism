@@ -336,7 +336,7 @@ impl Extractor {
         )
         .unwrap();
 
-        let mut muxio = Muxio::new(pid_map.as_fd()).unwrap();
+        let mut muxio = Muxio::new(pid_map.as_fd(), &conn).unwrap();
         // self.system_metrics.push(Box::new(IOWait::new(
         //     executor.io_wait.clone(),
         //     Some(self.config.data_directory.clone()),
