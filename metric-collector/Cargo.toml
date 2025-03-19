@@ -38,3 +38,5 @@ clap = { version = "4.0.32", default-features = false, features = ["std", "deriv
 duckdb = { version = "0.9.2" }
 log = "0.4.26"
 env_logger = "0.11.6"
+
+dashmap = "6.1.0"

@@ -1,0 +1,173 @@
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+/* Copyright (c) 2020 Facebook */
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+#include "muxio.h"
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, MAX_ENTRIES);
+    __type(key, u32);
+    __type(value, bool);
+} pids SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, MAX_ENTRIES);
+    __type(key, u64);
+    __type(value, bool);
+} in_muxio SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, sizeof(struct poll_register_file_event) * (1<<20) * 2); // (40 * (1<<20) * 2)
+} rb SEC(".maps");
+
+
+static __u32 zero = 0;
+static bool truth = true;
+
+inline u32 pid(u64 tgid_pid) {
+    return tgid_pid & (((u64) 1<<32) - 1);
+}
+
+inline u32 tgid(u64 tgid_pid) {
+    return tgid_pid >> 32;
+}
+
+__u32 log_base10_bucket(__u64 ns_diff) {
+    __u32 bucket = 7;
+    if(ns_diff <= 1000) {
+        bucket = 0;
+
+    } else if ( ns_diff <= 10000) {
+        bucket = 1;
+
+    } else if ( ns_diff <= 100000) {
+        bucket = 2;
+
+    } else if ( ns_diff <= 1000000) {
+        bucket = 3;
+
+    } else if ( ns_diff <= 10000000) {
+        bucket = 4;
+    } else if ( ns_diff <= 100000000) {
+        bucket = 5;
+    } else if ( ns_diff <= 1000000000) {
+        bucket = 6;
+    } else {
+        bucket = 7;
+    }
+    return bucket;
+}
+
+u64 min(u64 x, u64 y) {
+    return x < y ? x : y;
+}
+
+__always_inline bool track() {
+    u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
+    u32 tgid = (u32) (tgid_pid >> 32);
+    bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
+
+    if (pidp) 
+        return true;
+
+    return false;
+}
+
+SEC("fentry/do_sys_poll")\
+int BPF_PROG(do_sys_poll) 
+{
+    if (!track()) 
+        return 0;
+
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    struct poll_start_event event = {0};
+    event.event = POLL_START;
+    event.tgid_pid = tgid_pid;
+    event.ts = bpf_ktime_get_ns();
+    bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+    bpf_map_update_elem(&in_muxio, &tgid_pid, &truth, BPF_ANY);
+    return 0;
+}
+
+
+SEC("fexit/do_sys_poll")\
+int BPF_PROG(do_sys_poll_exit) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    bool *inmuxio = bpf_map_lookup_elem(&in_muxio, &tgid_pid);
+    if (!inmuxio)
+        return 0;
+
+    struct poll_end_event event = {0};
+    event.event = POLL_END;
+    event.tgid_pid = bpf_get_current_pid_tgid();
+    event.ts = bpf_ktime_get_ns();
+    bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+    bpf_map_delete_elem(&in_muxio, &tgid_pid);
+    return 0;
+}
+
+SEC("fentry/core_sys_select")\
+int BPF_PROG(core_sys_select) 
+{
+    if (!track()) 
+        return 0;
+
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    struct poll_start_event event = {0};
+    event.event = POLL_START;
+    event.tgid_pid = tgid_pid;
+    event.ts = bpf_ktime_get_ns();
+    bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+    bpf_map_update_elem(&in_muxio, &tgid_pid, &truth, BPF_ANY);
+    return 0;
+}
+
+SEC("fexit/core_sys_select")\
+int BPF_PROG(core_sys_select_exit) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    bool *inmuxio = bpf_map_lookup_elem(&in_muxio, &tgid_pid);
+    if (!inmuxio)
+        return 0;
+
+    struct poll_end_event event = {0};
+    event.event = POLL_END;
+    event.tgid_pid = bpf_get_current_pid_tgid();
+    event.ts = bpf_ktime_get_ns();
+    bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+    bpf_map_delete_elem(&in_muxio, &tgid_pid);
+    return 0;
+}
+
+SEC("fexit/__fdget")
+int BPF_PROG(__fdget, u32 fd, u64 word)
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    bool *inmuxio = bpf_map_lookup_elem(&in_muxio, &tgid_pid);
+    if (!inmuxio)
+        return 0;
+
+    u64 mask = ~3;
+    struct file *f = (struct file *) (word & mask);
+
+    struct poll_register_file_event event = {0};
+    event.event = POLL_REGISTER_FILE;
+    event.i_rdev = BPF_CORE_READ(f, f_inode, i_rdev);
+    event.magic = BPF_CORE_READ(f, f_inode, i_sb, s_magic);
+    event.i_ino = BPF_CORE_READ(f, f_inode, i_ino);
+    event.tgid_pid = tgid_pid;
+    event.ts = bpf_ktime_get_ns();
+    bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+
+    return 0;
+}
+

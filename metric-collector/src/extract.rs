@@ -17,9 +17,9 @@ use std::{
 
 use std::{env, mem::MaybeUninit};
 
-use crate::sub::futex::Futex;
 use crate::sub::vfs::Vfs;
 use crate::sub::{self, net::Net};
+use crate::sub::{futex::Futex, muxio::Muxio};
 use duckdb::Connection;
 use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, seteuid};
@@ -335,6 +335,8 @@ impl Extractor {
             vfs.skel.maps.to_update.as_fd(),
         )
         .unwrap();
+
+        let mut muxio = Muxio::new(pid_map.as_fd()).unwrap();
         // self.system_metrics.push(Box::new(IOWait::new(
         //     executor.io_wait.clone(),
         //     Some(self.config.data_directory.clone()),
@@ -356,6 +358,7 @@ impl Extractor {
             vfs.sample()?;
             futex.sample()?;
             net.sample()?;
+            muxio.sample()?;
             // self.sample_targets();
             // self.sample_system_metrics()?;
             // self.register_new_targets(&mut executor, time_sensitive_collector_tx.clone())?;
