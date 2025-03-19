@@ -6,10 +6,7 @@ use tokio::io::AsyncReadExt;
 
 #[handler]
 async fn hello() -> String {
-    let client = Client::new();
-    let req = client.get("http://localhost:7878/cpu");
-    let res = req.send().await.unwrap();
-    format!("{:?}", res.status())
+    format!("response")
 }
 
 async fn read_stdin() -> Result<(), std::io::Error> {
@@ -36,11 +33,11 @@ async fn main() -> Result<(), std::io::Error> {
     let app = Route::new().at("/api", get(hello)).with(Tracing);
     let mut handles = [
         tokio::spawn(
-            Server::new(TcpListener::bind("[::1]:3001"))
+            Server::new(TcpListener::bind("[::1]:3000"))
                 .name("hello-world")
                 .run(app),
         ),
-        tokio::spawn(read_stdin()),
+        // tokio::spawn(read_stdin()),
     ];
 
     for handle in handles.iter_mut() {
