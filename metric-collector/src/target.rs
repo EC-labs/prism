@@ -14,6 +14,7 @@ use crate::{
     },
 };
 use eyre::Result;
+use log::info;
 use regex::Regex;
 use std::{
     cell::RefCell,
@@ -27,7 +28,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug)]
@@ -195,20 +196,17 @@ impl TimeSensitive {
                     if *terminate_flag.lock().unwrap() == true {
                         break;
                     }
+                    let start = Instant::now();
                     while let Ok(collector) = collector_rx.try_recv() {
                         collectors.push(collector);
                     }
-                    println!(
-                        "{:?} - Start time sensitive collect",
-                        chrono::offset::Utc::now()
-                    );
                     for collector in collectors.iter_mut() {
                         collector.sample();
                         collector.store();
                     }
-                    println!(
-                        "{:?} - End time sensitive collect",
-                        chrono::offset::Utc::now()
+                    info!(
+                        "time sensitive loop duration: {}ms",
+                        start.elapsed().as_millis()
                     );
                 }
                 Ok(()) as Result<()>

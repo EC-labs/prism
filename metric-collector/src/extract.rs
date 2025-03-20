@@ -12,7 +12,7 @@ use std::{
         Arc, Mutex, RwLock,
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use std::{env, mem::MaybeUninit};
@@ -23,6 +23,7 @@ use crate::sub::{futex::Futex, muxio::Muxio};
 use duckdb::Connection;
 use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, seteuid};
+use log::info;
 
 use crate::{
     configure::Config,
@@ -355,11 +356,30 @@ impl Extractor {
                 break;
             }
 
+            let start = Instant::now();
             iowait.sample()?;
+            let iowait_elapsed = start.elapsed().as_nanos();
             vfs.sample()?;
+            let vfs_elapsed = start.elapsed().as_nanos();
+            let vfs_acct = vfs_elapsed - iowait_elapsed;
             futex.sample()?;
+            let futex_elapsed = start.elapsed().as_nanos();
+            let futex_acct = futex_elapsed - vfs_elapsed;
             net.sample()?;
+            let net_elapsed = start.elapsed().as_nanos();
+            let net_acct = net_elapsed - futex_elapsed;
             muxio.sample()?;
+            let muxio_elapsed = start.elapsed().as_nanos();
+            let muxio_acct = muxio_elapsed - net_elapsed;
+            info!(
+                "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] muxio[{}%]",
+                muxio_elapsed / 1_000_000,
+                iowait_elapsed * 100 / muxio_elapsed,
+                vfs_acct * 100 / muxio_elapsed,
+                futex_acct * 100 / muxio_elapsed,
+                net_acct * 100 / muxio_elapsed,
+                muxio_acct * 100 / muxio_elapsed,
+            );
 
             // self.sample_targets();
             // self.sample_system_metrics()?;
