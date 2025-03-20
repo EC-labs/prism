@@ -135,20 +135,13 @@ __always_inline int vfs_acct_start(struct inode *f_inode, u8 dir) {
     u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
     u32 tgid = (u32) (tgid_pid >> 32);
 
-    struct bri file = {
-        .s_id = {0},
-        .i_ino = 0,
-        .i_rdev = 0,
-    };
-    file.i_ino = BPF_CORE_READ(f_inode, i_ino);
-    file.i_rdev = BPF_CORE_READ(f_inode, i_rdev);
-    BPF_CORE_READ_INTO(&file.s_id, f_inode, i_sb, s_id);
-
     struct inflight_key key = {
         .tgid_pid = tgid_pid,
     };
-    struct inflight_value value = {0};
-    value.bri = file;
+    struct inflight_value value;
+    value.bri.i_ino = BPF_CORE_READ(f_inode, i_ino);
+    value.bri.i_rdev = 0;
+    value.bri.fs_magic = 0x534F434B;
     value.ts = bpf_ktime_get_ns();
     value.is_write = dir;
     bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
@@ -174,10 +167,8 @@ __always_inline int vfs_acct_end() {
     struct granularity gran = {0};
     gran.tgid = tgid(tgid_pid);
     gran.pid = pid(tgid_pid);
-    gran.bri.i_ino = value->bri.i_ino;
-    gran.bri.i_rdev = value->bri.i_rdev;
+    gran.bri = value->bri;
     gran.dir = value->is_write;
-    __builtin_memcpy(&gran.bri.s_id, &(*value).bri.s_id, sizeof(gran.bri.s_id));
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
     if (!stat) {
         struct stats init = {0};

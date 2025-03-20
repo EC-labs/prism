@@ -97,14 +97,11 @@ int BPF_PROG(vfs_read, struct file *file)
     if (((i_mode & S_IFMT) == S_IFIFO) || ((i_mode & S_IFMT) == S_IFCHR)) {
         u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
         u32 tgid = (u32) (tgid_pid >> 32);
-        struct bri file = {
-            .s_id = {0},
-            .i_ino = 0,
-            .i_rdev = 0,
-        };
+        struct bri file;
         file.i_ino = BPF_CORE_READ(f_inode, i_ino);
         file.i_rdev = BPF_CORE_READ(f_inode, i_rdev);
-        BPF_CORE_READ_INTO(&file.s_id, f_inode, i_sb, s_id);
+        file.fs_magic = BPF_CORE_READ(f_inode, i_sb, s_magic);
+        // BPF_CORE_READ_INTO(&file.s_id, f_inode, i_sb, s_id);
         bool truth = true;
         bool *filep = bpf_map_lookup_elem(&bris, &file);
         bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
@@ -116,7 +113,7 @@ int BPF_PROG(vfs_read, struct file *file)
 
         if (!pidp) {
             bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
-            bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.s_id, file.i_rdev, file.i_ino);
+            bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.fs_magic, file.i_rdev, file.i_ino);
         }
 
         struct inflight_key key = {
@@ -169,8 +166,9 @@ int BPF_PROG(vfs_read_exit, ssize_t ret)
     gran.pid = pid(tgid_pid);
     gran.bri.i_ino = value->bri.i_ino;
     gran.bri.i_rdev = value->bri.i_rdev;
+    gran.bri.fs_magic = value->bri.fs_magic;
     gran.dir = READ;
-    __builtin_memcpy(&gran.bri.s_id, &(*value).bri.s_id, sizeof(gran.bri.s_id));
+    // __builtin_memcpy(&gran.bri.s_id, &(*value).bri.s_id, sizeof(gran.bri.s_id));
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
     if (stat == NULL) {
         struct stats init = {0};
@@ -207,14 +205,11 @@ int BPF_PROG(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
     if (((i_mode & S_IFMT) == S_IFIFO) || ((i_mode & S_IFMT) == S_IFCHR)) {
         u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
         u32 tgid = (u32) (tgid_pid >> 32);
-        struct bri file = {
-            .s_id = {0},
-            .i_ino = 0,
-            .i_rdev = 0,
-        };
+        struct bri file;
         file.i_ino = BPF_CORE_READ(f_inode, i_ino);
         file.i_rdev = BPF_CORE_READ(f_inode, i_rdev);
-        BPF_CORE_READ_INTO(&file.s_id, f_inode, i_sb, s_id);
+        file.fs_magic = BPF_CORE_READ(f_inode, i_sb, s_magic);
+        // BPF_CORE_READ_INTO(&file.s_id, f_inode, i_sb, s_id);
         bool truth = true;
         bool *filep = bpf_map_lookup_elem(&bris, &file);
         bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
@@ -227,7 +222,7 @@ int BPF_PROG(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
 
         if (!pidp) {
             bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
-            bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.s_id, file.i_rdev, file.i_ino);
+            bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.fs_magic, file.i_rdev, file.i_ino);
         }
 
         struct inflight_key key = {
@@ -264,8 +259,9 @@ int BPF_PROG(vfs_write_exit, ssize_t ret)
     gran.pid = pid(tgid_pid);
     gran.bri.i_ino = value->bri.i_ino;
     gran.bri.i_rdev = value->bri.i_rdev;
+    gran.bri.fs_magic = value->bri.fs_magic;
     gran.dir = value->is_write;
-    __builtin_memcpy(&gran.bri.s_id, &(*value).bri.s_id, sizeof(gran.bri.s_id));
+    // __builtin_memcpy(&gran.bri.s_id, &(*value).bri.s_id, sizeof(gran.bri.s_id));
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
     if (stat == NULL) {
         struct stats init = {0};

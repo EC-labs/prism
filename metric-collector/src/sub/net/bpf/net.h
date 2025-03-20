@@ -17,9 +17,9 @@
 #define AF_UNIX  1
 
 struct bri {
-	__u8 s_id[32];
-	__u64 i_ino;
+	__u32 fs_magic;
 	__u32 i_rdev;
+	__u64 i_ino;
 };
 
 struct inflight_key {

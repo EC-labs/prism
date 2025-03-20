@@ -64,7 +64,7 @@ impl From<UpdatedKey> for to_update_key {
     fn from(value: UpdatedKey) -> Self {
         let mut key: to_update_key = unsafe { MaybeUninit::zeroed().assume_init() };
         key.ts = value.start;
-        key.granularity.bri.s_id.copy_from_slice(&value.bri.fs_id);
+        key.granularity.bri.fs_magic = value.bri.fs_magic;
         key.granularity.bri.i_ino = value.bri.i_ino;
         key.granularity.bri.i_rdev = value.bri.i_rdev;
         key.granularity.pid = value.tgid_pid as u32;
@@ -76,7 +76,7 @@ impl From<UpdatedKey> for to_update_key {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct Bri {
-    fs_id: [u8; 32],
+    fs_magic: u32,
     i_ino: u64,
     i_rdev: u32,
 }
@@ -103,7 +103,7 @@ impl From<(&to_update_key, &u64)> for UpdatedKey {
     fn from((key, _): (&to_update_key, &u64)) -> Self {
         Self {
             bri: Bri {
-                fs_id: key.granularity.bri.s_id,
+                fs_magic: key.granularity.bri.fs_magic,
                 i_ino: key.granularity.bri.i_ino,
                 i_rdev: key.granularity.bri.i_rdev,
             },
@@ -118,7 +118,7 @@ impl From<(&inflight_key, &inflight_value)> for UpdatedKey {
     fn from((key, value): (&inflight_key, &inflight_value)) -> Self {
         Self {
             bri: Bri {
-                fs_id: value.bri.s_id,
+                fs_magic: value.bri.fs_magic,
                 i_ino: value.bri.i_ino,
                 i_rdev: value.bri.i_rdev,
             },
@@ -192,7 +192,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
-                    fs_id VARCHAR,
+                    fs_id UINTEGER,
                     device_id UINTEGER,
                     inode_id UBIGINT,
                     is_write UTINYINT,
@@ -212,7 +212,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
-                    fs_id VARCHAR,
+                    fs_id UINTEGER,
                     device_id UINTEGER,
                     inode_id UBIGINT,
                     is_write UTINYINT,
@@ -235,13 +235,13 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         debug!("Store {} records", records.len());
         let records = records.map(|(granularity, stats)| {
             let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
-            let fs_id = unsafe { CStr::from_ptr(granularity.bri.s_id.as_ptr() as *const i8) };
-            let fs_id = fs_id.to_str().unwrap();
+            // let fs_id = unsafe { CStr::from_ptr(granularity.bri.s_id.as_ptr() as *const i8) };
+            // let fs_id = fs_id.to_str().unwrap();
             [
                 Box::new(Duration::from_nanos(ts_s)) as Box<dyn ToSql>,
                 Box::new(&granularity.tgid),
                 Box::new(&granularity.pid),
-                Box::new(fs_id),
+                Box::new(&granularity.bri.fs_magic),
                 Box::new(&granularity.bri.i_rdev),
                 Box::new(&granularity.bri.i_ino),
                 Box::new(&granularity.dir),
@@ -274,13 +274,13 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         debug!("Stage {} records", records.len());
         let records = records.map(|record| {
             let ts_s = crate::extract::boot_to_epoch(record.ts_s * 1_000_000_000);
-            let fs_id = unsafe { CStr::from_ptr(record.bri.fs_id.as_ptr() as *const i8) };
-            let fs_id = fs_id.to_str().unwrap();
+            // let fs_id = unsafe { CStr::from_ptr(record.bri.fs_id.as_ptr() as *const i8) };
+            // let fs_id = fs_id.to_str().unwrap();
             [
                 Box::new(Duration::from_nanos(ts_s)) as Box<dyn ToSql>,
                 Box::new(&record.pid),
                 Box::new(&record.tid),
-                Box::new(fs_id),
+                Box::new(&record.bri.fs_magic),
                 Box::new(&record.bri.i_rdev),
                 Box::new(&record.bri.i_ino),
                 Box::new(&record.is_write),
