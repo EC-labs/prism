@@ -352,6 +352,7 @@ impl Extractor {
         let rx_timer = self.rx_timer.take().unwrap();
         loop {
             rx_timer.recv().unwrap();
+            while let Ok(_) = rx_timer.try_recv() {}
             if *self.terminate_flag.lock().unwrap() == true {
                 break;
             }

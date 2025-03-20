@@ -192,7 +192,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
-                    fs_id UINTEGER,
+                    fs_magic UINTEGER,
                     device_id UINTEGER,
                     inode_id UBIGINT,
                     is_write UTINYINT,
@@ -212,7 +212,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
-                    fs_id UINTEGER,
+                    fs_magic UINTEGER,
                     device_id UINTEGER,
                     inode_id UBIGINT,
                     is_write UTINYINT,
@@ -235,8 +235,6 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         debug!("Store {} records", records.len());
         let records = records.map(|(granularity, stats)| {
             let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
-            // let fs_id = unsafe { CStr::from_ptr(granularity.bri.s_id.as_ptr() as *const i8) };
-            // let fs_id = fs_id.to_str().unwrap();
             [
                 Box::new(Duration::from_nanos(ts_s)) as Box<dyn ToSql>,
                 Box::new(&granularity.tgid),
@@ -274,8 +272,6 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         debug!("Stage {} records", records.len());
         let records = records.map(|record| {
             let ts_s = crate::extract::boot_to_epoch(record.ts_s * 1_000_000_000);
-            // let fs_id = unsafe { CStr::from_ptr(record.bri.fs_id.as_ptr() as *const i8) };
-            // let fs_id = fs_id.to_str().unwrap();
             [
                 Box::new(Duration::from_nanos(ts_s)) as Box<dyn ToSql>,
                 Box::new(&record.pid),
@@ -305,17 +301,17 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 v.ts_s = vs.ts_s
                 AND v.pid = vs.pid
                 AND v.tid = vs.tid
-                AND v.fs_id = vs.fs_id
+                AND v.fs_magic = vs.fs_magic
                 AND v.device_id = vs.device_id
                 AND v.inode_id = vs.inode_id
                 AND v.is_write = vs.is_write;
 
-            INSERT INTO vfs (ts_s, pid, tid, fs_id, device_id, inode_id, is_write, total_time)
+            INSERT INTO vfs (ts_s, pid, tid, fs_magic, device_id, inode_id, is_write, total_time)
                 SELECT 
                     vs.*
                 FROM vfs_staging as vs
                 LEFT JOIN vfs as v
-                    USING (ts_s, pid, tid, fs_id, device_id, inode_id, is_write)
+                    USING (ts_s, pid, tid, fs_magic, device_id, inode_id, is_write)
                 WHERE 
                     v.ts_s IS NULL;
 
