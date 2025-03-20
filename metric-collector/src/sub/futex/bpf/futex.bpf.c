@@ -107,8 +107,8 @@ u64 min(u64 x, u64 y) {
     return x < y ? x : y;
 }
 
-SEC("kprobe/get_futex_key")
-int BPF_KPROBE(get_futex_key, u32 *uaddr, unsigned int flags, union futex_key *key, enum futex_access rw)
+SEC("fentry/get_futex_key")
+int BPF_PROG(get_futex_key, u32 *uaddr, unsigned int flags, union futex_key *key, enum futex_access rw)
 {
     u64 *tgid_pid = bpf_map_lookup_elem(&current_tgid_pid, &zero);
     if (tgid_pid == NULL) {
@@ -121,13 +121,12 @@ int BPF_KPROBE(get_futex_key, u32 *uaddr, unsigned int flags, union futex_key *k
 }
 
 
-SEC("kretprobe/get_futex_key")
-int BPF_KRETPROBE(get_futex_key_exit, int ret)
+SEC("fexit/get_futex_key")
+int BPF_PROG(get_futex_key_exit, int ret)
 {
     struct futex_key_struct **fkey = bpf_map_lookup_elem(&current_key, &zero);
-    if (fkey == NULL) {
-        return -1;
-    }
+    if (!fkey)
+        return 0;
 
     u64 tgid_pid = bpf_get_current_pid_tgid();
     u32 tgid = (u32) (tgid_pid >> 32);
@@ -162,9 +161,8 @@ int futex_enter(struct trace_event_raw_sys_enter *ctx) {
     u32 tgid = (u32) (tgid_pid >> 32);
 
     bool *tgid_present = bpf_map_lookup_elem(&pids, &tgid);
-    if (tgid_present == NULL) {
-        return -1;
-    }
+    if (!tgid_present)
+        return 0;
 
     struct inflight_value v = {0};
     v.ts = bpf_ktime_get_ns();
@@ -178,7 +176,7 @@ int futex_enter(struct trace_event_raw_sys_enter *ctx) {
         v.op = FUTEX_WAKE;
     } else {
         bpf_printk("%-15s\t%d", "UnhandledOpcode", op);
-        return -1;
+        return 0;
     }
 
     bpf_map_update_elem(&pending, &tgid_pid, &v, BPF_ANY);
@@ -210,9 +208,8 @@ int futex_exit(struct trace_event_raw_sys_enter *ctx) {
     u64 ts = bpf_ktime_get_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     struct inner *inner = bpf_map_lookup_elem(&samples, &sample);
-    if (inner == NULL) {
-        return -1;
-    }
+    if (!inner)
+        return 0;
 
     struct granularity gran = {0};
     gran.tgid = tgid(tgid_pid);
@@ -227,9 +224,8 @@ int futex_exit(struct trace_event_raw_sys_enter *ctx) {
         bpf_map_update_elem(inner, &gran, &init, BPF_ANY);
 
         stat = bpf_map_lookup_elem(inner, &gran);
-        if (stat == NULL) {
-            return -1;
-        }
+        if (!stat)
+            return 0;
     }
 
     __sync_fetch_and_add(&stat->both.total_requests, 1);

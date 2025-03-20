@@ -89,8 +89,8 @@ u64 min(u64 x, u64 y) {
 }
 
 
-SEC("kprobe/vfs_read")
-int BPF_KPROBE(vfs_read, struct file *file)
+SEC("fentry/vfs_read")
+int BPF_PROG(vfs_read, struct file *file)
 {
     struct inode *f_inode = BPF_CORE_READ(file, f_inode);
     umode_t i_mode = BPF_CORE_READ(f_inode, i_mode);
@@ -108,14 +108,13 @@ int BPF_KPROBE(vfs_read, struct file *file)
         bool truth = true;
         bool *filep = bpf_map_lookup_elem(&bris, &file);
         bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
-        if (filep == NULL) {
-            if (pidp == NULL) {
-                return -1;
-            }
+        if (!filep) {
+            if (!pidp)
+                return 0;
             bpf_map_update_elem(&bris, &file, &truth, BPF_ANY);
         }
 
-        if (pidp == NULL) {
+        if (!pidp) {
             bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
             bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.s_id, file.i_rdev, file.i_ino);
         }
@@ -149,20 +148,20 @@ void to_update_acct(u64 start, u64 curr, struct granularity gran) {
     bpf_map_update_elem(&to_update, &key, &sample, BPF_ANY);
 }
 
-SEC("kretprobe/vfs_read")
-int BPF_KRETPROBE(vfs_read_exit, ssize_t ret)
+SEC("fexit/vfs_read")
+int BPF_PROG(vfs_read_exit, ssize_t ret)
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
     struct inflight_value *value = bpf_map_lookup_elem(&pending, &tgid_pid);
-    if (value == NULL) {
-        return -1;
+    if (!value) {
+        return 0;
     }
 
     u64 ts = bpf_ktime_get_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     struct inner *inner = bpf_map_lookup_elem(&samples, &sample);
-    if (inner == NULL) {
-        return -1;
+    if (!inner) {
+        return 0;
     }
 
     struct granularity gran = {0};
@@ -179,8 +178,8 @@ int BPF_KRETPROBE(vfs_read_exit, ssize_t ret)
         bpf_map_update_elem(inner, &gran, &init, BPF_ANY);
 
         stat = bpf_map_lookup_elem(inner, &gran);
-        if (stat == NULL) {
-            return -1;
+        if (!stat) {
+            return 0;
         }
     }
 
@@ -200,8 +199,8 @@ int BPF_KRETPROBE(vfs_read_exit, ssize_t ret)
     return 0;
 }
 
-SEC("kprobe/vfs_write")
-int BPF_KPROBE(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
+SEC("fentry/vfs_write")
+int BPF_PROG(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
 {
     struct inode *f_inode = BPF_CORE_READ(file, f_inode);
     umode_t i_mode = BPF_CORE_READ(f_inode, i_mode);
@@ -219,14 +218,14 @@ int BPF_KPROBE(vfs_write, struct file *file, char *buf, size_t count, loff_t *po
         bool truth = true;
         bool *filep = bpf_map_lookup_elem(&bris, &file);
         bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
-        if (filep == NULL || *filep == false) {
-            if (pidp == NULL || *pidp == false) {
-                return -1;
+        if (!filep) {
+            if (!pidp) {
+                return 0;
             }
             bpf_map_update_elem(&bris, &file, &truth, BPF_ANY);
         }
 
-        if (pidp == NULL || *pidp == false) {
+        if (!pidp) {
             bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
             bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.s_id, file.i_rdev, file.i_ino);
         }
@@ -246,21 +245,19 @@ int BPF_KPROBE(vfs_write, struct file *file, char *buf, size_t count, loff_t *po
     return 0;
 }
 
-SEC("kretprobe/vfs_write")
-int BPF_KRETPROBE(vfs_write_exit, ssize_t ret)
+SEC("fexit/vfs_write")
+int BPF_PROG(vfs_write_exit, ssize_t ret)
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
     struct inflight_value *value = bpf_map_lookup_elem(&pending, &tgid_pid);
-    if (value == NULL) {
-        return -1;
-    }
+    if (!value)
+        return 0;
 
     u64 ts = bpf_ktime_get_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     struct inner *inner = bpf_map_lookup_elem(&samples, &sample);
-    if (inner == NULL) {
-        return -1;
-    }
+    if (!inner)
+        return 0;
 
     struct granularity gran = {0};
     gran.tgid = tgid(tgid_pid);
@@ -276,9 +273,8 @@ int BPF_KRETPROBE(vfs_write_exit, ssize_t ret)
         bpf_map_update_elem(inner, &gran, &init, BPF_ANY);
 
         stat = bpf_map_lookup_elem(inner, &gran);
-        if (stat == NULL) {
-            return -1;
-        }
+        if (!stat)
+            return 0;
     }
 
     __u64 sample_latency = min(ts - value->ts, ts - (ts/1000000000) * 1000000000);

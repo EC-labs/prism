@@ -9,7 +9,7 @@
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, PENDING_MAX_ENTRIES);
 	__type(key, struct inflight);
 	__type(value, struct inflight_val);

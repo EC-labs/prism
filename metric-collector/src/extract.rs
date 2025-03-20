@@ -337,6 +337,7 @@ impl Extractor {
         .unwrap();
 
         let mut muxio = Muxio::new(pid_map.as_fd(), &conn).unwrap();
+
         // self.system_metrics.push(Box::new(IOWait::new(
         //     executor.io_wait.clone(),
         //     Some(self.config.data_directory.clone()),
@@ -359,6 +360,7 @@ impl Extractor {
             futex.sample()?;
             net.sample()?;
             muxio.sample()?;
+
             // self.sample_targets();
             // self.sample_system_metrics()?;
             // self.register_new_targets(&mut executor, time_sensitive_collector_tx.clone())?;

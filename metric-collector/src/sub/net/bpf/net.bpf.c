@@ -161,16 +161,15 @@ __always_inline int vfs_acct_start(struct inode *f_inode, u8 dir) {
 __always_inline int vfs_acct_end() {
     u64 tgid_pid = bpf_get_current_pid_tgid();
     struct inflight_value *value = bpf_map_lookup_elem(&pending, &tgid_pid);
-    if (value == NULL) {
-        return -1;
-    }
+    if (!value)
+        return 0;
 
     u64 ts = bpf_ktime_get_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     struct inner *inner = bpf_map_lookup_elem(&samples, &sample);
-    if (inner == NULL) {
-        return -1;
-    }
+    if (!inner)
+        return 0;
+
 
     struct granularity gran = {0};
     gran.tgid = tgid(tgid_pid);
@@ -180,15 +179,14 @@ __always_inline int vfs_acct_end() {
     gran.dir = value->is_write;
     __builtin_memcpy(&gran.bri.s_id, &(*value).bri.s_id, sizeof(gran.bri.s_id));
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
-    if (stat == NULL) {
+    if (!stat) {
         struct stats init = {0};
         init.ts_s = ts / 1000000000;
         bpf_map_update_elem(inner, &gran, &init, BPF_ANY);
 
         stat = bpf_map_lookup_elem(inner, &gran);
-        if (stat == NULL) {
-            return -1;
-        }
+        if (!stat)
+            return 0;
     }
 
     __u64 sample_latency = min(ts - value->ts, ts - (ts/1000000000) * 1000000000);
@@ -215,9 +213,8 @@ __always_inline int store_socket_context(struct socket *sock, struct inode *f_in
 
     u64 socket_inoid = BPF_CORE_READ(f_inode, i_ino);
     struct socket_context_value *v = bpf_map_lookup_elem(&socket_context, &socket_inoid);
-    if (v != NULL) {
+    if (v)
         return 0;
-    }
 
     struct sock *sk = BPF_CORE_READ(sock, sk);
     struct socket_context_value *init = bpf_ringbuf_reserve(&rb, sizeof(struct socket_context_value), 0);
@@ -258,7 +255,7 @@ __always_inline bool track(struct inode *f_inode) {
     u32 tgid = (u32) (tgid_pid >> 32);
     bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
 
-    if (pidp) 
+    if (pidp)
         return true;
 
     u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
@@ -325,79 +322,87 @@ __always_inline int internal_discovery(struct sock *sk, struct sk_buff *skb)
     return 0;
 }
 
-SEC("kprobe/inet_recvmsg")
-int BPF_KPROBE(inet_recvmsg, struct socket *sock)
+SEC("fentry/inet_recvmsg")
+int BPF_PROG(inet_recvmsg, struct socket *sock)
 {
     struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     if (!track(f_inode))
         return 0;
 
     store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, READ);
+    vfs_acct_start(f_inode, READ);
+    return 0;
 }
 
 
-SEC("kretprobe/inet_recvmsg")
-int BPF_KRETPROBE(inet_recvmsg_exit, ssize_t ret)
+SEC("fexit/inet_recvmsg")
+int BPF_PROG(inet_recvmsg_exit)
 {
-    return vfs_acct_end();
+    vfs_acct_end();
+    return 0;
 }
 
-SEC("kprobe/inet_sendmsg")
-int BPF_KPROBE(inet_sendmsg, struct socket *sock)
-{
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-    if (!track(f_inode))
-        return 0;
-
-    store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, (u8) WRITE);
-}
-
-SEC("kretprobe/inet_sendmsg")
-int BPF_KRETPROBE(inet_sendmsg_exit, ssize_t ret)
-{
-    return vfs_acct_end();
-}
-
-SEC("kprobe/inet6_recvmsg")
-int BPF_KPROBE(inet6_recvmsg, struct socket *sock)
+SEC("fentry/inet_sendmsg")
+int BPF_PROG(inet_sendmsg, struct socket *sock)
 {
     struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     if (!track(f_inode))
         return 0;
 
     store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, READ);
+    vfs_acct_start(f_inode, (u8) WRITE);
+    return 0;
 }
 
-
-SEC("kretprobe/inet6_recvmsg")
-int BPF_KRETPROBE(inet6_recvmsg_exit, ssize_t ret)
+SEC("fexit/inet_sendmsg")
+int BPF_PROG(inet_sendmsg_exit)
 {
-    return vfs_acct_end();
+    vfs_acct_end();
+    return 0;
 }
 
-SEC("kprobe/inet6_sendmsg")
-int BPF_KPROBE(inet6_sendmsg, struct socket *sock)
+SEC("fentry/inet6_recvmsg")
+int BPF_PROG(inet6_recvmsg, struct socket *sock)
 {
     struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     if (!track(f_inode))
         return 0;
 
     store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, (u8) WRITE);
+    vfs_acct_start(f_inode, READ);
+    return 0;
 }
 
-SEC("kretprobe/inet6_sendmsg")
-int BPF_KRETPROBE(inet6_sendmsg_exit, ssize_t ret)
+
+SEC("fexit/inet6_recvmsg")
+int BPF_PROG(inet6_recvmsg_exit)
 {
-    return vfs_acct_end();
+    vfs_acct_end();
+    return 0;
+}
+
+SEC("fentry/inet6_sendmsg")
+int BPF_PROG(inet6_sendmsg, struct socket *sock)
+{
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
+        return 0;
+
+    store_socket_context(sock, f_inode);
+    vfs_acct_start(f_inode, (u8) WRITE);
+    return 0;
+}
+
+SEC("fexit/inet6_sendmsg")
+int BPF_PROG(inet6_sendmsg_exit)
+{
+    vfs_acct_end();
+    return 0;
 }
 
 
-SEC("kprobe/sock_splice_read")
-int BPF_KPROBE(sock_splice_read, struct file *f)
+SEC("fentry/sock_splice_read")
+int BPF_PROG(sock_splice_read, struct file *f)
 {
     struct inode *f_inode = BPF_CORE_READ(f, f_inode);
     if (!track(f_inode))
@@ -405,17 +410,19 @@ int BPF_KPROBE(sock_splice_read, struct file *f)
 
     struct socket *sock = BPF_CORE_READ(f, private_data);
     store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, READ);
+    vfs_acct_start(f_inode, READ);
+    return 0;
 }
 
-SEC("kretprobe/sock_splice_read")
-int BPF_KRETPROBE(sock_splice_read_exit, ssize_t ret)
+SEC("fexit/sock_splice_read")
+int BPF_PROG(sock_splice_read_exit)
 {
-    return vfs_acct_end();
+    vfs_acct_end();
+    return 0;
 }
 
-SEC("kprobe/splice_to_socket")
-int BPF_KPROBE(splice_to_socket, struct pipe_inode_info *pipe, struct file *f)
+SEC("fentry/splice_to_socket")
+int BPF_PROG(splice_to_socket, struct pipe_inode_info *pipe, struct file *f)
 {
     struct inode *f_inode = BPF_CORE_READ(f, f_inode);
     if (!track(f_inode))
@@ -423,189 +430,205 @@ int BPF_KPROBE(splice_to_socket, struct pipe_inode_info *pipe, struct file *f)
 
     struct socket *sock = BPF_CORE_READ(f, private_data);
     store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, WRITE);
+    vfs_acct_start(f_inode, WRITE);
+    return 0;
 }
 
-SEC("kretprobe/splice_to_socket")
-int BPF_KRETPROBE(splice_to_socket_exit, ssize_t ret)
+SEC("fexit/splice_to_socket")
+int BPF_PROG(splice_to_socket_exit)
 {
-    return vfs_acct_end();
+    vfs_acct_end();
+    return 0;
 }
 
-SEC("kprobe/unix_stream_recvmsg")
-int BPF_KPROBE(unix_stream_recvmsg, struct socket *sock)
-{
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-    if (!track(f_inode))
-        return 0;
-
-    store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, READ);
-}
-
-SEC("kretprobe/unix_stream_recvmsg")
-int BPF_KPROBE(unix_stream_recvmsg_exit, ssize_t ret)
-{
-    return vfs_acct_end();
-}
-
-SEC("kprobe/unix_stream_sendmsg")
-int BPF_KPROBE(unix_stream_sendmsg, struct socket *sock)
+SEC("fentry/unix_stream_recvmsg")
+int BPF_PROG(unix_stream_recvmsg, struct socket *sock)
 {
     struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     if (!track(f_inode))
         return 0;
 
     store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, WRITE);
+    vfs_acct_start(f_inode, READ);
+    return 0;
 }
 
-SEC("kretprobe/unix_stream_sendmsg")
-int BPF_KPROBE(unix_stream_sendmsg_exit, ssize_t ret)
+SEC("fexit/unix_stream_recvmsg")
+int BPF_PROG(unix_stream_recvmsg_exit)
 {
-    return vfs_acct_end();
+    vfs_acct_end();
+    return 0;
 }
 
-SEC("kprobe/unix_dgram_recvmsg")
-int BPF_KPROBE(unix_dgram_recvmsg, struct socket *sock)
-{
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-    if (!track(f_inode))
-        return 0;
-
-    store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, READ);
-}
-
-SEC("kretprobe/unix_dgram_recvmsg")
-int BPF_KPROBE(unix_dgram_recvmsg_exit, ssize_t ret)
-{
-    return vfs_acct_end();
-}
-
-SEC("kprobe/unix_dgram_sendmsg")
-int BPF_KPROBE(unix_dgram_sendmsg, struct socket *sock)
+SEC("fentry/unix_stream_sendmsg")
+int BPF_PROG(unix_stream_sendmsg, struct socket *sock)
 {
     struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     if (!track(f_inode))
         return 0;
 
     store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, WRITE);
+    vfs_acct_start(f_inode, WRITE);
+    return 0;
 }
 
-SEC("kretprobe/unix_dgram_sendmsg")
-int BPF_KPROBE(unix_dgram_sendmsg_exit, ssize_t ret)
+SEC("fexit/unix_stream_sendmsg")
+int BPF_PROG(unix_stream_sendmsg_exit)
 {
-    return vfs_acct_end();
+    vfs_acct_end();
+    return 0;
 }
 
-SEC("kprobe/unix_seqpacket_recvmsg")
-int BPF_KPROBE(unix_seqpacket_recvmsg, struct socket *sock)
-{
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-    if (!track(f_inode))
-        return 0;
-
-    store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, READ);
-}
-
-SEC("kretprobe/unix_seqpacket_recvmsg")
-int BPF_KPROBE(unix_seqpacket_recvmsg_exit, ssize_t ret)
-{
-    return vfs_acct_end();
-}
-
-SEC("kprobe/unix_seqpacket_sendmsg")
-int BPF_KPROBE(unix_seqpacket_sendmsg, struct socket *sock)
+SEC("fentry/unix_dgram_recvmsg")
+int BPF_PROG(unix_dgram_recvmsg, struct socket *sock)
 {
     struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     if (!track(f_inode))
         return 0;
 
     store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, WRITE);
+    vfs_acct_start(f_inode, READ);
+    return 0;
 }
 
-SEC("kretprobe/unix_seqpacket_sendmsg")
-int BPF_KPROBE(unix_seqpacket_sendmsg_exit, ssize_t ret)
+SEC("fexit/unix_dgram_recvmsg")
+int BPF_PROG(unix_dgram_recvmsg_exit)
 {
-    return vfs_acct_end();
+    vfs_acct_end();
+    return 0;
 }
 
-SEC("kprobe/unix_accept")
-int BPF_KPROBE(unix_accept, struct socket *sock)
-{
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-    if (!track(f_inode))
-        return 0;
-
-    store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, ACCEPT);
-}
-
-SEC("kretprobe/unix_accept")
-int BPF_KPROBE(unix_accept_exit, ssize_t ret)
-{
-    return vfs_acct_end();
-}
-
-SEC("kprobe/inet_accept")
-int BPF_KPROBE(inet_accept, struct socket *sock)
+SEC("fentry/unix_dgram_sendmsg")
+int BPF_PROG(unix_dgram_sendmsg, struct socket *sock)
 {
     struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     if (!track(f_inode))
         return 0;
 
     store_socket_context(sock, f_inode);
-    return vfs_acct_start(f_inode, ACCEPT);
+    vfs_acct_start(f_inode, WRITE);
+    return 0;
 }
 
-SEC("kretprobe/inet_accept")
-int BPF_KPROBE(inet_accept_exit, ssize_t ret)
+SEC("fexit/unix_dgram_sendmsg")
+int BPF_PROG(unix_dgram_sendmsg_exit)
 {
-    return vfs_acct_end();
+    vfs_acct_end();
+    return 0;
 }
 
-SEC("kprobe/__dev_queue_xmit")
-int BPF_KPROBE(__dev_queue_xmit, struct sk_buff *skb) 
+SEC("fentry/unix_seqpacket_recvmsg")
+int BPF_PROG(unix_seqpacket_recvmsg, struct socket *sock)
+{
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
+        return 0;
+
+    store_socket_context(sock, f_inode);
+    vfs_acct_start(f_inode, READ);
+    return 0;
+}
+
+SEC("fexit/unix_seqpacket_recvmsg")
+int BPF_PROG(unix_seqpacket_recvmsg_exit)
+{
+    vfs_acct_end();
+    return 0;
+}
+
+SEC("fentry/unix_seqpacket_sendmsg")
+int BPF_PROG(unix_seqpacket_sendmsg, struct socket *sock)
+{
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
+        return 0;
+
+    store_socket_context(sock, f_inode);
+    vfs_acct_start(f_inode, WRITE);
+    return 0;
+}
+
+SEC("fexit/unix_seqpacket_sendmsg")
+int BPF_PROG(unix_seqpacket_sendmsg_exit)
+{
+    vfs_acct_end();
+    return 0;
+}
+
+SEC("fentry/unix_accept")
+int BPF_PROG(unix_accept, struct socket *sock)
+{
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
+        return 0;
+
+    store_socket_context(sock, f_inode);
+    vfs_acct_start(f_inode, ACCEPT);
+    return 0;
+}
+
+SEC("fexit/unix_accept")
+int BPF_PROG(unix_accept_exit)
+{
+    vfs_acct_end();
+    return 0;
+}
+
+SEC("fentry/inet_accept")
+int BPF_PROG(inet_accept, struct socket *sock)
+{
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    if (!track(f_inode))
+        return 0;
+
+    store_socket_context(sock, f_inode);
+    vfs_acct_start(f_inode, ACCEPT);
+    return 0;
+}
+
+SEC("fexit/inet_accept")
+int BPF_PROG(inet_accept_exit)
+{
+    vfs_acct_end();
+    return 0;
+}
+
+SEC("fentry/__dev_queue_xmit")
+int BPF_PROG(__dev_queue_xmit, struct sk_buff *skb) 
 {
     struct internal_disc v = {0};
     v.sk = BPF_CORE_READ(skb, sk);
     v.inode_id = BPF_CORE_READ(skb, sk, sk_socket, file, f_inode, i_ino);
     v.head = BPF_CORE_READ(skb, head);
 
-    bpf_map_update_elem(&pending_skb, &v.head, &v, BPF_ANY);
+    bpf_map_update_elem(&pending_skb, &v.head, &v, BPF_NOEXIST);
     return 0;
 }
 
-SEC("kprobe/tcp_data_queue")
-int BPF_KPROBE(tcp_data_queue, struct sock *sk, struct sk_buff *skb) 
+SEC("fentry/tcp_data_queue")
+int BPF_PROG(tcp_data_queue, struct sock *sk, struct sk_buff *skb) 
 {
     return internal_discovery(sk, skb);
 }
 
-SEC("kprobe/__udp_enqueue_schedule_skb")
-int BPF_KPROBE(__udp_enqueue_schedule_skb, struct sock *sk, struct sk_buff *skb) 
+SEC("fentry/__udp_enqueue_schedule_skb")
+int BPF_PROG(__udp_enqueue_schedule_skb, struct sock *sk, struct sk_buff *skb) 
 {
     return internal_discovery(sk, skb);
 }
 
-SEC("kprobe/kfree_skb_partial") 
-int BPF_KPROBE(kfree_skb_partial, struct sk_buff *skb) 
+SEC("fentry/kfree_skb_partial") 
+int BPF_PROG(kfree_skb_partial, struct sk_buff *skb) 
 {
     void *head = BPF_CORE_READ(skb, head);
-    // bpf_printk("kfree_skb_partial: %p", head);
     bpf_map_delete_elem(&pending_skb, &head);
     return 0;
 }
 
-SEC("kprobe/skb_free_head") 
-int BPF_KPROBE(skb_free_head, struct sk_buff *skb) 
+SEC("fentry/skb_free_head") 
+int BPF_PROG(skb_free_head, struct sk_buff *skb) 
 {
     void *head = BPF_CORE_READ(skb, head);
-    // bpf_printk("skb_free_head: %p", head);
     bpf_map_delete_elem(&pending_skb, &head);
     return 0;
 }

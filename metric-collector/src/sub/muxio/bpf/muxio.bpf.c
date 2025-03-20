@@ -31,7 +31,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, (1<<20) * 3);
-    __type(key, struct epoll_files_key);
+    __type(key, u64);
     __type(value, bool);
 } epoll_files SEC(".maps");
 
@@ -81,11 +81,10 @@ __always_inline bool track() {
     u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
     u32 tgid = (u32) (tgid_pid >> 32);
     bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
+    if (!pidp) 
+        return false;
 
-    if (pidp) 
-        return true;
-
-    return false;
+    return true;
 }
 
 SEC("fentry/do_sys_poll")\
@@ -178,33 +177,6 @@ int BPF_PROG(__fdget, u32 fd, u64 word)
     return 0;
 }
 
-SEC("fentry/ep_insert")
-int BPF_PROG(ep_insert, struct eventpoll *ep, const struct epoll_event *event_, struct file *tfile)
-
-{
-    if (!track()) {
-        return 0;
-    }
-
-    struct epoll_files_key key = {0};
-    key.ep_address = (u64) ep;
-    key.magic = BPF_CORE_READ(tfile, f_inode, i_sb, s_magic);
-    key.i_rdev = BPF_CORE_READ(tfile, f_inode, i_rdev);
-    key.i_ino = BPF_CORE_READ(tfile, f_inode, i_ino);
-    bpf_map_update_elem(&epoll_files, &key, &truth, BPF_ANY);
-
-    struct epoll_register_file_event event = {0};
-    event.event = EPOLL_INSERT_FILE;
-    event.magic = key.magic;
-    event.i_rdev = key.i_rdev;
-    event.i_ino = key.i_ino;
-    event.ep_address = key.ep_address;
-    event.ts = bpf_ktime_get_ns();
-    
-    bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
-    return 0;
-}
-
 SEC("fexit/__ep_remove")
 int BPF_PROG(__ep_remove, struct eventpoll *ep, struct epitem *epi)
 {
@@ -212,19 +184,15 @@ int BPF_PROG(__ep_remove, struct eventpoll *ep, struct epitem *epi)
         return 0;
     }
 
-    struct epoll_files_key key = {0};
-    key.ep_address = (u64) ep;
-    key.magic = BPF_CORE_READ(epi, ffd.file, f_inode, i_sb, s_magic);
-    key.i_rdev = BPF_CORE_READ(epi, ffd.file, f_inode, i_rdev);
-    key.i_ino = BPF_CORE_READ(epi, ffd.file, f_inode, i_ino);
-    bpf_map_delete_elem(&epoll_files, &key);
+    u64 epi_address = (u64) epi;
+    bpf_map_delete_elem(&epoll_files, &epi_address);
 
     struct epoll_register_file_event event = {0};
     event.event = EPOLL_REMOVE_FILE;
-    event.magic = key.magic;
-    event.i_rdev = key.i_rdev;
-    event.i_ino = key.i_ino;
-    event.ep_address = key.ep_address;
+    event.magic = BPF_CORE_READ(epi, ffd.file, f_inode, i_sb, s_magic);
+    event.i_rdev = BPF_CORE_READ(epi, ffd.file, f_inode, i_rdev);
+    event.i_ino = BPF_CORE_READ(epi, ffd.file, f_inode, i_ino);
+    event.ep_address = (u64) ep;
     event.ts = bpf_ktime_get_ns();
 
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
@@ -273,24 +241,19 @@ int BPF_KPROBE(ep_item_poll, struct epitem *epi)
         return 0;
     }
 
-    struct epoll_files_key key = {0};
-    key.magic = BPF_CORE_READ(epi, ffd.file, f_inode, i_sb, s_magic);
-    key.i_rdev = BPF_CORE_READ(epi, ffd.file, f_inode, i_rdev);
-    key.i_ino = BPF_CORE_READ(epi, ffd.file, f_inode, i_ino);
-    key.ep_address = (u64) BPF_CORE_READ(epi, ep);
-    
-    bool *p = bpf_map_lookup_elem(&epoll_files, &key);
+    u64 epi_address = (u64) epi;
+    bool *p = bpf_map_lookup_elem(&epoll_files, &epi_address);
     if (p)
         return 0;
 
-    bpf_map_update_elem(&epoll_files, &key, &truth, BPF_ANY);
+    bpf_map_update_elem(&epoll_files, &epi_address, &truth, BPF_ANY);
 
     struct epoll_register_file_event event = {0};
     event.event = EPOLL_INSERT_FILE;
-    event.magic = key.magic;
-    event.i_rdev = key.i_rdev;
-    event.i_ino = key.i_ino;
-    event.ep_address = key.ep_address;
+    event.magic = BPF_CORE_READ(epi, ffd.file, f_inode, i_sb, s_magic);;
+    event.i_rdev = BPF_CORE_READ(epi, ffd.file, f_inode, i_rdev);
+    event.i_ino = BPF_CORE_READ(epi, ffd.file, f_inode, i_ino);
+    event.ep_address = (u64) BPF_CORE_READ(epi, ep);
     event.ts = bpf_ktime_get_ns();
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     return 0;
