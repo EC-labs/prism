@@ -145,9 +145,6 @@ __always_inline int vfs_acct_start(struct inode *f_inode, u8 dir) {
     value.ts = bpf_ktime_get_ns();
     value.is_write = dir;
     bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
-    // bpf_printk("acct_st: %u %u %s %u %llu %c => %lld", 
-    //        tgid, pid(key.tgid_pid), value.bri.s_id,
-    //        value.bri.i_rdev, value.bri.i_ino, value.is_write == READ ? 'R' : 'W', value.ts);
     return 0;
 }
 
@@ -189,9 +186,6 @@ __always_inline int vfs_acct_end() {
 
     to_update_acct(value->ts, ts, gran);
     
-    // bpf_printk("acct_en: %d %d %s %d %lld %c => %lld %lld", 
-    //        gran.tgid, gran.pid, gran.bri.s_id,
-    //        gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts, ts - value->ts);
     bpf_map_delete_elem(&pending, &tgid_pid);
     return 0;
 }

@@ -101,7 +101,6 @@ int BPF_PROG(vfs_read, struct file *file)
         file.i_ino = BPF_CORE_READ(f_inode, i_ino);
         file.i_rdev = BPF_CORE_READ(f_inode, i_rdev);
         file.fs_magic = BPF_CORE_READ(f_inode, i_sb, s_magic);
-        // BPF_CORE_READ_INTO(&file.s_id, f_inode, i_sb, s_id);
         bool truth = true;
         bool *filep = bpf_map_lookup_elem(&bris, &file);
         bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
@@ -124,9 +123,6 @@ int BPF_PROG(vfs_read, struct file *file)
         value.ts = bpf_ktime_get_ns();
         value.is_write = READ;
         bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
-        // bpf_printk("st: %d %d %s %d %lld %c => %lld", 
-        //        tgid, pid(key.tgid_pid), value.bri.s_id,
-        //        value.bri.i_rdev, value.bri.i_ino, value.is_write == READ ? 'R' : 'W', value.ts);
     }
     return 0;
 }
@@ -138,7 +134,6 @@ void to_update_acct(u64 start, u64 curr, struct granularity gran) {
         return;
     }
 
-    // bpf_printk("Storing in to_update: %lld %lld", start, curr);
     struct to_update_key key = {0};
     key.ts = start;
     key.granularity = gran;
@@ -168,7 +163,6 @@ int BPF_PROG(vfs_read_exit, ssize_t ret)
     gran.bri.i_rdev = value->bri.i_rdev;
     gran.bri.fs_magic = value->bri.fs_magic;
     gran.dir = READ;
-    // __builtin_memcpy(&gran.bri.s_id, &(*value).bri.s_id, sizeof(gran.bri.s_id));
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
     if (stat == NULL) {
         struct stats init = {0};
@@ -190,9 +184,6 @@ int BPF_PROG(vfs_read_exit, ssize_t ret)
 
     to_update_acct(value->ts, ts, gran);
     
-    // bpf_printk("en: %d %d %s %d %lld %c => %lld %lld", 
-    //        gran.tgid, gran.pid, gran.bri.s_id,
-    //        gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts, ts - value->ts);
     bpf_map_delete_elem(&pending, &tgid_pid);
     return 0;
 }
@@ -209,7 +200,6 @@ int BPF_PROG(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
         file.i_ino = BPF_CORE_READ(f_inode, i_ino);
         file.i_rdev = BPF_CORE_READ(f_inode, i_rdev);
         file.fs_magic = BPF_CORE_READ(f_inode, i_sb, s_magic);
-        // BPF_CORE_READ_INTO(&file.s_id, f_inode, i_sb, s_id);
         bool truth = true;
         bool *filep = bpf_map_lookup_elem(&bris, &file);
         bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
@@ -233,9 +223,6 @@ int BPF_PROG(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
         value.ts = bpf_ktime_get_ns();
         value.is_write = WRITE;
         bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
-        // bpf_printk("st: %d %d %s %d %lld %c => %lld", 
-        //        tgid, pid(key.tgid_pid), value.bri.s_id,
-        //        value.bri.i_rdev, value.bri.i_ino, value.is_write == READ ? 'R' : 'W', value.ts);
     }
     return 0;
 }
@@ -261,7 +248,6 @@ int BPF_PROG(vfs_write_exit, ssize_t ret)
     gran.bri.i_rdev = value->bri.i_rdev;
     gran.bri.fs_magic = value->bri.fs_magic;
     gran.dir = value->is_write;
-    // __builtin_memcpy(&gran.bri.s_id, &(*value).bri.s_id, sizeof(gran.bri.s_id));
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
     if (stat == NULL) {
         struct stats init = {0};
@@ -282,9 +268,6 @@ int BPF_PROG(vfs_write_exit, ssize_t ret)
 
     to_update_acct(value->ts, ts, gran);
     
-    // bpf_printk("en: %d %d %s %d %lld %c => %lld %lld", 
-    //        gran.tgid, gran.pid, gran.bri.s_id,
-    //        gran.bri.i_rdev, gran.bri.i_ino, gran.dir == READ ? 'R' : 'W', ts, ts - value->ts);
     bpf_map_delete_elem(&pending, &tgid_pid);
     return 0;
 }
