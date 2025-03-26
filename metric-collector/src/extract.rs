@@ -30,7 +30,6 @@ use crate::{
     target::TimeSensitive,
 };
 use crate::{execute::Executor, metrics::ipc::KFile};
-use crate::{metrics::ipc::EventPollCollection, target::Target};
 
 pub static BOOT_EPOCH_NS: RwLock<u64> = RwLock::new(0);
 
@@ -71,10 +70,7 @@ fn create_pid_rb() -> Result<MapHandle> {
 pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
     config: Config,
-    targets: HashMap<usize, Target>,
-    system_metrics: Vec<Box<dyn Collect>>,
     rx_timer: Option<Receiver<bool>>,
-    kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
 }
 
 impl Extractor {
@@ -92,10 +88,7 @@ impl Extractor {
         Self {
             config,
             terminate_flag: Arc::new(Mutex::new(false)),
-            targets: HashMap::new(),
-            system_metrics: Vec::new(),
             rx_timer: None,
-            kfile_socket_map: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -107,123 +100,6 @@ impl Extractor {
         })
         .expect("Error setting Ctrl-C handler");
     }
-
-    // fn register_new_targets(
-    //     &mut self,
-    //     executor: &mut Executor,
-    //     time_sensitive_collector_tx: Sender<Box<dyn Collect + Send>>,
-    // ) -> Result<()> {
-    //     executor
-    //         .clone
-    //         .poll_events()?
-    //         .into_iter()
-    //         .for_each(|clone_event| match clone_event {
-    //             CloneEvent::NewThread { pid, tid, .. } => {
-    //                 if let Some(_) = self.targets.get(&tid) {
-    //                     return;
-    //                 }
-
-    //                 self.targets.insert(
-    //                     tid,
-    //                     Target::new(
-    //                         tid,
-    //                         executor.futex.clone(),
-    //                         executor.ipc.clone(),
-    //                         self.config.data_directory.clone(),
-    //                         &format!("thread/{}/{}", pid, tid),
-    //                         self.kfile_socket_map.clone(),
-    //                         time_sensitive_collector_tx.clone(),
-    //                     ),
-    //                 );
-    //             }
-    //             CloneEvent::NewProcess(_, pid) => {
-    //                 executor.monitor(pid);
-    //                 if let Ok(targets) = Target::get_threads(pid) {
-    //                     targets.into_iter().for_each(|tid| {
-    //                         self.targets.insert(
-    //                             tid,
-    //                             Target::new(
-    //                                 tid,
-    //                                 executor.futex.clone(),
-    //                                 executor.ipc.clone(),
-    //                                 self.config.data_directory.clone(),
-    //                                 &format!("thread/{}/{}", pid, tid),
-    //                                 self.kfile_socket_map.clone(),
-    //                                 time_sensitive_collector_tx.clone(),
-    //                             ),
-    //                         );
-    //                     });
-    //                 }
-    //             }
-    //             CloneEvent::RemoveProcess(pid) => {
-    //                 if let Ok(targets) = Target::get_threads(pid) {
-    //                     targets.into_iter().for_each(|tid| {
-    //                         self.targets.remove(&tid);
-    //                     });
-    //                 }
-    //             }
-    //             _ => {}
-    //         });
-
-    //     let new_pids = executor.futex.borrow_mut().take_new_pid_events()?;
-    //     for (_, pid) in new_pids {
-    //         executor.monitor(pid);
-    //         if let Ok(targets) = Target::get_threads(pid) {
-    //             targets.into_iter().for_each(|tid| {
-    //                 self.targets.insert(
-    //                     tid,
-    //                     Target::new(
-    //                         tid,
-    //                         executor.futex.clone(),
-    //                         executor.ipc.clone(),
-    //                         self.config.data_directory.clone(),
-    //                         &format!("thread/{}/{}", pid, tid),
-    //                         self.kfile_socket_map.clone(),
-    //                         time_sensitive_collector_tx.clone(),
-    //                     ),
-    //                 );
-    //             });
-    //         }
-    //     }
-
-    //     // let events = executor.ipc.borrow_mut().take_process_events()?;
-    //     // for event in events {
-    //     //     if let IpcEvent::NewProcess { pid, .. } = event {
-    //     //         executor.monitor(pid);
-    //     //         if let Ok(targets) = Target::get_threads(pid) {
-    //     //             targets.into_iter().for_each(|tid| {
-    //     //                 self.targets.insert(
-    //     //                     tid,
-    //     //                     Target::new(
-    //     //                         tid,
-    //     //                         executor.futex.clone(),
-    //     //                         executor.ipc.clone(),
-    //     //                         self.config.data_directory.clone(),
-    //     //                         &format!("thread/{}/{}", pid, tid),
-    //     //                         self.kfile_socket_map.clone(),
-    //     //                     ),
-    //     //                 );
-    //     //             });
-    //     //         }
-    //     //     }
-    //     // }
-
-    //     Ok(())
-    // }
-
-    // fn sample_targets(&mut self) {
-    //     let mut targets_remove = Vec::new();
-    //     self.targets.iter_mut().for_each(|(tid, target)| {
-    //         if let Err(_e) = target.sample() {
-    //             println!("Remove target {tid}");
-    //             targets_remove.push(*tid)
-    //         }
-    //     });
-
-    //     for tid in targets_remove {
-    //         self.targets.remove(&tid);
-    //     }
-    // }
 
     fn start_timer_thread(&mut self) {
         let (tx_timer, rx_timer) = std::sync::mpsc::channel::<bool>();
@@ -245,33 +121,9 @@ impl Extractor {
             .expect("Failed to create interval-timer thread");
     }
 
-    // fn sample_system_metrics(&mut self) -> Result<()> {
-    //     for metric in self.system_metrics.iter_mut() {
-    //         metric.sample()?;
-    //         metric.store()?;
-    //     }
-
-    //     Ok(())
-    // }
-
-    fn write_fs_version(&self) -> Result<()> {
-        fs::create_dir_all(&*self.config.data_directory)?;
-        fs::write(
-            format!("{}/version.txt", self.config.data_directory),
-            "0.2.0\n",
-        )?;
-        Ok(())
-    }
-
     pub fn run(mut self) -> Result<()> {
-        // self.write_fs_version()?;
         self.register_sighandler();
-        // let mut executor = Executor::new(self.terminate_flag.clone())?;
         self.start_timer_thread();
-        let time_sensitive_collector_tx = TimeSensitive::init_thread(
-            self.terminate_flag.clone(),
-            Duration::from_millis(self.config.period),
-        );
 
         // let targets = Target::search_targets_regex(
         //     "jbd2",
@@ -361,7 +213,13 @@ impl Extractor {
 
         let mut muxio = Muxio::new(pid_map.as_fd(), &conn).unwrap();
 
-        let mut taskstats = TaskStats::new(&pid_map, pid_rb, &conn)?;
+        TimeSensitive::init_thread(
+            self.terminate_flag.clone(),
+            Duration::from_millis(self.config.period),
+            pid_map,
+            pid_rb,
+            conn.try_clone()?,
+        );
 
         // self.system_metrics.push(Box::new(IOWait::new(
         //     executor.io_wait.clone(),
@@ -396,7 +254,6 @@ impl Extractor {
             muxio.sample()?;
             let muxio_elapsed = start.elapsed().as_nanos();
             let muxio_acct = muxio_elapsed - net_elapsed;
-            taskstats.sample()?;
             info!(
                 "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] muxio[{}%]",
                 muxio_elapsed / 1_000_000,
