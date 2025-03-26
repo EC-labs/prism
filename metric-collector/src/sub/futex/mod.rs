@@ -138,6 +138,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
     pub fn new(
         open_object: &'obj mut MaybeUninit<OpenObject>,
         pid_map: BorrowedFd,
+        pid_rb: BorrowedFd,
         conn: &'conn Connection,
     ) -> Result<Self> {
         let skel_builder = FutexSkelBuilder::default();
@@ -145,6 +146,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
         bump_memlock_rlimit()?;
         let mut open_skel = skel_builder.open(open_object)?;
         open_skel.maps.pids.reuse_fd(pid_map)?;
+        open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
 
         let mut skel = open_skel.load()?;
         for i in 0..SAMPLES {

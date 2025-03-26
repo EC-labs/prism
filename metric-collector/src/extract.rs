@@ -17,18 +17,16 @@ use std::{
 
 use std::{env, mem::MaybeUninit};
 
-use crate::sub::vfs::Vfs;
-use crate::sub::{self, net::Net};
-use crate::sub::{futex::Futex, muxio::Muxio};
+use crate::sub::{
+    futex::Futex, iowait::IOWait, muxio::Muxio, net::Net, taskstats::TaskStats, vfs::Vfs,
+};
 use duckdb::Connection;
 use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, seteuid};
 use log::info;
 
 use crate::{
-    configure::Config,
-    execute::programs::clone::CloneEvent,
-    metrics::{iowait::IOWait, Collect},
+    configure::Config, execute::programs::clone::CloneEvent, metrics::Collect,
     target::TimeSensitive,
 };
 use crate::{execute::Executor, metrics::ipc::KFile};
@@ -51,6 +49,21 @@ fn create_pid_map() -> Result<MapHandle> {
         size_of::<u32>() as u32,
         size_of::<u8>() as u32,
         8192,
+        &opts,
+    )?)
+}
+
+fn create_pid_rb() -> Result<MapHandle> {
+    let opts = libbpf_sys::bpf_map_create_opts {
+        sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
+        ..Default::default()
+    };
+    Ok(MapHandle::create(
+        MapType::RingBuf,
+        Some("pid_rb"),
+        0,
+        0,
+        (size_of::<u32>() * 8192) as u32,
         &opts,
     )?)
 }
@@ -273,6 +286,7 @@ impl Extractor {
         // });
 
         let pid_map = create_pid_map()?;
+        let pid_rb = create_pid_rb()?;
         if let Some(process_name) = &self.config.process_name {
             // let targets = Target::search_targets_regex(
             //     &process_name,
@@ -318,19 +332,27 @@ impl Extractor {
         unsafe { seteuid(euid) };
 
         let mut iowait_open_object = MaybeUninit::uninit();
-        let mut iowait = sub::iowait::IOWait::new(&mut iowait_open_object, &conn).unwrap();
+        let mut iowait = IOWait::new(&mut iowait_open_object, &conn).unwrap();
 
         let mut vfs_open_object = MaybeUninit::uninit();
-        let mut vfs = Vfs::new(&mut vfs_open_object, &conn, pid_map.as_fd()).unwrap();
+        let mut vfs =
+            Vfs::new(&mut vfs_open_object, &conn, pid_map.as_fd(), pid_rb.as_fd()).unwrap();
 
         let mut futex_open_object = MaybeUninit::uninit();
-        let mut futex = Futex::new(&mut futex_open_object, pid_map.as_fd(), &conn).unwrap();
+        let mut futex = Futex::new(
+            &mut futex_open_object,
+            pid_map.as_fd(),
+            pid_rb.as_fd(),
+            &conn,
+        )
+        .unwrap();
 
         let mut net_open_object = MaybeUninit::uninit();
         let mut net = Net::new(
             &mut net_open_object,
             &conn,
             pid_map.as_fd(),
+            pid_rb.as_fd(),
             vfs.skel.maps.samples.as_fd(),
             vfs.skel.maps.pending.as_fd(),
             vfs.skel.maps.to_update.as_fd(),
@@ -338,6 +360,8 @@ impl Extractor {
         .unwrap();
 
         let mut muxio = Muxio::new(pid_map.as_fd(), &conn).unwrap();
+
+        let mut taskstats = TaskStats::new(&pid_map, pid_rb, &conn)?;
 
         // self.system_metrics.push(Box::new(IOWait::new(
         //     executor.io_wait.clone(),
@@ -372,6 +396,7 @@ impl Extractor {
             muxio.sample()?;
             let muxio_elapsed = start.elapsed().as_nanos();
             let muxio_acct = muxio_elapsed - net_elapsed;
+            taskstats.sample()?;
             info!(
                 "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] muxio[{}%]",
                 muxio_elapsed / 1_000_000,

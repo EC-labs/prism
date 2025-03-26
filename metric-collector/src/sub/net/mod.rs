@@ -115,6 +115,7 @@ impl<'obj> Net<'obj> {
         open_object: &'obj mut MaybeUninit<OpenObject>,
         conn: &'conn Connection,
         pid_map: BorrowedFd,
+        pid_rb: BorrowedFd,
         samples_map: BorrowedFd,
         pending_map: BorrowedFd,
         to_update_map: BorrowedFd,
@@ -131,6 +132,7 @@ impl<'obj> Net<'obj> {
         open_skel.maps.samples.reuse_fd(samples_map)?;
         open_skel.maps.pending.reuse_fd(pending_map)?;
         open_skel.maps.to_update.reuse_fd(to_update_map)?;
+        open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
 
         let mut skel = open_skel.load()?;
         let mut builder = RingBufferBuilder::new();

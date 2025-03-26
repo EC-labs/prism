@@ -142,12 +142,14 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         open_object: &'obj mut MaybeUninit<OpenObject>,
         conn: &'conn Connection,
         pid_map: BorrowedFd,
+        pid_rb: BorrowedFd,
     ) -> Result<Self> {
         let skel_builder = VfsSkelBuilder::default();
 
         bump_memlock_rlimit()?;
         let mut open_skel = skel_builder.open(open_object)?;
         open_skel.maps.pids.reuse_fd(pid_map)?;
+        open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
 
         let mut skel = open_skel.load()?;
         for i in 0..SAMPLES {

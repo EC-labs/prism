@@ -24,6 +24,11 @@ struct {
 } pids SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, sizeof(u32) * 8192);
+} pid_rb SEC(".maps");
+
+struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, PENDING_MAX_ENTRIES);
     __type(key, struct inflight_key);
@@ -142,6 +147,7 @@ int BPF_PROG(get_futex_key_exit, int ret)
         //            deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);
     } else if ((value == NULL) && (key_present != NULL)) {
         bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
+        bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
         bpf_printk("[futex] discovered tgid: %u %llu %llu %u", tgid, deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);
         return 0;
     }

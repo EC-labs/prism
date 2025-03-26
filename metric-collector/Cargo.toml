@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [build-dependencies]
+bindgen = "0.71.1"
 libbpf-cargo = { version = "0.24.8" }
 vmlinux = { version = "0.0", git = "https://github.com/libbpf/vmlinux.h.git", rev = "172793d6a409d98d1cfb843c80df73733e9f832f" }
 

@@ -68,6 +68,11 @@ struct {
 } socket_socket_rb SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, sizeof(u32) * 8192);
+} pid_rb SEC(".maps");
+
+struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, MAX_ENTRIES);
     __type(key, u64);
@@ -247,6 +252,7 @@ __always_inline bool track(struct inode *f_inode) {
     struct socket_context_value *sockp = bpf_map_lookup_elem(&socket_context, &inode_id);
     if (sockp && !pidp) {
         bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
+        bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
         bpf_printk("[net] discovered %u %llu", tgid, sockp->inode_id);
         return true;
     }

@@ -36,6 +36,11 @@ struct {
     __type(value, bool);
 } pids SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, sizeof(u32) * 8192);
+} pid_rb SEC(".maps");
+
 struct inner {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, SAMPLE_MAX_ENTRIES);
@@ -112,6 +117,7 @@ int BPF_PROG(vfs_read, struct file *file)
 
         if (!pidp) {
             bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
+            bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
             bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.fs_magic, file.i_rdev, file.i_ino);
         }
 
@@ -212,6 +218,7 @@ int BPF_PROG(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
 
         if (!pidp) {
             bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
+            bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
             bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.fs_magic, file.i_rdev, file.i_ino);
         }
 
