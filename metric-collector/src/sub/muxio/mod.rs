@@ -192,7 +192,12 @@ impl<'conn> Muxio<'conn> {
     }
 
     pub fn sample(&mut self) -> Result<()> {
+        let mut snapshots = Vec::new();
         while let Ok(snapshot) = self.rx.try_recv() {
+            snapshots.push(snapshot);
+        }
+
+        for snapshot in snapshots {
             let mut btree = self
                 .sharded_events
                 .remove(&snapshot)
