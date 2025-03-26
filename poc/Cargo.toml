@@ -47,6 +47,10 @@ path = "src/sync-udp/server.rs"
 name = "udp-client"
 path = "src/sync-udp/client.rs"
 
+[[bin]]
+name = "multithreaded"
+path = "src/multithreaded/main.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"]}
 poem = "1.2"
