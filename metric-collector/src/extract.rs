@@ -239,7 +239,7 @@ impl TimeSensitive {
         thread::Builder::new()
             .name("ts-collect".to_string())
             .spawn(move || {
-                let mut taskstats = TaskStats::new(&pid_map, pid_rb, &conn)?;
+                let mut taskstats = TaskStats::new(pid_map, pid_rb, &conn)?;
                 loop {
                     sample_rx.recv()?;
                     while let Ok(_) = sample_rx.try_recv() {}

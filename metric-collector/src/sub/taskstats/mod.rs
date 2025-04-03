@@ -1,3 +1,4 @@
+use log::info;
 use std::{
     collections::HashMap,
     ffi::CStr,
@@ -69,10 +70,11 @@ pub struct TaskStats<'conn> {
     links: HashMap<u32, Link>,
     link_rx: Receiver<(u32, Link)>,
     taskstats_appender: Appender<'conn>,
+    pid_map: MapHandle,
 }
 
 impl<'conn> TaskStats<'conn> {
-    pub fn new(pid_map: &MapHandle, pid_rb: MapHandle, conn: &'conn Connection) -> Result<Self> {
+    pub fn new(pid_map: MapHandle, pid_rb: MapHandle, conn: &'conn Connection) -> Result<Self> {
         bump_memlock_rlimit()?;
 
         let (tx, rx) = mpsc::channel();
@@ -109,6 +111,7 @@ impl<'conn> TaskStats<'conn> {
 
         Self::init_store(conn)?;
         Ok(Self {
+            pid_map,
             links: HashMap::new(),
             link_rx: rx,
             taskstats_appender: conn.appender("taskstats")?,
@@ -218,7 +221,7 @@ impl<'conn> TaskStats<'conn> {
 
     pub fn sample(&mut self) -> Result<()> {
         while let Ok((pid, link)) = self.link_rx.try_recv() {
-            println!("discovered {pid}");
+            info!("discovered {pid}");
             self.links.entry(pid).or_insert(link);
         }
         let mut remove = Vec::new();
@@ -234,6 +237,8 @@ impl<'conn> TaskStats<'conn> {
 
         remove.into_iter().for_each(|pid| {
             self.links.remove(&pid);
+            self.pid_map.delete(&pid.to_ne_bytes());
+            info!("remove {pid}");
         });
 
         if buf.len() == 0 {
