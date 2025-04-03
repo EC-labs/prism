@@ -1,19 +1,6 @@
-use crate::{
-    execute::{
-        programs::{
-            futex::FutexProgram,
-            ipc::{Connection, IpcProgram},
-        },
-        Executor,
-    },
-    metrics::{
-        futex::Futex,
-        ipc::{Ipc, KFile},
-        scheduler::{Sched, SchedStat},
-        Collect,
-    },
-};
-use eyre::Result;
+use anyhow::Result;
+use duckdb::Connection;
+use libbpf_rs::MapHandle;
 use log::info;
 use regex::Regex;
 use std::{
@@ -33,7 +20,6 @@ use std::{
 
 pub fn search_targets_regex(name: &str, kthread: bool) -> Result<Vec<usize>> {
     let mut targets = Vec::new();
-
     let tasks = fs::read_dir(format!("/proc"))?;
     for task in tasks {
         let file_path = task?.path();

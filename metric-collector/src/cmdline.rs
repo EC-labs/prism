@@ -8,7 +8,7 @@ pub fn register_args() -> Command {
                 .required(false)
                 .long("pids")
                 .action(ArgAction::Set)
-                .value_parser(value_parser!(u64))
+                .value_parser(value_parser!(usize))
                 .value_delimiter(',')
                 .help("PID of the main process to monitor"),
         )

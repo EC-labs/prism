@@ -2,15 +2,6 @@ use anyhow::Result;
 use std::time::Duration;
 use std::{env, mem::MaybeUninit};
 
-use collector::cmdline;
-use collector::configure::Config;
-use collector::extract::Extractor;
-use collector::sub;
-use collector::sub::vfs::Vfs;
-use duckdb::Connection;
-use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
-use libc::{geteuid, getuid, seteuid};
-
 pub mod cmdline;
 pub mod configure;
 pub mod execute;
@@ -18,6 +9,9 @@ pub mod extract;
 pub mod metrics;
 pub mod sub;
 mod target;
+
+use crate::configure::Config;
+use crate::extract::Extractor;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();

@@ -7,6 +7,7 @@ use std::{
     fs,
     os::fd::AsFd,
     rc::Rc,
+    sync::mpsc,
     sync::{
         mpsc::{Receiver, Sender},
         Arc, Mutex, RwLock,
@@ -20,6 +21,7 @@ use std::{env, mem::MaybeUninit};
 use crate::sub::{
     futex::Futex, iowait::IOWait, muxio::Muxio, net::Net, taskstats::TaskStats, vfs::Vfs,
 };
+use crate::target;
 use duckdb::Connection;
 use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, seteuid};
@@ -27,7 +29,6 @@ use log::info;
 
 use crate::{configure::Config, execute::programs::clone::CloneEvent, metrics::Collect};
 use crate::{execute::Executor, metrics::ipc::KFile};
-use crate::{metrics::ipc::EventPollCollection, target::Target};
 
 pub static BOOT_EPOCH_NS: RwLock<u64> = RwLock::new(0);
 
@@ -68,10 +69,7 @@ fn create_pid_rb() -> Result<MapHandle> {
 pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
     config: Config,
-    targets: HashMap<usize, Target>,
-    system_metrics: Vec<Box<dyn Collect>>,
     rx_timer: Option<Receiver<bool>>,
-    kfile_socket_map: Rc<RefCell<HashMap<KFile, Connection>>>,
 }
 
 impl Extractor {
@@ -89,10 +87,7 @@ impl Extractor {
         Self {
             config,
             terminate_flag: Arc::new(Mutex::new(false)),
-            targets: HashMap::new(),
-            system_metrics: Vec::new(),
             rx_timer: None,
-            kfile_socket_map: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -125,42 +120,29 @@ impl Extractor {
             .expect("Failed to create interval-timer thread");
     }
 
-    fn write_fs_version(&self) -> Result<()> {
-        fs::create_dir_all(&*self.config.data_directory)?;
-        fs::write(
-            format!("{}/version.txt", self.config.data_directory),
-            "0.2.0\n",
-        )?;
-        Ok(())
-    }
-
     pub fn run(mut self) -> Result<()> {
         self.register_sighandler();
         self.start_timer_thread();
-        let time_sensitive_collector_tx = TimeSensitive::init_thread(
-            self.terminate_flag.clone(),
-            Duration::from_millis(self.config.period),
-        );
 
         let pid_map = create_pid_map()?;
         let pid_rb = create_pid_rb()?;
-        let init_pids = Vec::new();
+        let mut init_pids: Vec<usize> = Vec::new();
 
         if let Some(process_name) = &self.config.process_name {
-            init_pids.extend(Target::search_targets_regex(&process_name, false))?
+            init_pids.extend(target::search_targets_regex(&process_name, false)?);
         }
 
         if let Some(pids) = &self.config.pids {
-            init_pids.extend(pids);
+            init_pids.extend(pids.clone());
         }
 
-        init_pids.into_iter.for_each(|pid| {
+        for pid in init_pids {
             pid_map.update(
-                &(*pid as u32).to_ne_bytes(),
+                &(pid as u32).to_ne_bytes(),
                 &1u8.to_ne_bytes(),
                 MapFlags::ANY,
-            )?;
-        });
+            )?
+        }
 
         let euid = unsafe { geteuid() };
         let uid = env::var("SUDO_UID")?.parse::<u32>()?;
@@ -199,7 +181,13 @@ impl Extractor {
 
         let mut muxio = Muxio::new(pid_map.as_fd(), &conn).unwrap();
 
-        let mut taskstats = TaskStats::new(&pid_map, pid_rb, &conn)?;
+        TimeSensitive::init_thread(
+            self.terminate_flag.clone(),
+            Duration::from_millis(self.config.period),
+            pid_map,
+            pid_rb,
+            conn.try_clone()?,
+        );
 
         let rx_timer = self.rx_timer.take().unwrap();
         loop {
@@ -224,7 +212,6 @@ impl Extractor {
             muxio.sample()?;
             let muxio_elapsed = start.elapsed().as_nanos();
             let muxio_acct = muxio_elapsed - net_elapsed;
-            taskstats.sample()?;
             info!(
                 "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] muxio[{}%]",
                 muxio_elapsed / 1_000_000,
@@ -246,35 +233,31 @@ impl TimeSensitive {
     pub fn init_thread(
         terminate_flag: Arc<Mutex<bool>>,
         sample_interval: Duration,
-    ) -> Sender<Box<dyn Collect + Send>> {
+        pid_map: MapHandle,
+        pid_rb: MapHandle,
+        conn: Connection,
+    ) {
         let sample_rx = Self::start_timer_thread(terminate_flag.clone(), sample_interval);
-        let (collector_tx, collector_rx) = mpsc::channel::<Box<dyn Collect + Send>>();
         thread::Builder::new()
             .name("ts-collect".to_string())
             .spawn(move || {
-                let mut collectors: Vec<Box<dyn Collect + Send>> = Vec::new();
+                let mut taskstats = TaskStats::new(&pid_map, pid_rb, &conn)?;
                 loop {
                     sample_rx.recv()?;
+                    while let Ok(_) = sample_rx.try_recv() {}
                     if *terminate_flag.lock().unwrap() == true {
                         break;
                     }
                     let start = Instant::now();
-                    while let Ok(collector) = collector_rx.try_recv() {
-                        collectors.push(collector);
-                    }
-                    for collector in collectors.iter_mut() {
-                        collector.sample();
-                        collector.store();
-                    }
+                    taskstats.sample()?;
                     info!(
-                        "time sensitive loop duration: {}ms",
-                        start.elapsed().as_millis()
+                        "time sensitive loop duration: {}us",
+                        start.elapsed().as_micros()
                     );
                 }
                 Ok(()) as Result<()>
             })
             .expect("Failed to create ts-collect thread");
-        collector_tx
     }
 
     fn start_timer_thread(
