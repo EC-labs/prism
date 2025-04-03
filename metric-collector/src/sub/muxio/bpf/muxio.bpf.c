@@ -24,6 +24,13 @@ struct {
 } in_muxio SEC(".maps");
 
 struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, MAX_ENTRIES);
+    __type(key, u64);
+    __type(value, u64);
+} in_epoll SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, sizeof(struct poll_register_file_event) * (1<<20) * 2); // (40 * (1<<20) * 2)
 } rb SEC(".maps");
@@ -36,7 +43,7 @@ struct {
 } epoll_files SEC(".maps");
 
 
-static __u32 zero = 0;
+static u64 zero = 0;
 static bool truth = true;
 
 inline u32 pid(u64 tgid_pid) {
@@ -159,20 +166,32 @@ int BPF_PROG(__fdget, u32 fd, u64 word)
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
     bool *inmuxio = bpf_map_lookup_elem(&in_muxio, &tgid_pid);
-    if (!inmuxio)
-        return 0;
+    bool *inepoll = bpf_map_lookup_elem(&in_epoll, &tgid_pid);
+    if (inmuxio) {
+        u64 mask = ~3;
+        struct file *f = (struct file *) (word & mask);
 
-    u64 mask = ~3;
-    struct file *f = (struct file *) (word & mask);
+        struct poll_register_file_event event = {0};
+        event.event = POLL_REGISTER_FILE;
+        event.i_rdev = BPF_CORE_READ(f, f_inode, i_rdev);
+        event.magic = BPF_CORE_READ(f, f_inode, i_sb, s_magic);
+        event.i_ino = BPF_CORE_READ(f, f_inode, i_ino);
+        event.tgid_pid = tgid_pid;
+        event.ts = bpf_ktime_get_ns();
+        bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+    } else if (inepoll && *inepoll == zero) {
+        u64 mask = ~3;
+        struct file *f = (struct file *) (word & mask);
+        u64 ep = (u64) BPF_CORE_READ(f, private_data);
 
-    struct poll_register_file_event event = {0};
-    event.event = POLL_REGISTER_FILE;
-    event.i_rdev = BPF_CORE_READ(f, f_inode, i_rdev);
-    event.magic = BPF_CORE_READ(f, f_inode, i_sb, s_magic);
-    event.i_ino = BPF_CORE_READ(f, f_inode, i_ino);
-    event.tgid_pid = tgid_pid;
-    event.ts = bpf_ktime_get_ns();
-    bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+        struct epoll_start_event event = {0};
+        event.event = EPOLL_START;
+        event.tgid_pid = bpf_get_current_pid_tgid();
+        event.ep_address = ep;
+        event.ts = bpf_ktime_get_ns();
+        bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+        bpf_map_update_elem(&in_epoll, &tgid_pid, &ep, BPF_ANY);
+    }
 
     return 0;
 }
@@ -200,37 +219,46 @@ int BPF_PROG(__ep_remove, struct eventpoll *ep, struct epitem *epi)
 }
 
 
-SEC("fentry/ep_poll")
-int BPF_PROG(ep_poll, struct eventpoll *ep)
+SEC("fentry/do_epoll_wait")
+int BPF_PROG(do_epoll_wait, struct eventpoll *ep)
 {
     if (!track()) {
         return 0;
     }
 
-    struct epoll_start_event event = {0};
-    event.event = EPOLL_START;
-    event.tgid_pid = bpf_get_current_pid_tgid();
-    event.ep_address = (u64) ep;
-    event.ts = bpf_ktime_get_ns();
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    bpf_map_update_elem(&in_epoll, &tgid_pid, &zero, BPF_ANY);
 
-    bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+    // struct epoll_start_event event = {0};
+    // event.event = EPOLL_START;
+    // event.tgid_pid = bpf_get_current_pid_tgid();
+    // event.ep_address = (u64) ep;
+    // event.ts = bpf_ktime_get_ns();
+
+    // bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     return 0;
 }
 
-SEC("fexit/ep_poll")
-int BPF_PROG(ep_poll_exit, struct eventpoll *ep)
+SEC("fexit/do_epoll_wait")
+int BPF_PROG(do_epoll_wait_exit, struct eventpoll *ep)
 {
     if (!track()) {
         return 0;
     }
 
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    u64 *inepoll = bpf_map_lookup_elem(&in_epoll, &tgid_pid);
+    if (!inepoll) 
+        return 0;
+
     struct epoll_start_event event = {0};
     event.event = EPOLL_END;
-    event.tgid_pid = bpf_get_current_pid_tgid();
-    event.ep_address = (u64) ep;
+    event.tgid_pid = tgid_pid;
+    event.ep_address = *inepoll;
     event.ts = bpf_ktime_get_ns();
-
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
+
+    bpf_map_delete_elem(&in_epoll, &tgid_pid);
     return 0;
 }
 
