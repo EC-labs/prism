@@ -4,7 +4,7 @@ use eyre::eyre;
 use std::rc::Rc;
 
 pub struct Config {
-    pub pids: Option<Vec<u64>>,
+    pub pids: Option<Vec<usize>>,
     pub period: u64,
     pub data_directory: Rc<str>,
     pub process_name: Option<String>,
@@ -13,8 +13,8 @@ pub struct Config {
 impl TryFrom<ArgMatches> for Config {
     type Error = Box<dyn std::error::Error>;
     fn try_from(mut matches: ArgMatches) -> Result<Self, Self::Error> {
-        let pids: Option<Vec<u64>> = matches
-            .remove_many::<u64>("pids")
+        let pids: Option<Vec<usize>> = matches
+            .remove_many::<usize>("pids")
             .map(|pids| pids.collect());
 
         let process_name = matches.remove_one::<String>("process-name");

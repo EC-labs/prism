@@ -11,6 +11,14 @@ use duckdb::Connection;
 use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, getuid, seteuid};
 
+pub mod cmdline;
+pub mod configure;
+pub mod execute;
+pub mod extract;
+pub mod metrics;
+pub mod sub;
+mod target;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let mut command = cmdline::register_args();
