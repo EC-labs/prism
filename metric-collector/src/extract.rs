@@ -1,5 +1,9 @@
 use anyhow::Result;
 use ctrlc;
+use duckdb::Connection;
+use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
+use libc::{geteuid, seteuid};
+use log::info;
 use nix::time::{self, ClockId};
 use std::{
     cell::RefCell,
@@ -18,17 +22,11 @@ use std::{
 
 use std::{env, mem::MaybeUninit};
 
-use crate::sub::{
-    futex::Futex, iowait::IOWait, muxio::Muxio, net::Net, taskstats::TaskStats, vfs::Vfs,
+use crate::{
+    configure::Config,
+    sub::{futex::Futex, iowait::IOWait, muxio::Muxio, net::Net, taskstats::TaskStats, vfs::Vfs},
+    target,
 };
-use crate::target;
-use duckdb::Connection;
-use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
-use libc::{geteuid, seteuid};
-use log::info;
-
-use crate::{configure::Config, execute::programs::clone::CloneEvent, metrics::Collect};
-use crate::{execute::Executor, metrics::ipc::KFile};
 
 pub static BOOT_EPOCH_NS: RwLock<u64> = RwLock::new(0);
 
