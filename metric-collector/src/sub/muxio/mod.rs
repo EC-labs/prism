@@ -468,11 +468,6 @@ enum PollKey {
     Poll(u64),
 }
 
-enum PollPendingValue {
-    Epoll { ts_start: u64, count: u64 },
-    Poll(u64),
-}
-
 struct EpollPending {
     count: u64,
     ts_start: u64,
@@ -656,9 +651,6 @@ impl PollState {
                     let diff = u64::min(ts - ts_start, ts - shard_start);
                     bri_stats.acct(diff, true);
                 }
-            }
-            _ => {
-                error!("PollState can't process event {:?}", event);
             }
         }
     }

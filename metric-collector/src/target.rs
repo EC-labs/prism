@@ -1,22 +1,6 @@
 use anyhow::Result;
-use duckdb::Connection;
-use libbpf_rs::MapHandle;
-use log::info;
 use regex::Regex;
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    error::Error,
-    fmt::{self, Display},
-    fs,
-    rc::Rc,
-    sync::{
-        mpsc::{self, Receiver, Sender},
-        Arc, Mutex,
-    },
-    thread,
-    time::{Duration, Instant},
-};
+use std::fs;
 
 pub fn search_targets_regex(name: &str, kthread: bool) -> Result<Vec<usize>> {
     let mut targets = Vec::new();

@@ -1,6 +1,4 @@
 use anyhow::Result;
-use std::time::Duration;
-use std::{env, mem::MaybeUninit};
 
 pub mod cmdline;
 pub mod configure;

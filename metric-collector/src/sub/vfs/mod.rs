@@ -11,7 +11,7 @@ use libc::{clock_gettime, timespec, CLOCK_MONOTONIC};
 use log::debug;
 use std::{
     collections::HashMap,
-    ffi::{c_void, CStr},
+    ffi::c_void,
     fmt::Debug,
     mem::MaybeUninit,
     os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd},
@@ -49,13 +49,13 @@ trait UpdateEnd<T> {
 }
 
 impl UpdateEnd<&u64> for &u64 {
-    fn update_end(curr: u64, pending: &u64) -> u64 {
+    fn update_end(_curr: u64, pending: &u64) -> u64 {
         *pending / 1_000_000_000 * 1_000_000_000
     }
 }
 
 impl UpdateEnd<&inflight_value> for &inflight_value {
-    fn update_end(curr: u64, pending: &inflight_value) -> u64 {
+    fn update_end(curr: u64, _pending: &inflight_value) -> u64 {
         curr
     }
 }

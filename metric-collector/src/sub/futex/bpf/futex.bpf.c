@@ -141,11 +141,11 @@ int BPF_PROG(get_futex_key_exit, int ret)
     bpf_probe_read(&deref_key, sizeof(deref_key), *fkey);
     bool *key_present = bpf_map_lookup_elem(&futex_keys, &deref_key);
 
-    if ((value != NULL) && (key_present == NULL)) {
+    if ((value) && (!key_present)) {
         bpf_map_update_elem(&futex_keys, &deref_key, &truth, BPF_ANY);
         // bpf_printk("adding key: %llu %llu %u", 
         //            deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);
-    } else if ((value == NULL) && (key_present != NULL)) {
+    } else if ((!value) && (key_present)) {
         bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
         bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
         bpf_printk("[futex] discovered tgid: %u %llu %llu %u", tgid, deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);

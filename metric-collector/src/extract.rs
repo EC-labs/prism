@@ -6,21 +6,16 @@ use libc::{geteuid, seteuid};
 use log::info;
 use nix::time::{self, ClockId};
 use std::{
-    cell::RefCell,
-    collections::HashMap,
-    fs,
+    env,
+    mem::MaybeUninit,
     os::fd::AsFd,
-    rc::Rc,
-    sync::mpsc,
     sync::{
-        mpsc::{Receiver, Sender},
+        mpsc::{self, Receiver},
         Arc, Mutex, RwLock,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
-use std::{env, mem::MaybeUninit};
 
 use crate::{
     configure::Config,

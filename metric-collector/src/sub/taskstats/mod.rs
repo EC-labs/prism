@@ -6,18 +6,15 @@ use std::{
     mem::MaybeUninit,
     ptr::NonNull,
     sync::mpsc::{self, Receiver, Sender},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use anyhow::{bail, Context, Result};
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
-    libbpf_sys::{
-        self, bpf_iter_attach_opts, bpf_iter_link_info, bpf_program, bpf_program__attach_iter,
-    },
+    libbpf_sys::{self, bpf_iter_attach_opts, bpf_iter_link_info, bpf_program__attach_iter},
     skel::{OpenSkel, SkelBuilder},
-    AsRawLibbpf, Error, Iter, Link, MapCore, MapHandle, MapImpl, OpenObject, ProgramImpl,
-    ProgramMut, RingBuffer, RingBufferBuilder,
+    AsRawLibbpf, Error, Iter, Link, MapCore, MapHandle, ProgramMut, RingBufferBuilder,
 };
 use log::debug;
 
@@ -94,7 +91,9 @@ impl<'conn> TaskStats<'conn> {
 
             for pid in init_pids {
                 let link = create_link_for_pid(pid, &skel.progs.get_tasks)?;
-                tx.send((pid, link));
+                let Ok(_) = tx.send((pid, link)) else {
+                    return Err(mpsc::SendError("failed to send link").into());
+                };
             }
 
             let mut builder = RingBufferBuilder::new();
@@ -221,8 +220,10 @@ impl<'conn> TaskStats<'conn> {
 
     pub fn sample(&mut self) -> Result<()> {
         while let Ok((pid, link)) = self.link_rx.try_recv() {
-            info!("discovered {pid}");
-            self.links.entry(pid).or_insert(link);
+            self.links.entry(pid).or_insert_with(|| {
+                info!("discovered {pid}");
+                link
+            });
         }
         let mut remove = Vec::new();
         let mut buf = Vec::new();
@@ -235,11 +236,11 @@ impl<'conn> TaskStats<'conn> {
             }
         }
 
-        remove.into_iter().for_each(|pid| {
+        for pid in remove {
             self.links.remove(&pid);
-            self.pid_map.delete(&pid.to_ne_bytes());
+            self.pid_map.delete(&pid.to_ne_bytes())?;
             info!("remove {pid}");
-        });
+        }
 
         if buf.len() == 0 {
             return Ok(());
@@ -278,7 +279,9 @@ fn rb_callback<'conn>(
         let pid: &[u8; 4] = pid.try_into().unwrap();
         let pid: &u32 = unsafe { std::mem::transmute::<_, _>(pid) };
         let link = create_link_for_pid(*pid, &get_tasks).unwrap();
-        tx.send((*pid, link));
+        let Ok(_) = tx.send((*pid, link)) else {
+            return 1;
+        };
         0
     }
 }
