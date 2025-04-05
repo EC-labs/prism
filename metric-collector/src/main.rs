@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(config) => config,
     };
 
-    let extractor = Extractor::new(config);
+    let extractor = Extractor::new(config)?;
     extractor.run()?;
 
     Ok(())

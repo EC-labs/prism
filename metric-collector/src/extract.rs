@@ -1,12 +1,13 @@
 use anyhow::Result;
 use ctrlc;
-use duckdb::Connection;
+use duckdb::{Connection, ToSql};
 use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, seteuid};
 use log::info;
 use nix::time::{self, ClockId};
+use regex::Regex;
 use std::{
-    env,
+    env, fs,
     mem::MaybeUninit,
     os::fd::AsFd,
     sync::{
@@ -16,6 +17,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use syn::{Expr, Item, Lit};
 
 use crate::{
     configure::Config,
@@ -63,10 +65,11 @@ pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
     config: Config,
     rx_timer: Option<Receiver<bool>>,
+    conn: Connection,
 }
 
 impl Extractor {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config) -> Result<Self> {
         if *BOOT_EPOCH_NS.read().unwrap() == 0 {
             let ns_since_boot =
                 Duration::from(time::clock_gettime(ClockId::CLOCK_BOOTTIME).unwrap()).as_nanos();
@@ -77,11 +80,74 @@ impl Extractor {
                 .as_nanos();
             *BOOT_EPOCH_NS.write().unwrap() = (ns_since_epoch - ns_since_boot) as u64;
         }
-        Self {
+
+        let euid = unsafe { geteuid() };
+        let uid = env::var("SUDO_UID")?.parse::<u32>()?;
+        unsafe { seteuid(uid) };
+        let path = "./data/prism-db.db3";
+        let conn = Connection::open(&path)?;
+        unsafe { seteuid(euid) };
+
+        Self::insert_linux_consts(&conn)?;
+        Ok(Self {
+            conn,
             config,
             terminate_flag: Arc::new(Mutex::new(false)),
             rx_timer: None,
+        })
+    }
+
+    fn insert_linux_consts(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            r"
+            CREATE OR REPLACE TABLE linux_consts (
+                const_type VARCHAR,
+                const_name VARCHAR,   
+                value UINTEGER,
+            );
+            ",
+        )?;
+        let mut appender = conn.appender("linux_consts")?;
+
+        let src = fs::read_to_string("metric-collector/src/sub/include/linux/bindings.rs")?;
+        let syntax = syn::parse_file(&src).expect("Unable to parse file");
+        for item in syntax.items {
+            let Item::Const(itemconst) = item else {
+                continue;
+            };
+            let Expr::Lit(exprlit) = *itemconst.expr else {
+                continue;
+            };
+            let Lit::Int(litint) = exprlit.lit else {
+                continue;
+            };
+
+            let identifier = itemconst.ident.to_string();
+            let literal = litint.base10_parse::<u32>()?;
+
+            let re = Regex::new(r"sock_type_(.*)").unwrap();
+            if let Some(captures) = re.captures(&identifier) {
+                let const_name = captures.get(1).unwrap().as_str();
+                appender.append_row([&"socket_type" as &dyn ToSql, &const_name, &literal])?;
+                continue;
+            }
+
+            let re = Regex::new(r"(AF_.*)").unwrap();
+            if let Some(captures) = re.captures(&identifier) {
+                let const_name = captures.get(1).unwrap().as_str();
+                appender.append_row([&"socket_family" as &dyn ToSql, &const_name, &literal])?;
+                continue;
+            }
+
+            let re = Regex::new(r"(IPPROTO_.*)").unwrap();
+            if let Some(captures) = re.captures(&identifier) {
+                let const_name = captures.get(1).unwrap().as_str();
+                appender.append_row([&"family_protocol" as &dyn ToSql, &const_name, &literal])?;
+                continue;
+            }
         }
+
+        return Ok(());
     }
 
     fn register_sighandler(&self) {
@@ -137,33 +203,28 @@ impl Extractor {
             )?
         }
 
-        let euid = unsafe { geteuid() };
-        let uid = env::var("SUDO_UID")?.parse::<u32>()?;
-        unsafe { seteuid(uid) };
-        let path = "./data/prism-db.db3";
-        let conn = Connection::open(&path)?;
-        unsafe { seteuid(euid) };
+        let conn = &self.conn;
 
         let mut iowait_open_object = MaybeUninit::uninit();
-        let mut iowait = IOWait::new(&mut iowait_open_object, &conn).unwrap();
+        let mut iowait = IOWait::new(&mut iowait_open_object, conn).unwrap();
 
         let mut vfs_open_object = MaybeUninit::uninit();
         let mut vfs =
-            Vfs::new(&mut vfs_open_object, &conn, pid_map.as_fd(), pid_rb.as_fd()).unwrap();
+            Vfs::new(&mut vfs_open_object, conn, pid_map.as_fd(), pid_rb.as_fd()).unwrap();
 
         let mut futex_open_object = MaybeUninit::uninit();
         let mut futex = Futex::new(
             &mut futex_open_object,
             pid_map.as_fd(),
             pid_rb.as_fd(),
-            &conn,
+            conn,
         )
         .unwrap();
 
         let mut net_open_object = MaybeUninit::uninit();
         let mut net = Net::new(
             &mut net_open_object,
-            &conn,
+            conn,
             pid_map.as_fd(),
             pid_rb.as_fd(),
             vfs.skel.maps.samples.as_fd(),
@@ -172,7 +233,7 @@ impl Extractor {
         )
         .unwrap();
 
-        let mut muxio = Muxio::new(pid_map.as_fd(), &conn).unwrap();
+        let mut muxio = Muxio::new(pid_map.as_fd(), conn).unwrap();
 
         TimeSensitive::init_thread(
             self.terminate_flag.clone(),

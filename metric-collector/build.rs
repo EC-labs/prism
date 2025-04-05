@@ -1,25 +1,52 @@
-use std::env;
+use anyhow::Result;
 use std::ffi::OsStr;
 use std::path::PathBuf;
+use std::{env, fs};
 
 use libbpf_cargo::SkeletonBuilder;
 
 const SUBS: [&str; 6] = ["iowait", "vfs", "futex", "net", "muxio", "taskstats"];
 
-fn main() {
+fn generate_linux_header_bindings() -> Result<()> {
+    let dir = "src/sub/include/linux";
+    let headers: Vec<_> = fs::read_dir(dir)?
+        .map(|dentry| {
+            String::from(
+                dentry
+                    .unwrap()
+                    .path()
+                    .to_str()
+                    .expect("unable to convert path to &str"),
+            )
+        })
+        .filter(|filename| filename.ends_with(".h"))
+        .collect();
+
     let bindings = bindgen::Builder::default()
-        // The input header we would like to generate
-        // bindings for.
-        .header("src/sub/taskstats/bpf/taskstats.h")
-        // Tell cargo to invalidate the built crate whenever any of the
-        // included header files changed.
+        .headers(headers)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        // Finish the builder and generate the bindings.
         .generate()
-        // Unwrap the Result and panic on failure.
+        .expect("Unable to generate linux header bindings");
+
+    let out = PathBuf::from(
+        env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set in build script"),
+    )
+    .join("src/sub/include/linux/bindings.rs");
+
+    bindings
+        .write_to_file(out)
+        .expect("Couldn't write linux bindings");
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    generate_linux_header_bindings()?;
+    let bindings = bindgen::Builder::default()
+        .header("src/sub/taskstats/bpf/taskstats.h")
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .generate()
         .expect("Unable to generate bindings");
 
-    // Write the bindings to the $OUT_DIR/bindings.rs file.
     let out = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set in build script"),
     )
@@ -56,4 +83,6 @@ fn main() {
             .unwrap();
         println!("cargo:rerun-if-changed={src}");
     }
+
+    Ok(())
 }

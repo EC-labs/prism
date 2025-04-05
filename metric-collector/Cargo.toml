@@ -12,8 +12,10 @@ path = "src/main.rs"
 bindgen = "0.71.1"
 libbpf-cargo = { version = "0.24.8" }
 vmlinux = { version = "0.0", git = "https://github.com/libbpf/vmlinux.h.git", rev = "172793d6a409d98d1cfb843c80df73733e9f832f" }
+anyhow = "1.0"
 
 [dependencies]
+syn = { version = "2.0.100", features = ["parsing", "full", "extra-traits"] }
 chrono = "0.4.33"
 ctrlc = "3.4.2"
 eyre = "0.6.12"
