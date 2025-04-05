@@ -277,8 +277,8 @@ __always_inline int map_sockets(u64 send_inode_id, u64 recv_inode_id)
 
 __always_inline int internal_discovery(struct sock *sk, struct sk_buff *skb) 
 {
-    void *head = BPF_CORE_READ(skb, head);
-    struct internal_disc *v = bpf_map_lookup_elem(&pending_skb, &head);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    struct internal_disc *v = bpf_map_lookup_elem(&pending_skb, &tgid_pid);
     if (v == NULL) {
         return 0;
     }
@@ -590,9 +590,18 @@ int BPF_PROG(__dev_queue_xmit, struct sk_buff *skb)
     struct internal_disc v = {0};
     v.sk = BPF_CORE_READ(skb, sk);
     v.inode_id = BPF_CORE_READ(skb, sk, sk_socket, file, f_inode, i_ino);
-    v.head = BPF_CORE_READ(skb, head);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
 
-    bpf_map_update_elem(&pending_skb, &v.head, &v, BPF_NOEXIST);
+    bpf_map_update_elem(&pending_skb, &tgid_pid, &v, BPF_NOEXIST);
+    return 0;
+}
+
+
+SEC("fexit/__dev_queue_xmit")
+int BPF_PROG(__dev_queue_xmit_exit, struct sk_buff *skb) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&pending_skb, &tgid_pid);
     return 0;
 }
 
@@ -606,20 +615,4 @@ SEC("fentry/__udp_enqueue_schedule_skb")
 int BPF_PROG(__udp_enqueue_schedule_skb, struct sock *sk, struct sk_buff *skb) 
 {
     return internal_discovery(sk, skb);
-}
-
-SEC("fentry/kfree_skb_partial") 
-int BPF_PROG(kfree_skb_partial, struct sk_buff *skb) 
-{
-    void *head = BPF_CORE_READ(skb, head);
-    bpf_map_delete_elem(&pending_skb, &head);
-    return 0;
-}
-
-SEC("fentry/skb_free_head") 
-int BPF_PROG(skb_free_head, struct sk_buff *skb) 
-{
-    void *head = BPF_CORE_READ(skb, head);
-    bpf_map_delete_elem(&pending_skb, &head);
-    return 0;
 }

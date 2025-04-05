@@ -72,7 +72,6 @@ struct socket_context_value {
 };
 
 struct internal_disc {
-    void        *head;
     u64         inode_id;
     struct sock *sk;
 };
