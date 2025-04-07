@@ -27,7 +27,16 @@ mod muxio {
     ));
 }
 
+mod bindings {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/sub/muxio/muxio.bindings.rs"
+    ));
+}
+
+use bindings::*;
 use muxio::*;
+
 const BATCH_SIZE: usize = 8192;
 const SAMPLES: u64 = 10;
 
@@ -280,14 +289,6 @@ impl MuxioEvent {
     }
 }
 
-#[allow(non_camel_case_types)]
-#[repr(C)]
-struct poll_start_event {
-    event: u8,
-    tgid_pid: u64,
-    ts: u64,
-}
-
 impl From<&poll_start_event> for MuxioEvent {
     fn from(value: &poll_start_event) -> Self {
         Self::PollStart {
@@ -297,14 +298,6 @@ impl From<&poll_start_event> for MuxioEvent {
     }
 }
 
-#[allow(non_camel_case_types)]
-#[repr(C)]
-struct poll_end_event {
-    event: u8,
-    tgid_pid: u64,
-    ts: u64,
-}
-
 impl From<&poll_end_event> for MuxioEvent {
     fn from(value: &poll_end_event) -> Self {
         Self::PollEnd {
@@ -312,17 +305,6 @@ impl From<&poll_end_event> for MuxioEvent {
             tgid_pid: value.tgid_pid,
         }
     }
-}
-
-#[allow(non_camel_case_types)]
-#[repr(C)]
-struct poll_register_file_event {
-    event: u8,
-    magic: u32,
-    i_rdev: u32,
-    tgid_pid: u64,
-    i_ino: u64,
-    ts: u64,
 }
 
 impl From<&poll_register_file_event> for MuxioEvent {
@@ -339,15 +321,6 @@ impl From<&poll_register_file_event> for MuxioEvent {
     }
 }
 
-#[allow(non_camel_case_types)]
-#[repr(C)]
-struct epoll_start_event {
-    event: u8,
-    tgid_pid: u64,
-    ep_address: u64,
-    ts: u64,
-}
-
 impl From<&epoll_start_event> for MuxioEvent {
     fn from(value: &epoll_start_event) -> Self {
         Self::EpollStart {
@@ -358,15 +331,6 @@ impl From<&epoll_start_event> for MuxioEvent {
     }
 }
 
-#[allow(non_camel_case_types)]
-#[repr(C)]
-struct epoll_end_event {
-    event: u8,
-    tgid_pid: u64,
-    ep_address: u64,
-    ts: u64,
-}
-
 impl From<&epoll_end_event> for MuxioEvent {
     fn from(value: &epoll_end_event) -> Self {
         Self::EpollEnd {
@@ -375,17 +339,6 @@ impl From<&epoll_end_event> for MuxioEvent {
             ep_address: value.ep_address,
         }
     }
-}
-
-#[allow(non_camel_case_types)]
-#[repr(C)]
-struct epoll_register_file_event {
-    event: u8,
-    magic: u32,
-    i_rdev: u32,
-    i_ino: u64,
-    ep_address: u64,
-    ts: u64,
 }
 
 impl From<&epoll_register_file_event> for MuxioEvent {

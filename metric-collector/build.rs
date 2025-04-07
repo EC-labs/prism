@@ -41,24 +41,29 @@ fn generate_linux_header_bindings() -> Result<()> {
 
 fn main() -> Result<()> {
     generate_linux_header_bindings()?;
-    let bindings = bindgen::Builder::default()
-        .header("src/sub/taskstats/bpf/taskstats.h")
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        .generate()
-        .expect("Unable to generate bindings");
 
-    let out = PathBuf::from(
-        env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set in build script"),
-    )
-    .join("src/sub/taskstats");
-    bindings
-        .write_to_file(out.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
+    let cargo_manifest_dir =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
 
-    let common = PathBuf::from(
-        env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set in build script"),
-    )
-    .join("src/sub/include");
+    for bind in ["taskstats", "muxio"] {
+        let bindings = bindgen::Builder::default()
+            .header(
+                cargo_manifest_dir
+                    .join(format!("src/sub/{bind}/bpf/{bind}.h"))
+                    .to_str()
+                    .expect("invalid &str"),
+            )
+            .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+            .generate()
+            .expect("Unable to generate bindings");
+
+        let out = cargo_manifest_dir.join(format!("src/sub/{bind}"));
+        bindings
+            .write_to_file(out.join(format!("{bind}.bindings.rs")))
+            .expect("Couldn't write bindings!");
+    }
+
+    let common = cargo_manifest_dir.join("src/sub/include");
     println!(
         "cargo:rerun-if-changed={}/common.h",
         common.to_str().unwrap()
@@ -66,21 +71,11 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed={}/vfs.h", common.to_str().unwrap());
 
     for sub in SUBS {
-        let out = PathBuf::from(
-            env::var_os("CARGO_MANIFEST_DIR")
-                .expect("CARGO_MANIFEST_DIR must be set in build script"),
-        )
-        .join("src")
-        .join("sub")
-        .join(sub)
-        .join("bpf")
-        .join(&format!("{sub}.skel.rs"));
-
+        let out = cargo_manifest_dir.join(format!("src/sub/{sub}/bpf/{sub}.skel.rs"));
         let arch = env::var("CARGO_CFG_TARGET_ARCH")
             .expect("CARGO_CFG_TARGET_ARCH must be set in build script");
 
         let src = format!("src/sub/{sub}/bpf/{sub}.bpf.c");
-
         SkeletonBuilder::new()
             .source(&src)
             .clang_args([

@@ -28,7 +28,7 @@ mod taskstats {
 mod bindings {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/sub/taskstats/bindings.rs"
+        "/src/sub/taskstats/taskstats.bindings.rs"
     ));
 }
 

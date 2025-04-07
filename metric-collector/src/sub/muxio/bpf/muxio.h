@@ -14,6 +14,8 @@
 #define EPOLL_INSERT_FILE   0x5
 #define EPOLL_REMOVE_FILE   0x6
 
+#include <asm/types.h>
+
 struct poll_start_event {
     __u8 event;
     __u64 tgid_pid;
