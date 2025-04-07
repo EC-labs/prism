@@ -1,6 +1,7 @@
 #ifndef _LINUX_SOCKET_H
 #define _LINUX_SOCKET_H
 
+#ifndef __VMLINUX_H__
 enum sock_type {
 	SOCK_DGRAM	= 1,
 	SOCK_STREAM	= 2,
@@ -10,6 +11,7 @@ enum sock_type {
 	SOCK_DCCP	= 6,
 	SOCK_PACKET	= 10,
 };
+#endif /* __VMLINUX_H__ */
 
 /* Supported address families. */
 #define AF_UNSPEC	0

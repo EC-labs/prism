@@ -1,9 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
-/* Copyright (c) 2020 Facebook */
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+
+#include <common.h>
+#include <vfs.h>
+#include <linux/socket.h>
 #include "net.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
@@ -78,122 +80,6 @@ struct {
     __type(key, u64);
     __type(value, struct internal_disc);
 } pending_skb SEC(".maps");
-
-static int zero = 0;
-static bool truth = true;
-
-inline u32 pid(u64 tgid_pid) {
-    return tgid_pid & (((u64) 1<<32) - 1);
-}
-
-inline u32 tgid(u64 tgid_pid) {
-    return tgid_pid >> 32;
-}
-
-__u32 log_base10_bucket(__u64 ns_diff) {
-    __u32 bucket = 7;
-    if(ns_diff <= 1000) {
-        bucket = 0;
-
-    } else if ( ns_diff <= 10000) {
-        bucket = 1;
-
-    } else if ( ns_diff <= 100000) {
-        bucket = 2;
-
-    } else if ( ns_diff <= 1000000) {
-        bucket = 3;
-
-    } else if ( ns_diff <= 10000000) {
-        bucket = 4;
-    } else if ( ns_diff <= 100000000) {
-        bucket = 5;
-    } else if ( ns_diff <= 1000000000) {
-        bucket = 6;
-    } else {
-        bucket = 7;
-    }
-    return bucket;
-}
-
-u64 min(u64 x, u64 y) {
-    return x < y ? x : y;
-}
-
-void to_update_acct(u64 start, u64 curr, struct granularity gran) {
-    u64 sample = (curr / 1000000000) * 1000000000;
-    if (start >= sample) {
-        return;
-    }
-
-    struct to_update_key key = {0};
-    key.ts = start;
-    key.granularity = gran;
-    bpf_map_update_elem(&to_update, &key, &sample, BPF_ANY);
-}
-
-__always_inline int vfs_acct_start(struct inode *f_inode, u8 dir) {
-    if (!f_inode) {
-        return 0;
-    }
-
-    u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
-    u32 tgid = (u32) (tgid_pid >> 32);
-
-    struct inflight_key key = {
-        .tgid_pid = tgid_pid,
-    };
-    struct inflight_value value;
-    value.bri.i_ino = BPF_CORE_READ(f_inode, i_ino);
-    value.bri.i_rdev = 0;
-    value.bri.fs_magic = 0x534F434B;
-    value.ts = bpf_ktime_get_ns();
-    value.is_write = dir;
-    bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
-    return 0;
-}
-
-__always_inline int vfs_acct_end() {
-    u64 tgid_pid = bpf_get_current_pid_tgid();
-    struct inflight_value *value = bpf_map_lookup_elem(&pending, &tgid_pid);
-    if (!value)
-        return 0;
-
-    u64 ts = bpf_ktime_get_ns();
-    u64 sample = (ts / 1000000000) % SAMPLES;
-    struct inner *inner = bpf_map_lookup_elem(&samples, &sample);
-    if (!inner)
-        return 0;
-
-
-    struct granularity gran = {0};
-    gran.tgid = tgid(tgid_pid);
-    gran.pid = pid(tgid_pid);
-    gran.bri = value->bri;
-    gran.dir = value->is_write;
-    struct stats *stat = bpf_map_lookup_elem(inner, &gran);
-    if (!stat) {
-        struct stats init = {0};
-        init.ts_s = ts / 1000000000;
-        bpf_map_update_elem(inner, &gran, &init, BPF_ANY);
-
-        stat = bpf_map_lookup_elem(inner, &gran);
-        if (!stat)
-            return 0;
-    }
-
-    __u64 sample_latency = min(ts - value->ts, ts - (ts/1000000000) * 1000000000);
-    __u64 ns_latency = ts - value->ts;
-    __u32 bucket = log_base10_bucket(ns_latency);
-    __sync_fetch_and_add(&stat->total_requests, 1);
-    __sync_fetch_and_add(&stat->total_time, sample_latency);
-    __sync_fetch_and_add(stat->hist + bucket, 1);
-
-    to_update_acct(value->ts, ts, gran);
-    
-    bpf_map_delete_elem(&pending, &tgid_pid);
-    return 0;
-}
 
 __always_inline int store_socket_context(struct socket *sock, struct inode *f_inode) 
 {
@@ -321,7 +207,9 @@ int BPF_PROG(inet_recvmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, READ);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, READ);
     return 0;
 }
 
@@ -329,7 +217,7 @@ int BPF_PROG(inet_recvmsg, struct socket *sock)
 SEC("fexit/inet_recvmsg")
 int BPF_PROG(inet_recvmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -341,14 +229,16 @@ int BPF_PROG(inet_sendmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, (u8) WRITE);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     return 0;
 }
 
 SEC("fexit/inet_sendmsg")
 int BPF_PROG(inet_sendmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -360,7 +250,9 @@ int BPF_PROG(inet6_recvmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, READ);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, READ);
     return 0;
 }
 
@@ -368,7 +260,7 @@ int BPF_PROG(inet6_recvmsg, struct socket *sock)
 SEC("fexit/inet6_recvmsg")
 int BPF_PROG(inet6_recvmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -380,14 +272,16 @@ int BPF_PROG(inet6_sendmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, (u8) WRITE);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     return 0;
 }
 
 SEC("fexit/inet6_sendmsg")
 int BPF_PROG(inet6_sendmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -401,14 +295,16 @@ int BPF_PROG(sock_splice_read, struct file *f)
 
     struct socket *sock = BPF_CORE_READ(f, private_data);
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, READ);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, READ);
     return 0;
 }
 
 SEC("fexit/sock_splice_read")
 int BPF_PROG(sock_splice_read_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -421,14 +317,16 @@ int BPF_PROG(splice_to_socket, struct pipe_inode_info *pipe, struct file *f)
 
     struct socket *sock = BPF_CORE_READ(f, private_data);
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, WRITE);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     return 0;
 }
 
 SEC("fexit/splice_to_socket")
 int BPF_PROG(splice_to_socket_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -440,14 +338,16 @@ int BPF_PROG(unix_stream_recvmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, READ);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, READ);
     return 0;
 }
 
 SEC("fexit/unix_stream_recvmsg")
 int BPF_PROG(unix_stream_recvmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -459,14 +359,16 @@ int BPF_PROG(unix_stream_sendmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, WRITE);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     return 0;
 }
 
 SEC("fexit/unix_stream_sendmsg")
 int BPF_PROG(unix_stream_sendmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -478,14 +380,16 @@ int BPF_PROG(unix_dgram_recvmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, READ);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, READ);
     return 0;
 }
 
 SEC("fexit/unix_dgram_recvmsg")
 int BPF_PROG(unix_dgram_recvmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -497,14 +401,16 @@ int BPF_PROG(unix_dgram_sendmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, WRITE);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     return 0;
 }
 
 SEC("fexit/unix_dgram_sendmsg")
 int BPF_PROG(unix_dgram_sendmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -516,14 +422,16 @@ int BPF_PROG(unix_seqpacket_recvmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, READ);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, READ);
     return 0;
 }
 
 SEC("fexit/unix_seqpacket_recvmsg")
 int BPF_PROG(unix_seqpacket_recvmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -535,14 +443,16 @@ int BPF_PROG(unix_seqpacket_sendmsg, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, WRITE);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     return 0;
 }
 
 SEC("fexit/unix_seqpacket_sendmsg")
 int BPF_PROG(unix_seqpacket_sendmsg_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -554,14 +464,16 @@ int BPF_PROG(unix_accept, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, ACCEPT);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, ACCEPT);
     return 0;
 }
 
 SEC("fexit/unix_accept")
 int BPF_PROG(unix_accept_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -573,14 +485,16 @@ int BPF_PROG(inet_accept, struct socket *sock)
         return 0;
 
     store_socket_context(sock, f_inode);
-    vfs_acct_start(f_inode, ACCEPT);
+    struct bri file = inode_to_vfs_bri(f_inode);
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    vfs_acct_start(&pending, tgid_pid, &file, ACCEPT);
     return 0;
 }
 
 SEC("fexit/inet_accept")
 int BPF_PROG(inet_accept_exit)
 {
-    vfs_acct_end();
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 

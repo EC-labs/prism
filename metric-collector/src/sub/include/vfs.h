@@ -3,6 +3,7 @@
 
 #define READ 0
 #define WRITE 1
+#define ACCEPT 2
 
 #define S_IFMT  00170000
 #define S_IFSOCK 0140000
@@ -90,16 +91,14 @@ __always_inline static int vfs_acct_end(void *pending_map, void *samples, void *
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
     struct inflight_value *value = bpf_map_lookup_elem(pending_map, &tgid_pid);
-    if (!value) {
+    if (!value)
         return 0;
-    }
 
     u64 ts = bpf_ktime_get_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     void *inner = bpf_map_lookup_elem(samples, &sample);
-    if (!inner) {
+    if (!inner)
         return 0;
-    }
 
     struct granularity gran = {0};
     gran.tgid = get_tgid(tgid_pid);
