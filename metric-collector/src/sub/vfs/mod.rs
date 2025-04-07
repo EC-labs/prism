@@ -69,7 +69,7 @@ impl From<UpdatedKey> for to_update_key {
         key.granularity.bri.i_rdev = value.bri.i_rdev;
         key.granularity.pid = value.tgid_pid as u32;
         key.granularity.tgid = (value.tgid_pid >> 32) as u32;
-        key.granularity.dir = value.is_write;
+        key.granularity.op = value.op;
         key
     }
 }
@@ -86,7 +86,7 @@ struct UpdatedKey {
     bri: Bri,
     start: u64,
     tgid_pid: u64,
-    is_write: u8,
+    op: u8,
 }
 
 #[derive(Debug)]
@@ -96,7 +96,7 @@ struct PendingRecord {
     tid: u32,
     bri: Bri,
     additional_time: u64,
-    is_write: u8,
+    op: u8,
 }
 
 impl From<(&to_update_key, &u64)> for UpdatedKey {
@@ -109,7 +109,7 @@ impl From<(&to_update_key, &u64)> for UpdatedKey {
             },
             start: key.ts,
             tgid_pid: (key.granularity.tgid as u64) << 32 | key.granularity.pid as u64,
-            is_write: key.granularity.dir,
+            op: key.granularity.op,
         }
     }
 }
@@ -124,7 +124,7 @@ impl From<(&inflight_key, &inflight_value)> for UpdatedKey {
             },
             start: value.ts,
             tgid_pid: key.tgid_pid,
-            is_write: value.is_write,
+            op: value.op,
         }
     }
 }
@@ -197,7 +197,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     fs_magic UINTEGER,
                     device_id UINTEGER,
                     inode_id UBIGINT,
-                    is_write UTINYINT,
+                    op UTINYINT,
                     total_time UBIGINT,
                     total_requests UINTEGER,
                     hist0 UINTEGER,
@@ -217,7 +217,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     fs_magic UINTEGER,
                     device_id UINTEGER,
                     inode_id UBIGINT,
-                    is_write UTINYINT,
+                    op UTINYINT,
                     additional_time UBIGINT,
                 )
             ",
@@ -244,7 +244,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 Box::new(&granularity.bri.fs_magic),
                 Box::new(&granularity.bri.i_rdev),
                 Box::new(&granularity.bri.i_ino),
-                Box::new(&granularity.dir),
+                Box::new(&granularity.op),
                 Box::new(&stats.total_time),
                 Box::new(&stats.total_requests),
                 Box::new(&stats.hist[0]),
@@ -281,7 +281,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 Box::new(&record.bri.fs_magic),
                 Box::new(&record.bri.i_rdev),
                 Box::new(&record.bri.i_ino),
-                Box::new(&record.is_write),
+                Box::new(&record.op),
                 Box::new(&record.additional_time),
             ]
         });
@@ -306,14 +306,14 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 AND v.fs_magic = vs.fs_magic
                 AND v.device_id = vs.device_id
                 AND v.inode_id = vs.inode_id
-                AND v.is_write = vs.is_write;
+                AND v.op = vs.op;
 
-            INSERT INTO vfs (ts_s, pid, tid, fs_magic, device_id, inode_id, is_write, total_time)
+            INSERT INTO vfs (ts_s, pid, tid, fs_magic, device_id, inode_id, op, total_time)
                 SELECT 
                     vs.*
                 FROM vfs_staging as vs
                 LEFT JOIN vfs as v
-                    USING (ts_s, pid, tid, fs_magic, device_id, inode_id, is_write)
+                    USING (ts_s, pid, tid, fs_magic, device_id, inode_id, op)
                 WHERE 
                     v.ts_s IS NULL;
 
@@ -454,7 +454,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     tid: (updated_key.tgid_pid & ((1 << 32) - 1)) as u32,
                     bri: updated_key.bri.clone(),
                     additional_time,
-                    is_write: updated_key.is_write,
+                    op: updated_key.op,
                 });
             }
 

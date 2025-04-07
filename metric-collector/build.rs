@@ -50,12 +50,20 @@ fn main() -> Result<()> {
     let out = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set in build script"),
     )
-    .join("src")
-    .join("sub")
-    .join("taskstats");
+    .join("src/sub/taskstats");
     bindings
         .write_to_file(out.join("bindings.rs"))
         .expect("Couldn't write bindings!");
+
+    let common = PathBuf::from(
+        env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set in build script"),
+    )
+    .join("src/sub/include");
+    println!(
+        "cargo:rerun-if-changed={}/common.h",
+        common.to_str().unwrap()
+    );
+    println!("cargo:rerun-if-changed={}/vfs.h", common.to_str().unwrap());
 
     for sub in SUBS {
         let out = PathBuf::from(
@@ -78,6 +86,8 @@ fn main() -> Result<()> {
             .clang_args([
                 OsStr::new("-I"),
                 vmlinux::include_path_root().join(arch).as_os_str(),
+                OsStr::new("-I"),
+                common.as_os_str(),
             ])
             .build_and_generate(&out)
             .unwrap();

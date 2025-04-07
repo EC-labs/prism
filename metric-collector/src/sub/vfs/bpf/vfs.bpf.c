@@ -4,7 +4,9 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
-#include "vfs.h"
+
+#include <common.h>
+#include <vfs.h>
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -55,142 +57,49 @@ struct {
     __array(values, struct inner);
 } samples SEC(".maps");
 
-inline u32 pid(u64 tgid_pid) {
-    return tgid_pid & (((u64) 1<<32) - 1);
-}
 
-inline u32 tgid(u64 tgid_pid) {
-    return tgid_pid >> 32;
-}
-
-__u32 log_base10_bucket(__u64 ns_diff) {
-    __u32 bucket = 7;
-    if(ns_diff <= 1000) {
-        bucket = 0;
-
-    } else if ( ns_diff <= 10000) {
-        bucket = 1;
-
-    } else if ( ns_diff <= 100000) {
-        bucket = 2;
-
-    } else if ( ns_diff <= 1000000) {
-        bucket = 3;
-
-    } else if ( ns_diff <= 10000000) {
-        bucket = 4;
-    } else if ( ns_diff <= 100000000) {
-        bucket = 5;
-    } else if ( ns_diff <= 1000000000) {
-        bucket = 6;
-    } else {
-        bucket = 7;
+__always_inline bool track(struct bri *file, u32 tgid) {
+    bool *filep = bpf_map_lookup_elem(&bris, file);
+    bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
+    if (!filep) {
+        if (!pidp)
+            return false;
+        bpf_map_update_elem(&bris, file, &truth, BPF_ANY);
     }
-    return bucket;
-}
 
-u64 min(u64 x, u64 y) {
-    return x < y ? x : y;
+    if (!pidp) {
+        discover_tgid(&pids, &pid_rb, tgid);
+        bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file->fs_magic, file->i_rdev, file->i_ino);
+    }
+    return true;
 }
-
 
 SEC("fentry/vfs_read")
 int BPF_PROG(vfs_read, struct file *file)
 {
     struct inode *f_inode = BPF_CORE_READ(file, f_inode);
+    if (!f_inode)
+        return 0;
+
     umode_t i_mode = BPF_CORE_READ(f_inode, i_mode);
     if (((i_mode & S_IFMT) == S_IFIFO) || ((i_mode & S_IFMT) == S_IFCHR)) {
-        u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
-        u32 tgid = (u32) (tgid_pid >> 32);
-        struct bri file;
-        file.i_ino = BPF_CORE_READ(f_inode, i_ino);
-        file.i_rdev = BPF_CORE_READ(f_inode, i_rdev);
-        file.fs_magic = BPF_CORE_READ(f_inode, i_sb, s_magic);
-        bool truth = true;
-        bool *filep = bpf_map_lookup_elem(&bris, &file);
-        bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
-        if (!filep) {
-            if (!pidp)
-                return 0;
-            bpf_map_update_elem(&bris, &file, &truth, BPF_ANY);
+        u64 tgid_pid = bpf_get_current_pid_tgid();
+        u32 tgid = get_tgid(tgid_pid);
+        struct bri file = inode_to_vfs_bri(f_inode);
+
+        if (!track(&file, tgid)) {
+            return 0;
         }
 
-        if (!pidp) {
-            bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
-            bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
-            bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.fs_magic, file.i_rdev, file.i_ino);
-        }
-
-        struct inflight_key key = {
-            .tgid_pid = tgid_pid,
-        };
-        struct inflight_value value = {0};
-        value.bri = file;
-        value.ts = bpf_ktime_get_ns();
-        value.is_write = READ;
-        bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
+        vfs_acct_start(&pending, tgid_pid, &file, READ);
     }
     return 0;
-}
-
-
-void to_update_acct(u64 start, u64 curr, struct granularity gran) {
-    u64 sample = (curr / 1000000000) * 1000000000;
-    if (start >= sample) {
-        return;
-    }
-
-    struct to_update_key key = {0};
-    key.ts = start;
-    key.granularity = gran;
-    bpf_map_update_elem(&to_update, &key, &sample, BPF_ANY);
 }
 
 SEC("fexit/vfs_read")
 int BPF_PROG(vfs_read_exit, ssize_t ret)
 {
-    u64 tgid_pid = bpf_get_current_pid_tgid();
-    struct inflight_value *value = bpf_map_lookup_elem(&pending, &tgid_pid);
-    if (!value) {
-        return 0;
-    }
-
-    u64 ts = bpf_ktime_get_ns();
-    u64 sample = (ts / 1000000000) % SAMPLES;
-    struct inner *inner = bpf_map_lookup_elem(&samples, &sample);
-    if (!inner) {
-        return 0;
-    }
-
-    struct granularity gran = {0};
-    gran.tgid = tgid(tgid_pid);
-    gran.pid = pid(tgid_pid);
-    gran.bri.i_ino = value->bri.i_ino;
-    gran.bri.i_rdev = value->bri.i_rdev;
-    gran.bri.fs_magic = value->bri.fs_magic;
-    gran.dir = READ;
-    struct stats *stat = bpf_map_lookup_elem(inner, &gran);
-    if (stat == NULL) {
-        struct stats init = {0};
-        init.ts_s = ts / 1000000000;
-        bpf_map_update_elem(inner, &gran, &init, BPF_ANY);
-
-        stat = bpf_map_lookup_elem(inner, &gran);
-        if (!stat) {
-            return 0;
-        }
-    }
-
-    __u64 sample_latency = min(ts - value->ts, ts - (ts/1000000000) * 1000000000);
-    __u64 ns_latency = ts - value->ts;
-    __u32 bucket = log_base10_bucket(ns_latency);
-    __sync_fetch_and_add(&stat->total_requests, 1);
-    __sync_fetch_and_add(&stat->total_time, sample_latency);
-    __sync_fetch_and_add(stat->hist + bucket, 1);
-
-    to_update_acct(value->ts, ts, gran);
-    
-    bpf_map_delete_elem(&pending, &tgid_pid);
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
 
@@ -200,36 +109,15 @@ int BPF_PROG(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
     struct inode *f_inode = BPF_CORE_READ(file, f_inode);
     umode_t i_mode = BPF_CORE_READ(f_inode, i_mode);
     if (((i_mode & S_IFMT) == S_IFIFO) || ((i_mode & S_IFMT) == S_IFCHR)) {
-        u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
-        u32 tgid = (u32) (tgid_pid >> 32);
-        struct bri file;
-        file.i_ino = BPF_CORE_READ(f_inode, i_ino);
-        file.i_rdev = BPF_CORE_READ(f_inode, i_rdev);
-        file.fs_magic = BPF_CORE_READ(f_inode, i_sb, s_magic);
-        bool truth = true;
-        bool *filep = bpf_map_lookup_elem(&bris, &file);
-        bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
-        if (!filep) {
-            if (!pidp) {
-                return 0;
-            }
-            bpf_map_update_elem(&bris, &file, &truth, BPF_ANY);
+        u64 tgid_pid = bpf_get_current_pid_tgid();
+        u32 tgid = get_tgid(tgid_pid);
+        struct bri file = inode_to_vfs_bri(f_inode);
+
+        if (!track(&file, tgid)) {
+            return 0;
         }
 
-        if (!pidp) {
-            bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
-            bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
-            bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file.fs_magic, file.i_rdev, file.i_ino);
-        }
-
-        struct inflight_key key = {
-            .tgid_pid = tgid_pid,
-        };
-        struct inflight_value value = {0};
-        value.bri = file;
-        value.ts = bpf_ktime_get_ns();
-        value.is_write = WRITE;
-        bpf_map_update_elem(&pending, &key, &value, BPF_ANY);
+        vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     }
     return 0;
 }
@@ -237,44 +125,6 @@ int BPF_PROG(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
 SEC("fexit/vfs_write")
 int BPF_PROG(vfs_write_exit, ssize_t ret)
 {
-    u64 tgid_pid = bpf_get_current_pid_tgid();
-    struct inflight_value *value = bpf_map_lookup_elem(&pending, &tgid_pid);
-    if (!value)
-        return 0;
-
-    u64 ts = bpf_ktime_get_ns();
-    u64 sample = (ts / 1000000000) % SAMPLES;
-    struct inner *inner = bpf_map_lookup_elem(&samples, &sample);
-    if (!inner)
-        return 0;
-
-    struct granularity gran = {0};
-    gran.tgid = tgid(tgid_pid);
-    gran.pid = pid(tgid_pid);
-    gran.bri.i_ino = value->bri.i_ino;
-    gran.bri.i_rdev = value->bri.i_rdev;
-    gran.bri.fs_magic = value->bri.fs_magic;
-    gran.dir = value->is_write;
-    struct stats *stat = bpf_map_lookup_elem(inner, &gran);
-    if (stat == NULL) {
-        struct stats init = {0};
-        init.ts_s = ts / 1000000000;
-        bpf_map_update_elem(inner, &gran, &init, BPF_ANY);
-
-        stat = bpf_map_lookup_elem(inner, &gran);
-        if (!stat)
-            return 0;
-    }
-
-    __u64 sample_latency = min(ts - value->ts, ts - (ts/1000000000) * 1000000000);
-    __u64 ns_latency = ts - value->ts;
-    __u32 bucket = log_base10_bucket(ns_latency);
-    __sync_fetch_and_add(&stat->total_requests, 1);
-    __sync_fetch_and_add(&stat->total_time, sample_latency);
-    __sync_fetch_and_add(stat->hist + bucket, 1);
-
-    to_update_acct(value->ts, ts, gran);
-    
-    bpf_map_delete_elem(&pending, &tgid_pid);
+    vfs_acct_end(&pending, &samples, &to_update);
     return 0;
 }
