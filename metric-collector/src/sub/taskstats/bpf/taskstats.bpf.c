@@ -19,7 +19,7 @@ int get_tasks(struct bpf_iter__task *ctx)
 	if (!task)
 		return 0;
 
-    stats.ts = bpf_ktime_get_ns();
+    stats.ts = bpf_ktime_get_boot_ns();
 	stats.pid = BPF_CORE_READ(task, tgid);
 	stats.tid = BPF_CORE_READ(task, pid);
     BPF_CORE_READ_INTO(&stats.comm, task, comm);

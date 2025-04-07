@@ -104,7 +104,7 @@ int BPF_PROG(do_sys_poll)
     struct poll_start_event event = {0};
     event.event = POLL_START;
     event.tgid_pid = tgid_pid;
-    event.ts = bpf_ktime_get_ns();
+    event.ts = bpf_ktime_get_boot_ns();
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     bpf_map_update_elem(&in_muxio, &tgid_pid, &truth, BPF_ANY);
     return 0;
@@ -122,7 +122,7 @@ int BPF_PROG(do_sys_poll_exit)
     struct poll_end_event event = {0};
     event.event = POLL_END;
     event.tgid_pid = bpf_get_current_pid_tgid();
-    event.ts = bpf_ktime_get_ns();
+    event.ts = bpf_ktime_get_boot_ns();
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     bpf_map_delete_elem(&in_muxio, &tgid_pid);
     return 0;
@@ -138,7 +138,7 @@ int BPF_PROG(core_sys_select)
     struct poll_start_event event = {0};
     event.event = POLL_START;
     event.tgid_pid = tgid_pid;
-    event.ts = bpf_ktime_get_ns();
+    event.ts = bpf_ktime_get_boot_ns();
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     bpf_map_update_elem(&in_muxio, &tgid_pid, &truth, BPF_ANY);
     return 0;
@@ -155,7 +155,7 @@ int BPF_PROG(core_sys_select_exit)
     struct poll_end_event event = {0};
     event.event = POLL_END;
     event.tgid_pid = bpf_get_current_pid_tgid();
-    event.ts = bpf_ktime_get_ns();
+    event.ts = bpf_ktime_get_boot_ns();
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     bpf_map_delete_elem(&in_muxio, &tgid_pid);
     return 0;
@@ -177,7 +177,7 @@ int BPF_PROG(__fdget, u32 fd, u64 word)
         event.magic = BPF_CORE_READ(f, f_inode, i_sb, s_magic);
         event.i_ino = BPF_CORE_READ(f, f_inode, i_ino);
         event.tgid_pid = tgid_pid;
-        event.ts = bpf_ktime_get_ns();
+        event.ts = bpf_ktime_get_boot_ns();
         bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     } else if (inepoll && *inepoll == zero) {
         u64 mask = ~3;
@@ -188,7 +188,7 @@ int BPF_PROG(__fdget, u32 fd, u64 word)
         event.event = EPOLL_START;
         event.tgid_pid = bpf_get_current_pid_tgid();
         event.ep_address = ep;
-        event.ts = bpf_ktime_get_ns();
+        event.ts = bpf_ktime_get_boot_ns();
         bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
         bpf_map_update_elem(&in_epoll, &tgid_pid, &ep, BPF_ANY);
     }
@@ -212,7 +212,7 @@ int BPF_PROG(__ep_remove, struct eventpoll *ep, struct epitem *epi)
     event.i_rdev = BPF_CORE_READ(epi, ffd.file, f_inode, i_rdev);
     event.i_ino = BPF_CORE_READ(epi, ffd.file, f_inode, i_ino);
     event.ep_address = (u64) ep;
-    event.ts = bpf_ktime_get_ns();
+    event.ts = bpf_ktime_get_boot_ns();
 
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     return 0;
@@ -228,14 +228,6 @@ int BPF_PROG(do_epoll_wait, struct eventpoll *ep)
 
     u64 tgid_pid = bpf_get_current_pid_tgid();
     bpf_map_update_elem(&in_epoll, &tgid_pid, &zero, BPF_ANY);
-
-    // struct epoll_start_event event = {0};
-    // event.event = EPOLL_START;
-    // event.tgid_pid = bpf_get_current_pid_tgid();
-    // event.ep_address = (u64) ep;
-    // event.ts = bpf_ktime_get_ns();
-
-    // bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     return 0;
 }
 
@@ -255,7 +247,7 @@ int BPF_PROG(do_epoll_wait_exit, struct eventpoll *ep)
     event.event = EPOLL_END;
     event.tgid_pid = tgid_pid;
     event.ep_address = *inepoll;
-    event.ts = bpf_ktime_get_ns();
+    event.ts = bpf_ktime_get_boot_ns();
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
 
     bpf_map_delete_elem(&in_epoll, &tgid_pid);
@@ -282,7 +274,7 @@ int BPF_KPROBE(ep_item_poll, struct epitem *epi)
     event.i_rdev = BPF_CORE_READ(epi, ffd.file, f_inode, i_rdev);
     event.i_ino = BPF_CORE_READ(epi, ffd.file, f_inode, i_ino);
     event.ep_address = (u64) BPF_CORE_READ(epi, ep);
-    event.ts = bpf_ktime_get_ns();
+    event.ts = bpf_ktime_get_boot_ns();
     bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
     return 0;
 }

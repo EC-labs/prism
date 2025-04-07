@@ -76,7 +76,7 @@ int BPF_KPROBE(__submit_bio, struct bio *bio)
     };
 
     struct inflight_val v = {
-        .ts = bpf_ktime_get_ns(),
+        .ts = bpf_ktime_get_boot_ns(),
         .size = size,
         .pid_tgid = bpf_get_current_pid_tgid(),
     };
@@ -116,7 +116,7 @@ int BPF_KPROBE(bio_endio, struct bio *bio)
         return -1;
     }
 
-    u64 ts = bpf_ktime_get_ns();
+    u64 ts = bpf_ktime_get_boot_ns();
     u64 sample = (ts/1000000000) % SAMPLES;
     void *inner = bpf_map_lookup_elem(&samples, &sample);
     if (inner == NULL) {

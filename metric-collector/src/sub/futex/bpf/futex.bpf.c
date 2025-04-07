@@ -171,7 +171,7 @@ int futex_enter(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     struct inflight_value v = {0};
-    v.ts = bpf_ktime_get_ns();
+    v.ts = bpf_ktime_get_boot_ns();
 
     int op = BPF_CORE_READ(ctx, args[1]);
     op = op & (~FUTEX_PRIVATE_FLAG) & (~FUTEX_CLOCK_REALTIME);
@@ -211,7 +211,7 @@ int futex_exit(struct trace_event_raw_sys_enter *ctx) {
         return 0;
     }
 
-    u64 ts = bpf_ktime_get_ns();
+    u64 ts = bpf_ktime_get_boot_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     struct inner *inner = bpf_map_lookup_elem(&samples, &sample);
     if (!inner)
