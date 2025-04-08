@@ -4,20 +4,14 @@
 #include <bpf/bpf_core_read.h>
 #include "taskstats.h"
 
+#include <common.h>
+
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-static __u32 zero = 0;
 
-SEC("iter/task")
-int get_tasks(struct bpf_iter__task *ctx)
+__always_inline struct task_delay_acct get_taskstats(struct task_struct *task)
 {
-	struct seq_file *seq = ctx->meta->seq;
-	struct task_struct *task = ctx->task;
 	struct task_delay_acct stats = {0};
-	long res;
-
-	if (!task)
-		return 0;
 
     stats.ts = bpf_ktime_get_boot_ns();
 	stats.pid = BPF_CORE_READ(task, tgid);
@@ -45,7 +39,19 @@ int get_tasks(struct bpf_iter__task *ctx)
 
     stats.nvcsw = BPF_CORE_READ(task, nvcsw);
     stats.nivcsw = BPF_CORE_READ(task, nivcsw);
+	return stats;
+}
 
+SEC("iter/task")
+int get_tasks(struct bpf_iter__task *ctx)
+{
+	struct seq_file *seq = ctx->meta->seq;
+	struct task_struct *task = ctx->task;
+
+	if (!task)
+		return 0;
+
+    struct task_delay_acct stats = get_taskstats(task);
 	int ret = bpf_seq_write(seq, &stats, sizeof(struct task_delay_acct));
 	return 0;
 }
