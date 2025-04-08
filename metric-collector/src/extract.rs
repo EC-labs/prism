@@ -21,7 +21,14 @@ use syn::{Expr, Item, Lit};
 
 use crate::{
     configure::Config,
-    sub::{futex::Futex, iowait::IOWait, muxio::Muxio, net::Net, taskstats::TaskStats, vfs::Vfs},
+    sub::{
+        futex::Futex,
+        iowait::IOWait,
+        muxio::Muxio,
+        net::Net,
+        taskstats::{TaskStatsIter, TaskStatsTrace},
+        vfs::Vfs,
+    },
     target,
 };
 
@@ -233,6 +240,10 @@ impl Extractor {
         )
         .unwrap();
 
+        let mut taskstats_open_object = MaybeUninit::uninit();
+        let mut taskstats =
+            TaskStatsTrace::new(&mut taskstats_open_object, &conn, pid_map.as_fd())?;
+
         let mut muxio = Muxio::new(pid_map.as_fd(), conn).unwrap();
 
         TimeSensitive::init_thread(
@@ -263,16 +274,20 @@ impl Extractor {
             net.sample()?;
             let net_elapsed = start.elapsed().as_nanos();
             let net_acct = net_elapsed - futex_elapsed;
+            taskstats.sample()?;
+            let taskstats_elapsed = start.elapsed().as_nanos();
+            let taskstats_acct = taskstats_elapsed - net_elapsed;
             muxio.sample()?;
             let muxio_elapsed = start.elapsed().as_nanos();
-            let muxio_acct = muxio_elapsed - net_elapsed;
+            let muxio_acct = muxio_elapsed - taskstats_elapsed;
             info!(
-                "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] muxio[{}%]",
+                "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] taskstats[{}%] muxio[{}%]",
                 muxio_elapsed / 1_000_000,
                 iowait_elapsed * 100 / muxio_elapsed,
                 vfs_acct * 100 / muxio_elapsed,
                 futex_acct * 100 / muxio_elapsed,
                 net_acct * 100 / muxio_elapsed,
+                taskstats_acct * 100 / muxio_elapsed,
                 muxio_acct * 100 / muxio_elapsed,
             );
         }
@@ -295,7 +310,7 @@ impl TimeSensitive {
         thread::Builder::new()
             .name("ts-collect".to_string())
             .spawn(move || {
-                let mut taskstats = TaskStats::new(pid_map, pid_rb, &conn)?;
+                let mut taskstats = TaskStatsIter::new(pid_map, pid_rb, &conn)?;
                 loop {
                     sample_rx.recv()?;
                     while let Ok(_) = sample_rx.try_recv() {}

@@ -4,6 +4,7 @@ use std::{
     ffi::CStr,
     io::Read,
     mem::MaybeUninit,
+    os::fd::BorrowedFd,
     ptr::NonNull,
     sync::mpsc::{self, Receiver, Sender},
     time::Duration,
@@ -13,8 +14,9 @@ use anyhow::{bail, Context, Result};
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     libbpf_sys::{self, bpf_iter_attach_opts, bpf_iter_link_info, bpf_program__attach_iter},
-    skel::{OpenSkel, SkelBuilder},
-    AsRawLibbpf, Error, Iter, Link, MapCore, MapHandle, ProgramMut, RingBufferBuilder,
+    skel::{OpenSkel, Skel, SkelBuilder},
+    AsRawLibbpf, Error, Iter, Link, MapCore, MapHandle, OpenObject, ProgramMut, RingBuffer,
+    RingBufferBuilder,
 };
 use log::debug;
 
@@ -33,7 +35,7 @@ mod bindings {
 }
 
 use bindings::task_delay_acct;
-use taskstats::TaskstatsSkelBuilder;
+use taskstats::{TaskstatsSkel, TaskstatsSkelBuilder};
 
 fn bump_memlock_rlimit() -> Result<()> {
     let rlimit = libc::rlimit {
@@ -63,14 +65,14 @@ pub fn validate_bpf_ret<T>(ptr: *mut T) -> libbpf_rs::Result<NonNull<T>> {
     }
 }
 
-pub struct TaskStats<'conn> {
+pub struct TaskStatsIter<'conn> {
     links: HashMap<u32, Link>,
     link_rx: Receiver<(u32, Link)>,
     taskstats_appender: Appender<'conn>,
     pid_map: MapHandle,
 }
 
-impl<'conn> TaskStats<'conn> {
+impl<'conn> TaskStatsIter<'conn> {
     pub fn new(pid_map: MapHandle, pid_rb: MapHandle, conn: &'conn Connection) -> Result<Self> {
         bump_memlock_rlimit()?;
 
@@ -108,85 +110,13 @@ impl<'conn> TaskStats<'conn> {
             Ok(()) as Result<()>
         });
 
-        Self::init_store(conn)?;
+        init_store(conn)?;
         Ok(Self {
             pid_map,
             links: HashMap::new(),
             link_rx: rx,
             taskstats_appender: conn.appender("taskstats")?,
         })
-    }
-
-    fn init_store(conn: &Connection) -> Result<()> {
-        conn.execute_batch(
-            r"
-                CREATE OR REPLACE TABLE taskstats (
-                    ts              TIMESTAMP,
-                    pid             UINTEGER,
-                    tid             UINTEGER,
-                    comm            VARCHAR,
-                    nvcsw           UBIGINT,
-                    nivcsw           UBIGINT,
-                    run_time_total  UBIGINT,
-                    rq_time_total   UBIGINT,
-                    rq_count        UBIGINT,
-                    blkio_time_total    UBIGINT,
-                    blkio_count         UBIGINT,
-                    uninterruptible_total   UBIGINT,
-                    freepages_time_total    UBIGINT,
-                    freepages_count         UBIGINT,
-                    thrashing_time_total    UBIGINT,
-                    thrashing_count         UBIGINT,
-                    swapin_time_total    UBIGINT,
-                    swapin_count         UBIGINT,
-                );
-
-                CREATE OR REPLACE VIEW taskstats_view AS 
-                SELECT 
-                    ts, 
-                    time_diff,
-                    pid,
-                    tid,
-                    comm,
-                    run_time/time_diff as run_share, 
-                    rq_time/time_diff as rq_share,
-                    uninterruptible_time/time_diff as uninterruptible_share,
-                    blkio_time/time_diff as blkio_share,
-                    greatest((time_diff - (run_time + rq_time + uninterruptible_time))/time_diff, 0) as interruptible_share
-                FROM (
-                    SELECT 
-                        ts, 
-                        epoch_ns(ts - ts_last) as time_diff,
-                        pid,
-                        tid, 
-                        comm,
-                        run_time_curr - run_time_last AS run_time,
-                        rq_time_curr - rq_time_last AS rq_time,
-                        uninterruptible_time_curr - uninterruptible_time_last AS uninterruptible_time,
-                        blkio_time_curr - blkio_time_last AS blkio_time,
-                    FROM (
-                        SELECT 
-                            ts, 
-                            lag(ts, 1) OVER (PARTITION BY tid ORDER BY ts) as ts_last,
-                            pid,
-                            tid, 
-                            comm,
-                            run_time_total as run_time_curr, 
-                            lag(run_time_total, 1) OVER (PARTITION BY tid ORDER BY ts) as run_time_last,
-                            rq_time_total as rq_time_curr, 
-                            lag(rq_time_total, 1) OVER (PARTITION BY tid ORDER BY ts) as rq_time_last,
-                            uninterruptible_total as uninterruptible_time_curr, 
-                            lag(uninterruptible_total, 1) OVER (PARTITION BY tid ORDER BY ts) as uninterruptible_time_last,
-                            blkio_time_total as blkio_time_curr, 
-                            lag(blkio_time_total, 1) OVER (PARTITION BY tid ORDER BY ts) as blkio_time_last,
-                        FROM taskstats
-                    )
-                )
-                WHERE 
-                    time_diff IS NOT NULL;
-            ",
-        )?;
-        Ok(())
     }
 
     fn store(&mut self, records: &[task_delay_acct]) -> Result<()> {
@@ -259,6 +189,46 @@ impl<'conn> TaskStats<'conn> {
     }
 }
 
+pub struct TaskStatsTrace<'obj> {
+    _skel: TaskstatsSkel<'obj>,
+    taskstats_rb: RingBuffer<'obj>,
+}
+
+impl<'obj> TaskStatsTrace<'obj> {
+    pub fn new<'conn>(
+        open_object: &'obj mut MaybeUninit<OpenObject>,
+        conn: &'conn Connection,
+        pid_map: BorrowedFd,
+    ) -> Result<Self>
+    where
+        'conn: 'obj,
+    {
+        bump_memlock_rlimit()?;
+        init_store(conn)?;
+        let skel_builder = TaskstatsSkelBuilder::default();
+        let mut open_skel = skel_builder.open(open_object)?;
+        open_skel.maps.pids.reuse_fd(pid_map);
+        let mut skel = open_skel.load()?;
+        let mut builder = RingBufferBuilder::new();
+        builder.add(
+            &skel.maps.taskstats_rb,
+            wrapped_callback(conn.appender("taskstats").unwrap()),
+        )?;
+        let taskstats_rb = builder.build()?;
+        skel.attach()?;
+
+        return Ok(Self {
+            _skel: skel,
+            taskstats_rb,
+        });
+    }
+
+    pub fn sample(&mut self) -> Result<()> {
+        self.taskstats_rb.consume()?;
+        Ok(())
+    }
+}
+
 fn create_link_for_pid(pid: u32, get_tasks: &ProgramMut) -> Result<Link> {
     let mut linfo = bpf_iter_link_info::default();
     let mut opts = bpf_iter_attach_opts::default();
@@ -282,6 +252,111 @@ fn rb_callback<'conn>(
         let Ok(_) = tx.send((*pid, link)) else {
             return 1;
         };
+        0
+    }
+}
+
+fn init_store(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+            CREATE TABLE IF NOT EXISTS taskstats (
+                ts              TIMESTAMP,
+                pid             UINTEGER,
+                tid             UINTEGER,
+                comm            VARCHAR,
+                nvcsw           UBIGINT,
+                nivcsw           UBIGINT,
+                run_time_total  UBIGINT,
+                rq_time_total   UBIGINT,
+                rq_count        UBIGINT,
+                blkio_time_total    UBIGINT,
+                blkio_count         UBIGINT,
+                uninterruptible_total   UBIGINT,
+                freepages_time_total    UBIGINT,
+                freepages_count         UBIGINT,
+                thrashing_time_total    UBIGINT,
+                thrashing_count         UBIGINT,
+                swapin_time_total    UBIGINT,
+                swapin_count         UBIGINT,
+            );
+
+            CREATE OR REPLACE VIEW taskstats_view AS 
+            SELECT 
+                ts, 
+                time_diff,
+                pid,
+                tid,
+                comm,
+                run_time/time_diff as run_share, 
+                rq_time/time_diff as rq_share,
+                uninterruptible_time/time_diff as uninterruptible_share,
+                blkio_time/time_diff as blkio_share,
+                greatest((time_diff - (run_time + rq_time + uninterruptible_time))/time_diff, 0) as interruptible_share
+            FROM (
+                SELECT 
+                    ts, 
+                    epoch_ns(ts - ts_last) as time_diff,
+                    pid,
+                    tid, 
+                    comm,
+                    run_time_curr - run_time_last AS run_time,
+                    rq_time_curr - rq_time_last AS rq_time,
+                    uninterruptible_time_curr - uninterruptible_time_last AS uninterruptible_time,
+                    blkio_time_curr - blkio_time_last AS blkio_time,
+                FROM (
+                    SELECT 
+                        ts, 
+                        lag(ts, 1) OVER (PARTITION BY tid ORDER BY ts) as ts_last,
+                        pid,
+                        tid, 
+                        comm,
+                        run_time_total as run_time_curr, 
+                        lag(run_time_total, 1) OVER (PARTITION BY tid ORDER BY ts) as run_time_last,
+                        rq_time_total as rq_time_curr, 
+                        lag(rq_time_total, 1) OVER (PARTITION BY tid ORDER BY ts) as rq_time_last,
+                        uninterruptible_total as uninterruptible_time_curr, 
+                        lag(uninterruptible_total, 1) OVER (PARTITION BY tid ORDER BY ts) as uninterruptible_time_last,
+                        blkio_time_total as blkio_time_curr, 
+                        lag(blkio_time_total, 1) OVER (PARTITION BY tid ORDER BY ts) as blkio_time_last,
+                    FROM taskstats
+                )
+            )
+            WHERE 
+                time_diff IS NOT NULL;
+        ",
+    )?;
+    Ok(())
+}
+
+fn wrapped_callback<'conn>(
+    mut taskstats_appender: Appender<'conn>,
+) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
+    move |data: &[u8]| {
+        let data: &[u8; size_of::<task_delay_acct>()] =
+            &data[..size_of::<task_delay_acct>()].try_into().unwrap();
+        let record: &task_delay_acct = unsafe { std::mem::transmute(data) };
+        let comm = unsafe { CStr::from_ptr(&record.comm as _).to_str().unwrap() };
+        let ts = Duration::from_nanos(crate::extract::boot_to_epoch(record.ts));
+        taskstats_appender.append_row([
+            &ts as &dyn ToSql,
+            &record.pid,
+            &record.tid,
+            &comm,
+            &record.nvcsw,
+            &record.nivcsw,
+            &record.runtime_total,
+            &record.rq_delay_total,
+            &record.rq_count,
+            &record.blkio_delay_total,
+            &record.blkio_count,
+            &record.uninterruptible_delay_total,
+            &record.freepages_delay_total,
+            &record.freepages_count,
+            &record.thrashing_delay_total,
+            &record.thrashing_count,
+            &record.swapin_delay_total,
+            &record.swapin_count,
+        ]);
         0
     }
 }

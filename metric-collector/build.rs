@@ -7,8 +7,8 @@ use libbpf_cargo::SkeletonBuilder;
 
 const SUBS: [&str; 6] = ["iowait", "vfs", "futex", "net", "muxio", "taskstats"];
 
-fn generate_linux_header_bindings() -> Result<()> {
-    let dir = "src/sub/include/linux";
+fn generate_linux_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
+    let dir = cargo_manifest_dir.join("src/sub/include/linux");
     let headers: Vec<_> = fs::read_dir(dir)?
         .map(|dentry| {
             String::from(
@@ -40,10 +40,9 @@ fn generate_linux_header_bindings() -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    generate_linux_header_bindings()?;
-
     let cargo_manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
+    generate_linux_header_bindings(&cargo_manifest_dir)?;
 
     for bind in ["taskstats", "muxio"] {
         let bindings = bindgen::Builder::default()
@@ -72,8 +71,8 @@ fn main() -> Result<()> {
 
     for sub in SUBS {
         let out = cargo_manifest_dir.join(format!("src/sub/{sub}/bpf/{sub}.skel.rs"));
-        let arch = env::var("CARGO_CFG_TARGET_ARCH")
-            .expect("CARGO_CFG_TARGET_ARCH must be set in build script");
+
+        let arch = env::var("CARGO_CFG_TARGET_ARCH").expect("missing CARGO_CFG_TARGET_ARCH");
 
         let src = format!("src/sub/{sub}/bpf/{sub}.bpf.c");
         SkeletonBuilder::new()

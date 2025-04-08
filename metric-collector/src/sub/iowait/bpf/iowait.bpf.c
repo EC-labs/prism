@@ -6,6 +6,8 @@
 #include <bpf/bpf_core_read.h>
 #include "iowait.h"
 
+#include <common.h>
+
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 struct {
@@ -28,32 +30,6 @@ struct {
 	__uint(key_size, sizeof(u64));
 	__array(values, struct inner);
 } samples SEC(".maps");
-
-__u32 log_base10_bucket(__u64 ns_diff) {
-	__u32 bucket = 7;
-	if(ns_diff <= 1000) {
-		bucket = 0;
-
-	} else if ( ns_diff <= 10000) {
-		bucket = 1;
-
-	} else if ( ns_diff <= 100000) {
-		bucket = 2;
-
-	} else if ( ns_diff <= 1000000) {
-		bucket = 3;
-
-	} else if ( ns_diff <= 10000000) {
-		bucket = 4;
-	} else if ( ns_diff <= 100000000) {
-		bucket = 5;
-	} else if ( ns_diff <= 1000000000) {
-		bucket = 6;
-	} else {
-		bucket = 7;
-	}
-	return bucket;
-}
 
 SEC("kprobe/__submit_bio")
 int BPF_KPROBE(__submit_bio, struct bio *bio)
@@ -150,9 +126,5 @@ int BPF_KPROBE(bio_endio, struct bio *bio)
     __sync_fetch_and_add(stat->hist + bucket, 1);
 
     bpf_map_delete_elem(&pending, &k);
-
-    // bpf_printk("[submit_bio] %d %d %d -> +[%d] %d %d(us)\n", k.part0, k.bdev, v->pid_tgid & (((__u64)1<<32) - 1), v->size, *count, (ts - v->ts)/1000);
-    // bpf_printk("[%d] %d %d %llx: %lld %d %d", (ts/1000000000)%10, gran.part0, gran.bdev, gran.pid_tgid, ns_latency, bucket, v->size);
-
     return 0;
 }
