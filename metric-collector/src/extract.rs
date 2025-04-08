@@ -91,8 +91,7 @@ impl Extractor {
         let euid = unsafe { geteuid() };
         let uid = env::var("SUDO_UID")?.parse::<u32>()?;
         unsafe { seteuid(uid) };
-        let path = "./data/prism-db.db3";
-        let conn = Connection::open(&path)?;
+        let conn = Connection::open(&*config.prism_store)?;
         unsafe { seteuid(euid) };
 
         Self::insert_linux_consts(&conn)?;
