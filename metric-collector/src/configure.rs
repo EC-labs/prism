@@ -1,7 +1,6 @@
 use chrono::prelude::*;
 use clap::ArgMatches;
 use eyre::eyre;
-use std::rc::Rc;
 
 pub struct Config {
     pub pids: Option<Vec<usize>>,

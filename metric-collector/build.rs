@@ -28,10 +28,7 @@ fn generate_linux_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
         .generate()
         .expect("Unable to generate linux header bindings");
 
-    let out = PathBuf::from(
-        env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set in build script"),
-    )
-    .join("src/sub/include/linux/bindings.rs");
+    let out = cargo_manifest_dir.join("src/sub/include/linux/bindings.rs");
 
     bindings
         .write_to_file(out)
@@ -39,49 +36,70 @@ fn generate_linux_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
-    let cargo_manifest_dir =
-        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
-    generate_linux_header_bindings(&cargo_manifest_dir)?;
+fn generate_consts_header_bindings(cargo_manifest_dir: &PathBuf, arch: &str) -> Result<()> {
+    let common = cargo_manifest_dir.join("src/sub/include/consts.h");
+    let bindings = bindgen::Builder::default()
+        .header(common.to_str().unwrap())
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .clang_args([
+            "-I",
+            vmlinux::include_path_root().join(arch).to_str().unwrap(),
+        ])
+        .generate()?;
 
+    let out = cargo_manifest_dir.join("src/sub/include/consts.bindings.rs");
+    bindings.write_to_file(out)?;
+    Ok(())
+}
+
+fn generate_sub_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
     for bind in ["taskstats", "muxio"] {
         let bindings = bindgen::Builder::default()
             .header(
                 cargo_manifest_dir
                     .join(format!("src/sub/{bind}/bpf/{bind}.h"))
                     .to_str()
-                    .expect("invalid &str"),
+                    .unwrap(),
             )
             .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-            .generate()
-            .expect("Unable to generate bindings");
+            .generate()?;
 
         let out = cargo_manifest_dir.join(format!("src/sub/{bind}"));
-        bindings
-            .write_to_file(out.join(format!("{bind}.bindings.rs")))
-            .expect("Couldn't write bindings!");
+        bindings.write_to_file(out.join(format!("{bind}.bindings.rs")))?;
     }
+    Ok(())
+}
 
-    let common = cargo_manifest_dir.join("src/sub/include");
+fn main() -> Result<()> {
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").expect("missing CARGO_CFG_TARGET_ARCH");
+    let cargo_manifest_dir =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
+    let include_common = cargo_manifest_dir.join("src/sub/include");
+
+    generate_linux_header_bindings(&cargo_manifest_dir)?;
+    generate_consts_header_bindings(&cargo_manifest_dir, &arch)?;
+    generate_sub_header_bindings(&cargo_manifest_dir)?;
+
     println!(
-        "cargo:rerun-if-changed={}/common.h",
-        common.to_str().unwrap()
+        "cargo:rerun-if-changed={}/src/sub/include/common.h",
+        cargo_manifest_dir.to_str().unwrap()
     );
-    println!("cargo:rerun-if-changed={}/vfs.h", common.to_str().unwrap());
+    println!(
+        "cargo:rerun-if-changed={}/src/sub/include/vfs.h",
+        cargo_manifest_dir.to_str().unwrap()
+    );
 
     for sub in SUBS {
         let out = cargo_manifest_dir.join(format!("src/sub/{sub}/bpf/{sub}.skel.rs"));
-
-        let arch = env::var("CARGO_CFG_TARGET_ARCH").expect("missing CARGO_CFG_TARGET_ARCH");
 
         let src = format!("src/sub/{sub}/bpf/{sub}.bpf.c");
         SkeletonBuilder::new()
             .source(&src)
             .clang_args([
                 OsStr::new("-I"),
-                vmlinux::include_path_root().join(arch).as_os_str(),
+                vmlinux::include_path_root().join(&arch).as_os_str(),
                 OsStr::new("-I"),
-                common.as_os_str(),
+                include_common.as_os_str(),
             ])
             .build_and_generate(&out)
             .unwrap();

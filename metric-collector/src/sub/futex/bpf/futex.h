@@ -1,12 +1,5 @@
-/* SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause) */
-/* Copyright (c) 2020 Facebook */
 #ifndef __FUTEX_H
 #define __FUTEX_H
-
-#define MAX_ENTRIES 8192
-#define SAMPLE_MAX_ENTRIES MAX_ENTRIES
-#define PENDING_MAX_ENTRIES MAX_ENTRIES
-#define SAMPLES 10
 
 #define FUTEX_WAIT		0
 #define FUTEX_WAKE		1
@@ -19,13 +12,11 @@ struct inflight_key {
 	__u64 tgid_pid;
 };
 
-
 struct inflight_value {
 	__u64 ts;
 	union futex_key fkey;
     u8 op;
 };
-
 
 struct granularity {
 	__u32 tgid;

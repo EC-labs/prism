@@ -5,6 +5,9 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
+#include <common.h>
+#include <consts.h>
+
 #include "futex.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
@@ -25,7 +28,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, sizeof(u32) * 8192);
+	__uint(max_entries, sizeof(u32) * MAX_ENTRIES);
 } pid_rb SEC(".maps");
 
 struct {
@@ -71,57 +74,16 @@ struct {
     __array(values, struct inner);
 } samples SEC(".maps");
 
-static __u32 zero = 0;
-static bool truth = true;
-
-inline u32 pid(u64 tgid_pid) {
-    return tgid_pid & (((u64) 1<<32) - 1);
-}
-
-inline u32 tgid(u64 tgid_pid) {
-    return tgid_pid >> 32;
-}
-
-__u32 log_base10_bucket(__u64 ns_diff) {
-    __u32 bucket = 7;
-    if(ns_diff <= 1000) {
-        bucket = 0;
-
-    } else if ( ns_diff <= 10000) {
-        bucket = 1;
-
-    } else if ( ns_diff <= 100000) {
-        bucket = 2;
-
-    } else if ( ns_diff <= 1000000) {
-        bucket = 3;
-
-    } else if ( ns_diff <= 10000000) {
-        bucket = 4;
-    } else if ( ns_diff <= 100000000) {
-        bucket = 5;
-    } else if ( ns_diff <= 1000000000) {
-        bucket = 6;
-    } else {
-        bucket = 7;
-    }
-    return bucket;
-}
-
-u64 min(u64 x, u64 y) {
-    return x < y ? x : y;
-}
-
 SEC("fentry/get_futex_key")
 int BPF_PROG(get_futex_key, u32 *uaddr, unsigned int flags, union futex_key *key, enum futex_access rw)
 {
-    u64 *tgid_pid = bpf_map_lookup_elem(&current_tgid_pid, &zero);
+    u64 *tgid_pid = bpf_map_lookup_elem(&current_tgid_pid, &z64);
     if (tgid_pid == NULL) {
         return 0;
     }
 
-    bpf_map_delete_elem(&current_tgid_pid, &zero);
-    bpf_map_update_elem(&current_key, &zero, &key, BPF_ANY);
+    bpf_map_delete_elem(&current_tgid_pid, &z64);
+    bpf_map_update_elem(&current_key, &z64, &key, BPF_ANY);
     return 0;
 }
 
@@ -129,12 +91,12 @@ int BPF_PROG(get_futex_key, u32 *uaddr, unsigned int flags, union futex_key *key
 SEC("fexit/get_futex_key")
 int BPF_PROG(get_futex_key_exit, int ret)
 {
-    struct futex_key_struct **fkey = bpf_map_lookup_elem(&current_key, &zero);
+    struct futex_key_struct **fkey = bpf_map_lookup_elem(&current_key, &z64);
     if (!fkey)
         return 0;
 
     u64 tgid_pid = bpf_get_current_pid_tgid();
-    u32 tgid = (u32) (tgid_pid >> 32);
+    u32 tgid = get_tgid(tgid_pid);
     struct inflight_value *value = bpf_map_lookup_elem(&pending, &tgid_pid);
 
     union futex_key deref_key;
@@ -142,10 +104,10 @@ int BPF_PROG(get_futex_key_exit, int ret)
     bool *key_present = bpf_map_lookup_elem(&futex_keys, &deref_key);
 
     if ((value) && (!key_present)) {
+        // Add key to map
         bpf_map_update_elem(&futex_keys, &deref_key, &truth, BPF_ANY);
-        // bpf_printk("adding key: %llu %llu %u", 
-        //            deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);
     } else if ((!value) && (key_present)) {
+        // Discovered new pid from existing key
         bpf_map_update_elem(&pids, &tgid, &truth, BPF_ANY);
         bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
         bpf_printk("[futex] discovered tgid: %u %llu %llu %u", tgid, deref_key.both.ptr, deref_key.both.word, deref_key.both.offset);
@@ -157,14 +119,14 @@ int BPF_PROG(get_futex_key_exit, int ret)
     }
 
     __builtin_memcpy(&value->fkey, &deref_key, sizeof(deref_key));
-    bpf_map_delete_elem(&current_key, &zero);
+    bpf_map_delete_elem(&current_key, &z64);
     return 0;
 }
 
 SEC("tp/syscalls/sys_enter_futex")
 int futex_enter(struct trace_event_raw_sys_enter *ctx) {
     u64 tgid_pid = bpf_get_current_pid_tgid();
-    u32 tgid = (u32) (tgid_pid >> 32);
+    u32 tgid = get_tgid(tgid_pid);
 
     bool *tgid_present = bpf_map_lookup_elem(&pids, &tgid);
     if (!tgid_present)
@@ -186,7 +148,7 @@ int futex_enter(struct trace_event_raw_sys_enter *ctx) {
     }
 
     bpf_map_update_elem(&pending, &tgid_pid, &v, BPF_ANY);
-    bpf_map_update_elem(&current_tgid_pid, &zero, &tgid_pid, BPF_ANY);
+    bpf_map_update_elem(&current_tgid_pid, &z64, &tgid_pid, BPF_ANY);
     return 0;
 }
 
@@ -196,7 +158,6 @@ void to_update_acct(u64 start, u64 curr, struct granularity gran) {
         return;
     }
 
-    // bpf_printk("Storing in to_update: %lld %lld", start, curr);
     struct to_update_key key = {0};
     key.ts = start;
     key.granularity = gran;
@@ -218,8 +179,8 @@ int futex_exit(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     struct granularity gran = {0};
-    gran.tgid = tgid(tgid_pid);
-    gran.pid = pid(tgid_pid);
+    gran.tgid = get_tgid(tgid_pid);
+    gran.pid = get_pid(tgid_pid);
     gran.op = value->op;
     __builtin_memcpy(&gran.fkey, &value->fkey, sizeof(gran.fkey));
 
@@ -248,9 +209,6 @@ int futex_exit(struct trace_event_raw_sys_enter *ctx) {
         __sync_fetch_and_add(&stat->wake.successful_count, ret > 0 ? 1 : 0);
     }
 
-
-    // bpf_printk("%llu %s %u %llu %llu %u %llu", 
-    //            ts, value->op ? "wait" : "wake", tgid_pid >> 32, value->fkey.both.ptr, value->fkey.both.word, value->fkey.both.offset, ts - value->ts);
     bpf_map_delete_elem(&pending, &tgid_pid);
     return 0;
 }

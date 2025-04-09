@@ -1,14 +1,7 @@
 #ifndef _COMMON_H
 #define _COMMON_H
 
-#define MAX_ENTRIES 8192
-#define SAMPLE_MAX_ENTRIES MAX_ENTRIES
-#define PENDING_MAX_ENTRIES MAX_ENTRIES
-#define SAMPLES 10
-
-static bool truth = true;
-static u64 z64 = 0;
-static u32 z32 = 0;
+#include <consts.h>
 
 __always_inline static void discover_tgid(void *pids, void *pid_rb, __u32 tgid) 
 {

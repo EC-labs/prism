@@ -7,6 +7,7 @@
 #include "iowait.h"
 
 #include <common.h>
+#include <consts.h>
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 

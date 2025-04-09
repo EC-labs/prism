@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     libbpf_sys::{self, bpf_iter_attach_opts, bpf_iter_link_info, bpf_program__attach_iter},
@@ -28,6 +28,14 @@ mod taskstats {
 }
 
 mod bindings {
+    #![allow(dead_code)]
+    #![allow(non_snake_case)]
+    #![allow(non_camel_case_types)]
+    #![allow(non_upper_case_globals)]
+    #![allow(clippy::const_static_lifetime)]
+    #![allow(clippy::unreadable_literal)]
+    #![allow(clippy::cyclomatic_complexity)]
+    #![allow(clippy::useless_transmute)]
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/sub/taskstats/taskstats.bindings.rs"
@@ -36,19 +44,6 @@ mod bindings {
 
 use bindings::task_delay_acct;
 use taskstats::{TaskstatsSkel, TaskstatsSkelBuilder};
-
-fn bump_memlock_rlimit() -> Result<()> {
-    let rlimit = libc::rlimit {
-        rlim_cur: 128 << 20,
-        rlim_max: 128 << 20,
-    };
-
-    if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit) } != 0 {
-        bail!("Failed to increase rlimit");
-    }
-
-    Ok(())
-}
 
 pub fn validate_bpf_ret<T>(ptr: *mut T) -> libbpf_rs::Result<NonNull<T>> {
     // SAFETY: `libbpf_get_error` is always safe to call.
@@ -74,8 +69,6 @@ pub struct TaskStatsIter<'conn> {
 
 impl<'conn> TaskStatsIter<'conn> {
     pub fn new(pid_map: MapHandle, pid_rb: MapHandle, conn: &'conn Connection) -> Result<Self> {
-        bump_memlock_rlimit()?;
-
         let (tx, rx) = mpsc::channel();
         let init_pids: Vec<u32> = pid_map
             .keys()
@@ -203,7 +196,6 @@ impl<'obj> TaskStatsTrace<'obj> {
     where
         'conn: 'obj,
     {
-        bump_memlock_rlimit()?;
         init_store(conn)?;
         let skel_builder = TaskstatsSkelBuilder::default();
         let mut open_skel = skel_builder.open(open_object)?;

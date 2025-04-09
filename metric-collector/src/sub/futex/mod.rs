@@ -19,6 +19,8 @@ use std::{
 };
 use types::{granularity, inflight_key, inflight_value, stats, to_update_key};
 
+use crate::sub::{BATCH_SIZE, MAX_ENTRIES, SAMPLES};
+
 mod futex {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -27,8 +29,6 @@ mod futex {
 }
 
 use futex::*;
-const BATCH_SIZE: usize = 8192;
-const SAMPLES: u64 = 10;
 
 trait UpdateEnd<T> {
     fn update_end(curr: u64, pending: T) -> u64;
@@ -112,19 +112,6 @@ struct PendingRecord {
     additional_time: u64,
 }
 
-fn bump_memlock_rlimit() -> Result<()> {
-    let rlimit = libc::rlimit {
-        rlim_cur: 128 << 20,
-        rlim_max: 128 << 20,
-    };
-
-    if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit) } != 0 {
-        bail!("Failed to increase rlimit");
-    }
-
-    Ok(())
-}
-
 pub struct Futex<'obj, 'conn> {
     skel: FutexSkel<'obj>,
     futex_wait_appender: Appender<'conn>,
@@ -143,7 +130,6 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
     ) -> Result<Self> {
         let skel_builder = FutexSkelBuilder::default();
 
-        bump_memlock_rlimit()?;
         let mut open_skel = skel_builder.open(open_object)?;
         open_skel.maps.pids.reuse_fd(pid_map)?;
         open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
@@ -156,7 +142,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
                     std::ptr::null(),
                     size_of::<granularity>() as u32,
                     size_of::<stats>() as u32,
-                    8192,
+                    MAX_ENTRIES as u32,
                     std::ptr::null(),
                 )
             };
@@ -383,7 +369,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
                     std::ptr::null(),
                     size_of::<granularity>() as u32,
                     size_of::<stats>() as u32,
-                    8192,
+                    MAX_ENTRIES as u32,
                     std::ptr::null(),
                 )
             };

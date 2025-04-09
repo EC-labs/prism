@@ -5,6 +5,7 @@
 #include "taskstats.h"
 
 #include <common.h>
+#include <consts.h>
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -17,7 +18,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, sizeof(struct task_delay_acct) * 8192);
+	__uint(max_entries, sizeof(struct task_delay_acct) * MAX_ENTRIES);
 } taskstats_rb SEC(".maps");
 
 __always_inline struct task_delay_acct get_taskstats(struct task_struct *task)

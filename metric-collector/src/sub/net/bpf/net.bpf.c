@@ -4,6 +4,7 @@
 #include <bpf/bpf_core_read.h>
 
 #include <common.h>
+#include <consts.h>
 #include <vfs.h>
 #include <linux/socket.h>
 #include "net.h"
@@ -61,7 +62,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, sizeof(struct socket_context_value) * 8192);
+	__uint(max_entries, sizeof(struct socket_context_value) * MAX_ENTRIES);
 } rb SEC(".maps");
 
 struct {
@@ -71,7 +72,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, sizeof(u32) * 8192);
+	__uint(max_entries, sizeof(u32) * MAX_ENTRIES);
 } pid_rb SEC(".maps");
 
 struct {
@@ -128,7 +129,7 @@ __always_inline int store_socket_context(struct socket *sock, struct inode *f_in
 
 __always_inline bool track(struct inode *f_inode) {
     u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
-    u32 tgid = (u32) (tgid_pid >> 32);
+    u32 tgid = get_tgid(tgid_pid);
     bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
 
     if (pidp)

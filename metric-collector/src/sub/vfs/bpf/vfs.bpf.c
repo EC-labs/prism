@@ -6,6 +6,7 @@
 #include <bpf/bpf_core_read.h>
 
 #include <common.h>
+#include <consts.h>
 #include <vfs.h>
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
@@ -40,7 +41,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, sizeof(u32) * 8192);
+	__uint(max_entries, sizeof(u32) * MAX_ENTRIES);
 } pid_rb SEC(".maps");
 
 struct inner {

@@ -5,6 +5,9 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
+#include <common.h>
+#include <consts.h>
+
 #include "muxio.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
@@ -43,50 +46,9 @@ struct {
 } epoll_files SEC(".maps");
 
 
-static u64 zero = 0;
-static bool truth = true;
-
-inline u32 pid(u64 tgid_pid) {
-    return tgid_pid & (((u64) 1<<32) - 1);
-}
-
-inline u32 tgid(u64 tgid_pid) {
-    return tgid_pid >> 32;
-}
-
-__u32 log_base10_bucket(__u64 ns_diff) {
-    __u32 bucket = 7;
-    if(ns_diff <= 1000) {
-        bucket = 0;
-
-    } else if ( ns_diff <= 10000) {
-        bucket = 1;
-
-    } else if ( ns_diff <= 100000) {
-        bucket = 2;
-
-    } else if ( ns_diff <= 1000000) {
-        bucket = 3;
-
-    } else if ( ns_diff <= 10000000) {
-        bucket = 4;
-    } else if ( ns_diff <= 100000000) {
-        bucket = 5;
-    } else if ( ns_diff <= 1000000000) {
-        bucket = 6;
-    } else {
-        bucket = 7;
-    }
-    return bucket;
-}
-
-u64 min(u64 x, u64 y) {
-    return x < y ? x : y;
-}
-
 __always_inline bool track() {
     u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
-    u32 tgid = (u32) (tgid_pid >> 32);
+    u32 tgid = get_tgid(tgid_pid);
     bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
     if (!pidp) 
         return false;
@@ -179,7 +141,7 @@ int BPF_PROG(__fdget, u32 fd, u64 word)
         event.tgid_pid = tgid_pid;
         event.ts = bpf_ktime_get_boot_ns();
         bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
-    } else if (inepoll && *inepoll == zero) {
+    } else if (inepoll && *inepoll == z64) {
         u64 mask = ~3;
         struct file *f = (struct file *) (word & mask);
         u64 ep = (u64) BPF_CORE_READ(f, private_data);
@@ -227,7 +189,7 @@ int BPF_PROG(do_epoll_wait, struct eventpoll *ep)
     }
 
     u64 tgid_pid = bpf_get_current_pid_tgid();
-    bpf_map_update_elem(&in_epoll, &tgid_pid, &zero, BPF_ANY);
+    bpf_map_update_elem(&in_epoll, &tgid_pid, &z64, BPF_ANY);
     return 0;
 }
 

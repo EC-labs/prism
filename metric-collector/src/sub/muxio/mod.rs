@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use dashmap::{DashMap, Map};
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
@@ -28,6 +28,14 @@ mod muxio {
 }
 
 mod bindings {
+    #![allow(dead_code)]
+    #![allow(non_snake_case)]
+    #![allow(non_camel_case_types)]
+    #![allow(non_upper_case_globals)]
+    #![allow(clippy::const_static_lifetime)]
+    #![allow(clippy::unreadable_literal)]
+    #![allow(clippy::cyclomatic_complexity)]
+    #![allow(clippy::useless_transmute)]
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/sub/muxio/muxio.bindings.rs"
@@ -36,22 +44,6 @@ mod bindings {
 
 use bindings::*;
 use muxio::*;
-
-const BATCH_SIZE: usize = 8192;
-const SAMPLES: u64 = 10;
-
-fn bump_memlock_rlimit() -> Result<()> {
-    let rlimit = libc::rlimit {
-        rlim_cur: 128 << 20,
-        rlim_max: 128 << 20,
-    };
-
-    if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit) } != 0 {
-        bail!("Failed to increase rlimit");
-    }
-
-    Ok(())
-}
 
 pub struct Muxio<'conn> {
     rx: Receiver<i64>,
@@ -63,7 +55,6 @@ pub struct Muxio<'conn> {
 
 impl<'conn> Muxio<'conn> {
     pub fn new(pid_map: BorrowedFd, conn: &'conn Connection) -> Result<Self> {
-        bump_memlock_rlimit()?;
         Self::init_store(conn)?;
 
         let (tx, rx) = mpsc::channel::<i64>();

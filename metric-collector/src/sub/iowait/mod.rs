@@ -31,21 +31,7 @@ use libc::clock_gettime;
 use libc::timespec;
 use libc::CLOCK_MONOTONIC;
 
-const BATCH_SIZE: usize = 8192;
-const SAMPLES: u64 = 10;
-
-fn bump_memlock_rlimit() -> Result<()> {
-    let rlimit = libc::rlimit {
-        rlim_cur: 128 << 20,
-        rlim_max: 128 << 20,
-    };
-
-    if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit) } != 0 {
-        bail!("Failed to increase rlimit");
-    }
-
-    Ok(())
-}
+use crate::sub::{BATCH_SIZE, MAX_ENTRIES, SAMPLES};
 
 pub struct IOWait<'obj, 'conn> {
     skel: IowaitSkel<'obj>,
@@ -60,8 +46,6 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
         Self::init_store(conn)?;
 
         let skel_builder = IowaitSkelBuilder::default();
-
-        bump_memlock_rlimit()?;
         let open_skel = skel_builder.open(open_object)?;
 
         let mut skel = open_skel.load()?;
@@ -72,7 +56,7 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
                     std::ptr::null(),
                     size_of::<granularity>() as u32,
                     size_of::<stats>() as u32,
-                    8192,
+                    MAX_ENTRIES as u32,
                     std::ptr::null(),
                 )
             };
@@ -230,7 +214,7 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
                     std::ptr::null(),
                     size_of::<granularity>() as u32,
                     size_of::<stats>() as u32,
-                    8192,
+                    MAX_ENTRIES as u32,
                     std::ptr::null(),
                 )
             };

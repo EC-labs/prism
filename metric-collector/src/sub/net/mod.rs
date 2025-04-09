@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
@@ -91,19 +91,6 @@ impl TryFrom<&socket_context_value> for SocketContext {
     }
 }
 
-fn bump_memlock_rlimit() -> Result<()> {
-    let rlimit = libc::rlimit {
-        rlim_cur: 128 << 20,
-        rlim_max: 128 << 20,
-    };
-
-    if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit) } != 0 {
-        bail!("Failed to increase rlimit");
-    }
-
-    Ok(())
-}
-
 pub struct Net<'obj> {
     _skel: NetSkel<'obj>,
     rb: RingBuffer<'obj>,
@@ -125,8 +112,6 @@ impl<'obj> Net<'obj> {
     {
         Self::init_store(conn)?;
         let skel_builder = NetSkelBuilder::default();
-
-        bump_memlock_rlimit()?;
         let mut open_skel = skel_builder.open(open_object)?;
         open_skel.maps.pids.reuse_fd(pid_map)?;
         open_skel.maps.samples.reuse_fd(samples_map)?;

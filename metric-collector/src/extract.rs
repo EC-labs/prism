@@ -22,12 +22,14 @@ use syn::{Expr, Item, Lit};
 use crate::{
     configure::Config,
     sub::{
+        self,
         futex::Futex,
         iowait::IOWait,
         muxio::Muxio,
         net::Net,
         taskstats::{TaskStatsIter, TaskStatsTrace},
         vfs::Vfs,
+        MAX_ENTRIES,
     },
     target,
 };
@@ -48,7 +50,7 @@ fn create_pid_map() -> Result<MapHandle> {
         Some("pids"),
         size_of::<u32>() as u32,
         size_of::<u8>() as u32,
-        8192,
+        MAX_ENTRIES as u32,
         &opts,
     )?)
 }
@@ -63,7 +65,7 @@ fn create_pid_rb() -> Result<MapHandle> {
         Some("pid_rb"),
         0,
         0,
-        (size_of::<u32>() * 8192) as u32,
+        (size_of::<u32>() as u64 * MAX_ENTRIES) as u32,
         &opts,
     )?)
 }
@@ -87,6 +89,8 @@ impl Extractor {
                 .as_nanos();
             *BOOT_EPOCH_NS.write().unwrap() = (ns_since_epoch - ns_since_boot) as u64;
         }
+
+        sub::bump_memlock_rlimit()?;
 
         let euid = unsafe { geteuid() };
         let uid = env::var("SUDO_UID")?.parse::<u32>()?;
