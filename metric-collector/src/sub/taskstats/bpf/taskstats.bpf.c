@@ -54,9 +54,7 @@ __always_inline struct task_delay_acct get_taskstats(struct task_struct *task)
 	return stats;
 }
 
-__always_inline bool track() {
-    u64 tgid_pid = bpf_get_current_pid_tgid();
-    u32 tgid = get_tgid(tgid_pid);
+__always_inline bool track(u64 tgid) {
     bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
     if (!pidp) 
         return false;
@@ -78,29 +76,28 @@ int get_tasks(struct bpf_iter__task *ctx)
 }
 
 
-SEC("fentry/kernel_clone")
-int BPF_PROG(clone, struct socket *sock)
+SEC("tp_btf/sched_process_fork")
+int sched_process_fork(u64 *ctx)
 {
-    if (!track()) 
+    // https://elixir.bootlin.com/linux/v5.13/source/include/trace/events/sched.h#L371
+    struct task_struct *child = (struct task_struct *) ctx[1];
+    u64 tgid = BPF_CORE_READ(child, tgid);
+    if (!track(tgid)) 
         return 0;
 
-    struct task_struct *task = (struct task_struct *) bpf_get_current_task();
-    if (!task)
-        return 0;
-
-    struct task_delay_acct stats = get_taskstats(task);
+    u64 pid = BPF_CORE_READ(child, pid);
+    struct task_delay_acct stats = get_taskstats(child);
     bpf_ringbuf_output(&taskstats_rb, &stats, sizeof(stats), 0);
     return 0;
 }
 
-SEC("fentry/do_exit")
-int BPF_PROG(do_exit, struct socket *sock)
+SEC("tp_btf/sched_process_exit")
+int sched_process_exit(u64 *ctx)
 {
-    if (!track()) 
-        return 0;
-
-    struct task_struct *task = (struct task_struct *) bpf_get_current_task();
-    if (!task)
+    // https://elixir.bootlin.com/linux/v5.13/source/include/trace/events/sched.h#L332
+    struct task_struct *task = (struct task_struct *) ctx[0];
+    u64 tgid = BPF_CORE_READ(task, tgid);
+    if (!track(tgid)) 
         return 0;
 
     struct task_delay_acct stats = get_taskstats(task);

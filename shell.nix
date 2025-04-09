@@ -12,6 +12,7 @@ with pkgs; stdenv.mkDerivation {
         libz
         pkg-config 
         libclang.lib
+        bpftrace
     ];
     buildInputs = [ 
         duckdb
