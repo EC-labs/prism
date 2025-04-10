@@ -19,7 +19,7 @@ use std::{
 };
 use types::{inflight_key, inflight_value, to_update_key};
 
-use crate::sub::{BATCH_SIZE, MAX_ENTRIES, SAMPLES};
+use crate::sub::{read_batch, replace_samples, samples_init, BATCH_SIZE, MAX_ENTRIES, SAMPLES};
 
 mod vfs {
     include!(concat!(
@@ -138,28 +138,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
 
         let mut skel = open_skel.load()?;
-        for i in 0..SAMPLES {
-            let mapfd = unsafe {
-                bpf_map_create(
-                    libbpf_sys::BPF_MAP_TYPE_HASH,
-                    std::ptr::null(),
-                    size_of::<granularity>() as u32,
-                    size_of::<stats>() as u32,
-                    MAX_ENTRIES as u32,
-                    std::ptr::null(),
-                )
-            };
-            if mapfd < 0 {
-                bail!("Failed to create map for {i}: {mapfd}")
-            }
-
-            skel.maps.samples.update(
-                &(i as u64).to_ne_bytes(),
-                &mapfd.to_ne_bytes(),
-                MapFlags::ANY,
-            )?;
-            unsafe { libc::close(mapfd) };
-        }
+        samples_init::<granularity, stats>(&skel.maps.samples);
 
         skel.attach()?;
 
@@ -221,29 +200,28 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         }
 
         debug!("Store {} records", records.len());
-        let records = records.map(|(granularity, stats)| {
+        for (granularity, stats) in records {
             let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
-            [
-                Box::new(Duration::from_nanos(ts_s)) as Box<dyn ToSql>,
-                Box::new(&granularity.tgid),
-                Box::new(&granularity.pid),
-                Box::new(&granularity.bri.fs_magic),
-                Box::new(&granularity.bri.i_rdev),
-                Box::new(&granularity.bri.i_ino),
-                Box::new(&granularity.op),
-                Box::new(&stats.total_time),
-                Box::new(&stats.total_requests),
-                Box::new(&stats.hist[0]),
-                Box::new(&stats.hist[1]),
-                Box::new(&stats.hist[2]),
-                Box::new(&stats.hist[3]),
-                Box::new(&stats.hist[4]),
-                Box::new(&stats.hist[5]),
-                Box::new(&stats.hist[6]),
-                Box::new(&stats.hist[7]),
-            ]
-        });
-        self.appender.append_rows(records)?;
+            self.appender.append_row([
+                &Duration::from_nanos(ts_s) as &dyn ToSql,
+                &granularity.tgid,
+                &granularity.pid,
+                &granularity.bri.fs_magic,
+                &granularity.bri.i_rdev,
+                &granularity.bri.i_ino,
+                &granularity.op,
+                &stats.total_time,
+                &stats.total_requests,
+                &stats.hist[0],
+                &stats.hist[1],
+                &stats.hist[2],
+                &stats.hist[3],
+                &stats.hist[4],
+                &stats.hist[5],
+                &stats.hist[6],
+                &stats.hist[7],
+            ])?;
+        }
 
         Ok(())
     }
@@ -258,20 +236,19 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         }
 
         debug!("Stage {} records", records.len());
-        let records = records.map(|record| {
+        for record in records {
             let ts_s = crate::extract::boot_to_epoch(record.ts_s * 1_000_000_000);
-            [
-                Box::new(Duration::from_nanos(ts_s)) as Box<dyn ToSql>,
-                Box::new(&record.pid),
-                Box::new(&record.tid),
-                Box::new(&record.bri.fs_magic),
-                Box::new(&record.bri.i_rdev),
-                Box::new(&record.bri.i_ino),
-                Box::new(&record.op),
-                Box::new(&record.additional_time),
-            ]
-        });
-        self.staging_appender.append_rows(records)?;
+            self.staging_appender.append_row([
+                &Duration::from_nanos(ts_s) as &dyn ToSql,
+                &record.pid,
+                &record.tid,
+                &record.bri.fs_magic,
+                &record.bri.i_rdev,
+                &record.bri.i_ino,
+                &record.op,
+                &record.additional_time,
+            ])?;
+        }
 
         Ok(())
     }
@@ -307,107 +284,6 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
             ",
         )?;
         Ok(())
-    }
-
-    fn read_samples(&mut self, ts: &timespec) -> (Vec<granularity>, Vec<stats>) {
-        let curr = ts.tv_sec as u64;
-        let mut keys: Vec<granularity> = Vec::new();
-        let mut values: Vec<stats> = Vec::new();
-        for ts in (curr - (SAMPLES - 1))..curr {
-            let outer = ts % SAMPLES;
-
-            let inner_id = self
-                .skel
-                .maps
-                .samples
-                .lookup(&(outer as u64).to_ne_bytes(), MapFlags::ANY);
-
-            let inner_id = match inner_id {
-                Ok(Some(inner_vec)) => {
-                    let mut inner: [u8; 4] = [0; 4];
-                    inner.copy_from_slice(&inner_vec);
-                    u32::from_ne_bytes(inner)
-                }
-                _ => {
-                    continue;
-                }
-            };
-            let mh = MapHandle::from_map_id(inner_id).unwrap();
-            let count = Self::read_batch(mh.as_fd().as_raw_fd(), &mut keys, &mut values);
-
-            if count == 0 {
-                continue;
-            }
-
-            let mapfd = unsafe {
-                bpf_map_create(
-                    libbpf_sys::BPF_MAP_TYPE_HASH,
-                    std::ptr::null(),
-                    size_of::<granularity>() as u32,
-                    size_of::<stats>() as u32,
-                    MAX_ENTRIES as u32,
-                    std::ptr::null(),
-                )
-            };
-            if mapfd < 0 {
-                println!("Failed to create map for {outer}: {mapfd}");
-                continue;
-            }
-
-            let res = self.skel.maps.samples.update(
-                &(outer as u64).to_ne_bytes(),
-                &mapfd.to_ne_bytes(),
-                MapFlags::ANY,
-            );
-            match res {
-                Ok(()) => {}
-                Err(e) => {
-                    println!("Failed to update map {}: {e}", outer);
-                }
-            }
-            unsafe { libc::close(mapfd) };
-        }
-        (keys, values)
-    }
-
-    fn read_batch<'a, K, V>(map_fd: RawFd, keys: &mut Vec<K>, values: &mut Vec<V>) -> usize {
-        let mut total = 0;
-        let mut in_batch: u64 = unsafe { MaybeUninit::zeroed().assume_init() };
-        let mut out_batch: u64 = unsafe { MaybeUninit::zeroed().assume_init() };
-        let mut count: __u32;
-
-        loop {
-            count = BATCH_SIZE as u32;
-            assert!(keys.len() == values.len());
-            let batch_start = keys.len();
-            if keys.capacity() - keys.len() < BATCH_SIZE {
-                keys.reserve(BATCH_SIZE - (keys.capacity() - keys.len()));
-            }
-
-            if values.capacity() - values.len() < BATCH_SIZE {
-                values.reserve(BATCH_SIZE - (values.capacity() - values.len()));
-            }
-            unsafe {
-                libbpf_sys::bpf_map_lookup_batch(
-                    map_fd,
-                    std::mem::transmute::<&mut u64, *mut c_void>(&mut in_batch),
-                    std::mem::transmute::<&mut u64, *mut c_void>(&mut out_batch),
-                    std::mem::transmute::<_, *mut c_void>(keys[batch_start..].as_mut_ptr()),
-                    std::mem::transmute::<_, *mut c_void>(values[batch_start..].as_mut_ptr()),
-                    &mut count as *mut __u32,
-                    std::ptr::null(),
-                );
-                keys.set_len(batch_start + count as usize);
-                values.set_len(batch_start + count as usize);
-            }
-            std::mem::swap(&mut in_batch, &mut out_batch);
-
-            total += count;
-            if count == 0 {
-                break;
-            }
-        }
-        total as usize
     }
 
     fn create_pending_records<'a, K, V, I>(
@@ -475,13 +351,13 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
     pub fn sample(&mut self) -> Result<()> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
-        let (keys, values) = self.read_samples(&ts);
+        let (keys, values) = replace_samples(&self.skel.maps.samples, &ts);
         self.store_samples(keys.iter().zip(values.iter()))?;
         self.appender.flush();
 
         let mut pending_records = Vec::new();
         let (mut pending_keys, mut pending_values) = (Vec::new(), Vec::new());
-        Self::read_batch::<inflight_key, inflight_value>(
+        read_batch::<inflight_key, inflight_value>(
             self.skel.maps.pending.as_fd().as_raw_fd(),
             &mut pending_keys,
             &mut pending_values,
@@ -494,7 +370,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         debug!("after pending: {}", pending_records.len());
 
         let (mut to_update_keys, mut to_update_values) = (Vec::new(), Vec::new());
-        Self::read_batch::<to_update_key, u64>(
+        read_batch::<to_update_key, u64>(
             self.skel.maps.to_update.as_fd().as_raw_fd(),
             &mut to_update_keys,
             &mut to_update_values,
