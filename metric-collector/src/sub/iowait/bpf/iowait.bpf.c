@@ -32,92 +32,75 @@ struct {
 	__array(values, struct inner);
 } samples SEC(".maps");
 
-SEC("kprobe/__submit_bio")
-int BPF_KPROBE(__submit_bio, struct bio *bio)
+SEC("tp_btf/block_io_start")
+int block_io_start(u64 *ctx)
 {
-    struct block_device *bi_bdev = BPF_CORE_READ(bio, bi_bdev);
-    unsigned int bdev = BPF_CORE_READ(bi_bdev, bd_dev);
-    unsigned int part0 = BPF_CORE_READ(bi_bdev, bd_disk, part0, bd_dev);
-    struct bvec_iter bi_iter = BPF_CORE_READ(bio, bi_iter);
-    u64 sector = bi_iter.bi_sector;
-    u32 size = bi_iter.bi_size / 512;
-    u32 op = BPF_CORE_READ(bio, bi_opf);
-    u32 status = BPF_CORE_READ(bio, bi_status);
+    // To understand why we extract the data as shown, have a look at the following link
+    // https://github.com/torvalds/linux/blob/2eb959eeecc64fa56e9f89a5fc496da297585cbe/include/trace/events/block.h#L190
+    struct request *req = (struct request *) ctx[0];
+
+    u32 major = BPF_CORE_READ(req, q, disk, major);
+    u32 minor = BPF_CORE_READ(req, q, disk, first_minor);
 
     struct inflight k = {
-        .sector = sector,
-        .part0 = part0,
-        .bdev = bdev,
-        .op = op,
-        .status = status,
+        .part0 = major << 20 | minor,
+        .sector = BPF_CORE_READ(req, __sector),
+        .op = BPF_CORE_READ(req, cmd_flags),
     };
 
     struct inflight_val v = {
         .ts = bpf_ktime_get_boot_ns(),
-        .size = size,
         .pid_tgid = bpf_get_current_pid_tgid(),
+        .bdev = BPF_CORE_READ(req, bio, bi_bdev, bd_dev),
+        .size = BPF_CORE_READ(req, __data_len)/512,
     };
 
-    if (bpf_map_update_elem(&pending, &k, &v, BPF_ANY) < 0) {
-        bpf_printk("[__submit_bio] Failed to update elem\n");
-        return -1;
-    }
-
-    
+    bpf_map_update_elem(&pending, &k, &v, BPF_ANY);
     return 0;
 }
 
-SEC("kprobe/bio_endio")
-int BPF_KPROBE(bio_endio, struct bio *bio)
+SEC("tp_btf/block_io_done")
+int raw_block_io_done(u64 *ctx)
 {
-    struct block_device *bi_bdev = BPF_CORE_READ(bio, bi_bdev);
-    unsigned int bdev = BPF_CORE_READ(bi_bdev, bd_dev);
-    unsigned int part0 = BPF_CORE_READ(bi_bdev, bd_disk, part0, bd_dev);
-    struct bvec_iter bi_iter = BPF_CORE_READ(bio, bi_iter);
-    u64 sector = bi_iter.bi_sector;
-    u32 size = bi_iter.bi_size / 512;
-    u32 op = BPF_CORE_READ(bio, bi_opf);
-    u32 status = BPF_CORE_READ(bio, bi_status);
+    // To understand why we extract the data as shown, have a look at the following link
+    // https://github.com/torvalds/linux/blob/2eb959eeecc64fa56e9f89a5fc496da297585cbe/include/trace/events/block.h#L190
+    struct request *req = (struct request *) ctx[0];
 
+    u32 major = BPF_CORE_READ(req, q, disk, major);
+    u32 minor = BPF_CORE_READ(req, q, disk, first_minor);
 
     struct inflight k = {
-        .sector = sector,
-        .part0 = part0,
-        .bdev = bdev,
-        .op = op,
-        .status = status,
+        .part0 = major << 20 | minor,
+        .sector = BPF_CORE_READ(req, __sector),
+        .op = BPF_CORE_READ(req, cmd_flags),
     };
 
     struct inflight_val *v = bpf_map_lookup_elem(&pending, &k);
-    if (v == NULL) {
-        return -1;
-    }
+    if (!v)
+        return 0;
+
+    struct granularity gran = {
+        .tgid = get_tgid(v->pid_tgid),
+        .pid = get_pid(v->pid_tgid),
+        .part0 = k.part0,
+        .bdev = v->bdev,
+    };
 
     u64 ts = bpf_ktime_get_boot_ns();
     u64 sample = (ts/1000000000) % SAMPLES;
     void *inner = bpf_map_lookup_elem(&samples, &sample);
-    if (inner == NULL) {
-        bpf_printk("[bio_endio] No inner %d\n", sample);
-        return -1;
-    }
-
-    struct granularity gran = {
-        .tgid = v->pid_tgid >> 32,
-        .pid = v->pid_tgid,
-        .part0 = k.part0,
-        .bdev = k.bdev,
-    };
+    if (!inner) 
+        return 0;
 
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
-    if (stat == NULL) {
+    if (!stat) {
         struct stats init = {0};
         init.ts_s = ts / 1000000000;
         bpf_map_update_elem(inner, &gran, &init, BPF_NOEXIST);
         stat = bpf_map_lookup_elem(inner, &gran);
 
-        if (stat == NULL) {
-            return -1;
-        }
+        if (!stat)
+            return 0;
     }
     __u64 ns_latency = ts - v->ts;
     __u32 bucket = log_base10_bucket(ns_latency);
