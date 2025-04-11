@@ -80,7 +80,7 @@ struct {
     __uint(max_entries, MAX_ENTRIES);
     __type(key, u64);
     __type(value, struct internal_disc);
-} pending_skb SEC(".maps");
+} sending_sk SEC(".maps");
 
 __always_inline int store_socket_context(struct socket *sock, struct inode *f_inode) 
 {
@@ -162,39 +162,36 @@ __always_inline int map_sockets(u64 send_inode_id, u64 recv_inode_id)
     return 0;
 }
 
-__always_inline int internal_discovery(struct sock *sk, struct sk_buff *skb) 
+__always_inline int internal_discovery(struct sock *sk) 
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
-    struct internal_disc *v = bpf_map_lookup_elem(&pending_skb, &tgid_pid);
-    if (v == NULL) {
+    struct internal_disc *v = bpf_map_lookup_elem(&sending_sk, &tgid_pid);
+    if (!v)
         return 0;
-    }
 
     u64 recv_inode_id = BPF_CORE_READ(sk, sk_socket, file, f_inode, i_ino);
-    if (!recv_inode_id || !v->inode_id) {
+    if (!recv_inode_id || !v->inode_id)
         return 0;
-    }
-
     u64 socket_socket[2] = { v->inode_id, recv_inode_id };
 
     // If this socket has already been mapped we can return early
     bool *connected = bpf_map_lookup_elem(&socket_socket_map, &socket_socket);
+    if (connected) 
+        return 0;
+
     struct socket_context_value *recv = bpf_map_lookup_elem(&socket_context, &recv_inode_id);
     struct socket_context_value *send = bpf_map_lookup_elem(&socket_context, &v->inode_id);
-    if (!connected) {
-        if (recv) {
-            struct sock *sk = v->sk;
-            struct socket *sock = BPF_CORE_READ(sk, sk_socket);
-            struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-            store_socket_context(sock, f_inode);
-            map_sockets(v->inode_id, recv_inode_id);
-        }
-        else if (send) {
-            struct socket *sock = BPF_CORE_READ(sk, sk_socket);
-            struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-            store_socket_context(sock, f_inode);
-            map_sockets(v->inode_id, recv_inode_id);
-        }
+    if (recv) {
+        struct sock *sk = v->sk;
+        struct socket *sock = BPF_CORE_READ(sk, sk_socket);
+        struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+        store_socket_context(sock, f_inode);
+        map_sockets(v->inode_id, recv_inode_id);
+    } else if (send) {
+        struct socket *sock = BPF_CORE_READ(sk, sk_socket);
+        struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+        store_socket_context(sock, f_inode);
+        map_sockets(v->inode_id, recv_inode_id);
     }
 
     return 0;
@@ -507,7 +504,7 @@ int BPF_PROG(__dev_queue_xmit, struct sk_buff *skb)
     v.inode_id = BPF_CORE_READ(skb, sk, sk_socket, file, f_inode, i_ino);
     u64 tgid_pid = bpf_get_current_pid_tgid();
 
-    bpf_map_update_elem(&pending_skb, &tgid_pid, &v, BPF_NOEXIST);
+    bpf_map_update_elem(&sending_sk, &tgid_pid, &v, BPF_NOEXIST);
     return 0;
 }
 
@@ -516,18 +513,18 @@ SEC("fexit/__dev_queue_xmit")
 int BPF_PROG(__dev_queue_xmit_exit, struct sk_buff *skb) 
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
-    bpf_map_delete_elem(&pending_skb, &tgid_pid);
+    bpf_map_delete_elem(&sending_sk, &tgid_pid);
     return 0;
 }
 
 SEC("fentry/tcp_data_queue")
 int BPF_PROG(tcp_data_queue, struct sock *sk, struct sk_buff *skb) 
 {
-    return internal_discovery(sk, skb);
+    return internal_discovery(sk);
 }
 
 SEC("fentry/__udp_enqueue_schedule_skb")
 int BPF_PROG(__udp_enqueue_schedule_skb, struct sock *sk, struct sk_buff *skb) 
 {
-    return internal_discovery(sk, skb);
+    return internal_discovery(sk);
 }
