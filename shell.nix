@@ -12,7 +12,9 @@ with pkgs; stdenv.mkDerivation {
         libz
         pkg-config 
         libclang.lib
+        clang
         bpftrace
+        linuxHeaders
     ];
     buildInputs = [ 
         duckdb
