@@ -26,7 +26,6 @@
 int
 main(int argc, char *argv[])
 {
-    sleep(20);
     int numPipes, ready, randPipe, numWrites, j;
     struct pollfd *pollFd;
     int (*pfds)[2];                     /* File descriptors for all pipes */
@@ -54,37 +53,40 @@ main(int argc, char *argv[])
             errExit("pipe %d", j);
 
     /* Perform specified number of writes to random pipes */
+    while (1) {
+        srandom((int) time(NULL));
+        for (j = 0; j < numWrites; j++) {
+            randPipe = random() % numPipes;
+            printf("Writing to fd: %3d (read fd: %3d)\n",
+                    pfds[randPipe][1], pfds[randPipe][0]);
+            if (write(pfds[randPipe][1], "a", 1) == -1)
+                errExit("write %d", pfds[randPipe][1]);
+        }
 
-    srandom((int) time(NULL));
-    for (j = 0; j < numWrites; j++) {
-        randPipe = random() % numPipes;
-        printf("Writing to fd: %3d (read fd: %3d)\n",
-                pfds[randPipe][1], pfds[randPipe][0]);
-        if (write(pfds[randPipe][1], "a", 1) == -1)
-            errExit("write %d", pfds[randPipe][1]);
+        /* Build the file descriptor list to be supplied to poll(). This list
+           is set to contain the file descriptors for the read ends of all of
+           the pipes. */
+
+        for (j = 0; j < numPipes; j++) {
+            pollFd[j].fd = pfds[j][0];
+            pollFd[j].events = POLLIN;
+        }
+
+        ready = poll(pollFd, numPipes, 0);
+        if (ready == -1)
+            errExit("poll");
+
+        printf("poll() returned: %d\n", ready);
+
+        /* Check which pipes have data available for reading */
+        char buf[256];
+        for (j = 0; j < numPipes; j++)
+            if (pollFd[j].revents & POLLIN) {
+                int bytes = read(pollFd[j].fd, buf, 256);
+                printf("Read %u bytes from [%3d]\n", bytes, pollFd[j].fd);
+            }
+
+        sleep(1);
     }
-
-    /* Build the file descriptor list to be supplied to poll(). This list
-       is set to contain the file descriptors for the read ends of all of
-       the pipes. */
-
-    for (j = 0; j < numPipes; j++) {
-        pollFd[j].fd = pfds[j][0];
-        pollFd[j].events = POLLIN;
-    }
-
-    ready = poll(pollFd, numPipes, 0);
-    if (ready == -1)
-        errExit("poll");
-
-    printf("poll() returned: %d\n", ready);
-
-    /* Check which pipes have data available for reading */
-
-    for (j = 0; j < numPipes; j++)
-        if (pollFd[j].revents & POLLIN)
-            printf("Readable: %3d\n", pollFd[j].fd);
-
-    sleep(20);
     exit(EXIT_SUCCESS);
 }

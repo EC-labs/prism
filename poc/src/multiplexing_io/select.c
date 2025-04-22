@@ -36,8 +36,6 @@ usageError(const char *progName)
 int
 main(int argc, char *argv[])
 {
-    sleep(20);
-    printf("Start\n");
     fd_set readfds, writefds;
     int ready, nfds, fd, numRead, j;
     struct timeval timeout;
@@ -80,21 +78,28 @@ main(int argc, char *argv[])
 
     /* We've built all of the arguments; now call select() */
 
-    ready = select(nfds, &readfds, &writefds, NULL, pto);
-                                        /* Ignore exceptional events */
-    if (ready == -1)
-        errExit("select");
+    while (1) {
+        ready = select(nfds, &readfds, &writefds, NULL, pto);
+                                            /* Ignore exceptional events */
+        if (ready == -1)
+            errExit("select");
 
-    /* Display results of select() */
+        /* Display results of select() */
 
-    printf("ready = %d\n", ready);
-    for (fd = 0; fd < nfds; fd++)
-        printf("%d: %s%s\n", fd, FD_ISSET(fd, &readfds) ? "r" : "",
-                FD_ISSET(fd, &writefds) ? "w" : "");
+        printf("ready = %d\n", ready);
+        char _buf[256];
+        for (fd = 0; fd < nfds; fd++) {
+            if (FD_ISSET(fd, &readfds)) {
+                int bytes = read(fd, _buf, 256);
+                printf("Read %d bytes from [%d]\n", bytes, fd);
+            }
+            printf("%d: %s%s\n", fd, FD_ISSET(fd, &readfds) ? "r" : "",
+                    FD_ISSET(fd, &writefds) ? "w" : "");
+        }
 
-    if (pto != NULL)
-        printf("timeout after select(): %ld.%03ld\n",
-               (long) timeout.tv_sec, (long) timeout.tv_usec / 1000);
-    sleep(20);
+        if (pto != NULL)
+            printf("timeout after select(): %ld.%03ld\n",
+                   (long) timeout.tv_sec, (long) timeout.tv_usec / 1000);
+    }
     exit(EXIT_SUCCESS);
 }
