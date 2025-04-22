@@ -2,6 +2,8 @@
 
 Prism is a fine-grained metric collection tool that aims to facilitate uncovering the cause of an application's performance degradation through a generalisable set of metrics. E.g. In a scenario where a database is under lock contention through simultaneous access to the same dataset, Prism will highlight the database threads and futex resource behind this activity. Currently Prism supports discovering and tracing co-located processes that have communicated (through IPC mechanisms such as pipes, sockets, and futexes) with the initial target application.
 
+![demo](docs/demo.gif)
+
 # Getting Started
 
 ## Prerequisites
