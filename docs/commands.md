@@ -36,3 +36,10 @@ Disable tcp checksum offloading:
 ```bash
 sudo ethtool -K wlp0s20f3 tx-checksumming off
 ```
+
+Run bpftrace with manually unpacked kernel headers [link](https://github.com/bpftrace/bpftrace/issues/3255):
+```bash
+modprobe kheaders
+tar -xf /sys/kernel/kheaders.tar.xz
+BPFTRACE_KERNEL_SOURCE="/path/to/unpacked/headers" bpftrace runqlat.bt
+```
