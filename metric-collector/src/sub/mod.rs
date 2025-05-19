@@ -10,6 +10,7 @@ use std::{
     os::fd::{AsFd, AsRawFd, RawFd},
 };
 
+pub mod discovery;
 pub mod futex;
 pub mod iowait;
 pub mod muxio;

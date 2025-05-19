@@ -23,6 +23,7 @@ use crate::{
     configure::Config,
     sub::{
         self,
+        discovery::Discovery,
         futex::Futex,
         iowait::IOWait,
         muxio::Muxio,
@@ -243,6 +244,14 @@ impl Extractor {
         )
         .unwrap();
 
+        let mut discovery_open_object = MaybeUninit::uninit();
+        let mut discovery = Discovery::new(
+            &mut discovery_open_object,
+            pid_map.as_fd(),
+            pid_rb.as_fd(),
+        )
+        .unwrap();
+
         let mut taskstats_open_object = MaybeUninit::uninit();
         let mut taskstats =
             TaskStatsTrace::new(&mut taskstats_open_object, &conn, pid_map.as_fd())?;
@@ -277,19 +286,23 @@ impl Extractor {
             net.sample()?;
             let net_elapsed = start.elapsed().as_nanos();
             let net_acct = net_elapsed - futex_elapsed;
+            discovery.sample();
+            let discovery_elapsed = start.elapsed().as_nanos();
+            let discovery_acct = discovery_elapsed - net_elapsed;
             taskstats.sample()?;
             let taskstats_elapsed = start.elapsed().as_nanos();
-            let taskstats_acct = taskstats_elapsed - net_elapsed;
+            let taskstats_acct = taskstats_elapsed - discovery_elapsed;
             muxio.sample()?;
             let muxio_elapsed = start.elapsed().as_nanos();
             let muxio_acct = muxio_elapsed - taskstats_elapsed;
             info!(
-                "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] taskstats[{}%] muxio[{}%]",
+                "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%] muxio[{}%]",
                 muxio_elapsed / 1_000_000,
                 iowait_elapsed * 100 / muxio_elapsed,
                 vfs_acct * 100 / muxio_elapsed,
                 futex_acct * 100 / muxio_elapsed,
                 net_acct * 100 / muxio_elapsed,
+                discovery_acct * 100 / muxio_elapsed,
                 taskstats_acct * 100 / muxio_elapsed,
                 muxio_acct * 100 / muxio_elapsed,
             );

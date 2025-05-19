@@ -1,0 +1,15 @@
+kprobe:__tcp_v4_send_check
+{
+    // $src = bswap(args->saddr);
+    // $dst = bswap(args->daddr);
+    printf("---1---\n");
+}
+
+kretfunc:vmlinux:tcp_v4_send_check
+{
+    $skb = args->skb;
+    $src_port = bswap(*((uint16 *) ($skb->head + $skb->transport_header)));
+    $dst_port = bswap(*((uint16 *) ($skb->head + $skb->transport_header + 2)));
+    $check = bswap(*((uint16 *) ($skb->head + $skb->transport_header + 16)));
+    printf("[%u] %u %u %u %x\n", pid, $src_port, $dst_port, $skb->len, $check);
+}

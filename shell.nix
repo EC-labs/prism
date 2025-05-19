@@ -6,6 +6,7 @@ with pkgs; stdenv.mkDerivation {
     hardeningDisable = [ "stackprotector" "zerocallusedregs" ];
 
     nativeBuildInputs = [ 
+        rust-analyzer
         rustc
         cargo
         elfutils
@@ -15,11 +16,20 @@ with pkgs; stdenv.mkDerivation {
         clang
         bpftrace
         linuxHeaders
+        zsh
+        strace
+        netcat-openbsd
+        tcpdump
     ];
+
     buildInputs = [ 
         duckdb
         openssl
     ];
 
     LIBCLANG_PATH = "${libclang.lib}/lib";
+
+    shellHook = ''
+        zsh
+    '';
 }
