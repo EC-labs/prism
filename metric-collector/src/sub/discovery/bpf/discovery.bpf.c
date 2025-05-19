@@ -93,7 +93,11 @@ int tc_egress(struct __sk_buff *skb)
         return 0;
 
     bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, rb_data, tcp_data_len);
-    char option_id[] = {253, EXTEND_SIZE, 0x69, 0x64, 0x64, 0x65, 0x66, 0x67};
+    char option_id[EXTEND_SIZE] = {253, EXTEND_SIZE, 0x69, 0x64};
+    u32 *special = option_id;
+    u32 id = bpf_get_prandom_u32();
+    *(special+1) = id;
+    bpf_printk("rand: [%x]", bpf_htonl(id));
     bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, &option_id, EXTEND_SIZE, 0);
 
     th.doff += EXTEND_SIZE/4;
