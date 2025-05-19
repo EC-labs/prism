@@ -24,6 +24,11 @@ struct {
 	__uint(max_entries, sizeof(u32) * MAX_ENTRIES);
 } pid_rb SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 8192);
+} rb_skb_data SEC(".maps");
+
 static __always_inline __u16 csum_fold_helper(__u32 csum)
 {
 	__u32 sum;
@@ -73,14 +78,19 @@ int tc_egress(struct __sk_buff *skb)
     // ====================
     // ====================
     // ====================
+
     
     struct tcphdr th;
     bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr), &th, sizeof(struct tcphdr));
+
+    char option_id[] = {253, 4, 0x62, 0x63};
+    bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, &option_id, sizeof(option_id), 0);
+
     th.doff += 1;
     bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr), &th, sizeof(struct tcphdr), 0);
 
-    char content[] = {253, 4, 0x62, 0x63, 0x61, 0x0a};
-    bpf_skb_store_bytes(skb, old_len - 2, &content, sizeof(content), 0);
+    char data[] = {0x61, 0x0a};
+    bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, &data, sizeof(data), 0);
 
     __be32 saddr, daddr;
     bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + offsetof(struct iphdr, saddr), &saddr, sizeof(saddr));
@@ -88,20 +98,10 @@ int tc_egress(struct __sk_buff *skb)
     u64 s = 0;
     s += saddr; 
     s += daddr; 
-
     s += (6 + bpf_ntohs(before) - sizeof(struct iphdr) + EXTEND_SIZE) << 8; 
     __wsum wsum = from64to32(s);
     u16 check = ~csum_fold_helper(wsum);
     bpf_printk("computed: %u %u %x", bpf_ntohl(saddr), bpf_ntohl(daddr), check);
-
-    u32 pbefore = (34 + 6) << 8;
-    u32 pafter = (38 + 6) << 8;
-    __be16 tcpcsum;
-    bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + offsetof(struct tcphdr, check), &tcpcsum, sizeof(tcpcsum));
-    tcpcsum = bpf_ntohs(tcpcsum);
-    u32 tnewcsum = bpf_csum_diff(&pbefore, 4, &pafter, 4, ~tcpcsum);
-    u16 tfolded = csum_fold_helper(tnewcsum);
-    bpf_printk("tcpcsum: %x", bpf_ntohs(tcpcsum));
     bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + offsetof(struct tcphdr, check), &check, sizeof(check), 0);
 
     return 0;
