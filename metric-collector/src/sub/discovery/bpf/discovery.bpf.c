@@ -62,7 +62,7 @@ int tc_egress(struct __sk_buff *skb)
     __be32 before = 0; 
     bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + offsetof(struct iphdr, tot_len), &before, 4);
 
-    u8 new_len = 58;
+    u8 new_len = bpf_ntohs(before) + EXTEND_SIZE;
     bpf_skb_store_bytes(skb, 17, &new_len, 1, 0);
 
     __be32 after = 0; 
@@ -83,14 +83,25 @@ int tc_egress(struct __sk_buff *skb)
     struct tcphdr th;
     bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr), &th, sizeof(struct tcphdr));
 
-    char option_id[] = {253, 4, 0x62, 0x63};
-    bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, &option_id, sizeof(option_id), 0);
+    u32 tcp_len = bpf_ntohs(before) - sizeof(struct iphdr);
+    u32 tcp_data_len = tcp_len - th.doff*4;
+    if (tcp_data_len <= 1 || tcp_data_len > 1500)
+        return 0;
 
-    th.doff += 1;
+    char *rb_data = bpf_ringbuf_reserve(&rb_skb_data, 1500, 0);
+    if (!rb_data)
+        return 0;
+
+    bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, rb_data, tcp_data_len);
+    char option_id[] = {253, EXTEND_SIZE, 0x69, 0x64, 0x64, 0x65, 0x66, 0x67};
+    bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, &option_id, EXTEND_SIZE, 0);
+
+    th.doff += EXTEND_SIZE/4;
+    th.res1 = 0b1011;
     bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr), &th, sizeof(struct tcphdr), 0);
 
-    char data[] = {0x61, 0x0a};
-    bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, &data, sizeof(data), 0);
+    bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, rb_data, tcp_data_len, 0);
+    bpf_ringbuf_discard(rb_data, 0);
 
     __be32 saddr, daddr;
     bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + offsetof(struct iphdr, saddr), &saddr, sizeof(saddr));
@@ -98,7 +109,7 @@ int tc_egress(struct __sk_buff *skb)
     u64 s = 0;
     s += saddr; 
     s += daddr; 
-    s += (6 + bpf_ntohs(before) - sizeof(struct iphdr) + EXTEND_SIZE) << 8; 
+    s += (6 + tcp_len + EXTEND_SIZE) << 8; 
     __wsum wsum = from64to32(s);
     u16 check = ~csum_fold_helper(wsum);
     bpf_printk("computed: %u %u %x", bpf_ntohl(saddr), bpf_ntohl(daddr), check);
