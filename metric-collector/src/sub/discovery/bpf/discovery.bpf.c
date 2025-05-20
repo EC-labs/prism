@@ -43,6 +43,20 @@ struct {
 	__uint(max_entries, MTU * 100);
 } rb_skb_data SEC(".maps");
 
+struct ipbytes {
+    char bytes[4];
+};
+
+static __always_inline struct ipbytes ip_bytes(__u32 ip)
+{
+    struct ipbytes ipb;
+    ipb.bytes[0] = ip & 0xFF;
+    ipb.bytes[1] = (ip >> 8) & 0xFF;
+    ipb.bytes[2] = (ip >> 16) & 0xFF;
+    ipb.bytes[3] = (ip >> 24) & 0xFF;   
+    return ipb;
+}
+
 static __always_inline __u16 csum_fold_helper(__u32 csum)
 {
 	__u32 sum;
@@ -63,7 +77,6 @@ static inline u32 from64to32(u64 x)
 SEC("tc")
 int tc_egress(struct __sk_buff *skb)
 {
-
     struct task_struct *task = (struct task_struct *) bpf_get_current_task();
     u64 tgid_pid = (u64) BPF_CORE_READ(task, tgid) << 32 | BPF_CORE_READ(task, pid);
     u64 *ino_id = bpf_map_lookup_elem(&pid_sock, &tgid_pid);
@@ -74,7 +87,30 @@ int tc_egress(struct __sk_buff *skb)
     void *sk = skb->sk;
     if (!sk) 
         return 0;
-    bpf_printk("sk: %p", bpf_sk_fullsock(sk));
+
+    struct iphdr iph;
+    bpf_skb_load_bytes(skb, sizeof(struct ethhdr), &iph, sizeof(struct iphdr));
+    if (iph.protocol != 6) {
+        bpf_printk("early return: protocol [%u]", iph.protocol);
+        return 0;
+    }
+
+
+    struct tcphdr th;
+    bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr), &th, sizeof(struct tcphdr));
+
+    u32 tcp_len = bpf_ntohs(iph.tot_len) - sizeof(struct iphdr);
+    u32 tcp_data_len = tcp_len - th.doff*4;
+    if (tcp_data_len <= 1 || tcp_data_len > MTU) {
+        bpf_printk("early return: tcp_data_len [%u]", tcp_data_len);
+        return 0;
+    }
+
+    char *rb_data = bpf_ringbuf_reserve(&rb_skb_data, MTU, 0);
+    if (!rb_data) {
+        bpf_printk("early return: ringbuf_reserve");
+        return 0;
+    }
 
     u32 old_len = skb->len;
     bpf_skb_change_tail(skb, skb->len + EXTEND_SIZE, 0);
@@ -92,33 +128,29 @@ int tc_egress(struct __sk_buff *skb)
     bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + offsetof(struct iphdr, check), &ipcsum, sizeof(ipcsum));
     u32 newcsum = bpf_csum_diff(&before, 4, &after, 4, ~ipcsum);
     u16 folded = csum_fold_helper(newcsum);
-    bpf_printk("ipcsum: %x, folded: %x", bpf_ntohs(ipcsum), folded);
     bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + offsetof(struct iphdr, check), &folded, sizeof(folded), 0);
-
-    // ====================
-    // ====================
-    // ====================
-    
-    struct tcphdr th;
-    bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr), &th, sizeof(struct tcphdr));
-
-    u32 tcp_len = bpf_ntohs(before) - sizeof(struct iphdr);
-    u32 tcp_data_len = tcp_len - th.doff*4;
-    if (tcp_data_len <= 1 || tcp_data_len > MTU)
-        return 0;
-
-    char *rb_data = bpf_ringbuf_reserve(&rb_skb_data, MTU, 0);
-    if (!rb_data)
-        return 0;
 
     bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, rb_data, tcp_data_len);
     char option_id[EXTEND_SIZE] = {253, EXTEND_SIZE, 0x69, 0x64};
     u32 *special = option_id;
     u32 id = bpf_get_prandom_u32();
     *(special+1) = id;
-    bpf_printk("rand: [%x]", bpf_htonl(id));
     bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, &option_id, EXTEND_SIZE, 0);
 
+    u32 src_ip = iph.saddr;
+    u16 src_port = bpf_ntohs(th.source);
+    u32 dst_ip = iph.daddr;
+    u16 dst_port = bpf_ntohs(th.dest);
+
+    struct ipbytes src_bytes = ip_bytes(src_ip);
+    struct ipbytes dst_bytes = ip_bytes(dst_ip);
+    bpf_printk("send: %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%llu] [%x]", 
+               src_bytes.bytes[0] & 0xff, src_bytes.bytes[1], src_bytes.bytes[2], src_bytes.bytes[3], 
+               src_port,
+               dst_bytes.bytes[0] & 0xff, dst_bytes.bytes[1], dst_bytes.bytes[2], dst_bytes.bytes[3],
+               dst_port,
+               *ino_id, bpf_ntohl(id)
+               );
 
     th.doff += EXTEND_SIZE/4;
     th.res1 = 0b1011;
@@ -126,7 +158,6 @@ int tc_egress(struct __sk_buff *skb)
 
     bpf_skb_store_bytes(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + th.doff*4, rb_data, tcp_data_len, 0);
     bpf_ringbuf_discard(rb_data, 0);
-
 
     __be32 saddr, daddr;
     bpf_skb_load_bytes(skb, sizeof(struct ethhdr) + offsetof(struct iphdr, saddr), &saddr, sizeof(saddr));
@@ -168,7 +199,6 @@ int BPF_PROG(__dev_queue_xmit, struct sk_buff *skb, struct net_device *sb_dev)
 
     u64 tgid_pid = bpf_get_current_pid_tgid();
     bpf_map_update_elem(&pid_sock, &tgid_pid, &ino_id, BPF_ANY);
-    bpf_printk("entry: [%u] -> %llu", get_tgid(tgid_pid), ino_id);
     return 0;
 }
 
@@ -177,5 +207,46 @@ int BPF_PROG(__dev_queue_xmit_exit)
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
     bpf_map_delete_elem(&pid_sock, &tgid_pid);
+    return 0;
+}
+
+SEC("fentry/tcp_data_queue")
+int BPF_PROG(discovery_tcp_data_queue, struct sock *sk, struct sk_buff *skb) 
+{
+    void *head = BPF_CORE_READ(skb, head);
+
+    u16 transport_header = BPF_CORE_READ(skb, transport_header);
+    struct tcphdr th; 
+    bpf_probe_read_kernel(&th, sizeof(th), head + transport_header);
+
+    if (th.res1 != 0xb)
+        return 0;
+
+    u32 option[2];
+    bpf_probe_read_kernel(&option, sizeof(option), head + transport_header + th.doff*4 - sizeof(option));
+
+    u16 network_header = BPF_CORE_READ(skb, network_header);
+    struct iphdr iph;
+    bpf_probe_read_kernel(&iph, sizeof(iph), head + network_header);
+    
+    // packet direction is reversed to transform it into the (struct sock *)'s POV
+    u32 src_ip = iph.daddr;
+    u16 src_port = bpf_ntohs(th.dest);
+    u32 dst_ip = iph.saddr;
+    u16 dst_port = bpf_ntohs(th.source);
+
+    struct ipbytes src_bytes = ip_bytes(src_ip);
+    struct ipbytes dst_bytes = ip_bytes(dst_ip);
+    // struct ipbytes dst_bytes = ip_bytes(bpf_ntohl(iph.dest));
+    u64 ino_id = BPF_CORE_READ(sk, sk_socket, file, f_inode, i_ino);
+    bpf_printk("recv: %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%llu] [%x]", 
+               src_bytes.bytes[0] & 0xff, src_bytes.bytes[1], src_bytes.bytes[2], src_bytes.bytes[3], 
+               src_port,
+               dst_bytes.bytes[0] & 0xff, dst_bytes.bytes[1], dst_bytes.bytes[2], dst_bytes.bytes[3],
+               dst_port,
+               ino_id, bpf_ntohl(option[1])
+               );
+
+
     return 0;
 }

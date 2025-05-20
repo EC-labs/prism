@@ -28,8 +28,4 @@ with pkgs; stdenv.mkDerivation {
     ];
 
     LIBCLANG_PATH = "${libclang.lib}/lib";
-
-    shellHook = ''
-        zsh
-    '';
 }
