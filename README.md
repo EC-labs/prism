@@ -98,17 +98,27 @@ D show tables;
 # Paper
 
 The following content refers to the data generated for the following paper:
+
 Diogo Landau and Jorge Barbosa and Nishant Saurabh. "eBPF-Based Instrumentation for Generalisable Diagnosis of Performance Degradation".arXiv preprint arXiv:2505.13160 (2025).
 
 Cite the above paper using bibtex:
+
 @misc{landau2025ebpfbasedinstrumentationgeneralisablediagnosis,
+
       title={eBPF-Based Instrumentation for Generalisable Diagnosis of Performance Degradation}, 
+      
       author={Diogo Landau and Jorge Barbosa and Nishant Saurabh},
+      
       year={2025},
+      
       eprint={2505.13160},
+      
       archivePrefix={arXiv},
+      
       primaryClass={cs.DC},
+      
       url={https://arxiv.org/abs/2505.13160}, 
+      
 }
 
 ## Experiments
