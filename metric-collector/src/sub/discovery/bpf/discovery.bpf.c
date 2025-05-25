@@ -74,6 +74,23 @@ static __always_inline u32 from64to32(u64 x)
 	return (u32)x;
 }
 
+static __always_inline __sum16 csum_ipv4_magic(
+    __be32 saddr, __be32 daddr,
+    __u32 len, __u8 proto, __wsum sum)
+{
+	unsigned long long s = (u32)sum;
+
+	s += (u32)saddr;
+	s += (u32)daddr;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	s += proto + len;
+#else
+	s += (proto + len) << 8;
+#endif
+	return csum_fold_helper((__wsum)from64to32(s));
+}
+
+
 static __always_inline __sum16 csum_ipv6_magic(
     const struct in6_addr *saddr,
 	const struct in6_addr *daddr,
@@ -130,6 +147,8 @@ static __always_inline __sum16 csum_ipv6_magic(
 	return csum_fold_helper((__wsum)sum);
 }
 
+
+
 static __always_inline void handle_ipv6(struct __sk_buff *skb, u32 iphdr_offset, u64 ino_id)
 {
     u8 *data = (void *)(long)skb->data;
@@ -143,14 +162,11 @@ static __always_inline void handle_ipv6(struct __sk_buff *skb, u32 iphdr_offset,
     if (nexthdr_type != 6)
         return;
 
-    bpf_printk("=> ipv6->nexthdr [%x]", nexthdr_type);
     if ((u8 *)iph + sizeof(struct ipv6hdr) + sizeof(struct tcphdr) > data_end) 
         return;
 
     struct tcphdr th;
     bpf_skb_load_bytes(skb, iphdr_offset + sizeof(struct ipv6hdr), &th, sizeof(struct tcphdr));
-
-    bpf_printk("=> src[%u] dst[%u]", bpf_ntohs(th.source), bpf_ntohs(th.dest));
 
     __u16 old_len = bpf_ntohs(BPF_CORE_READ(iph, payload_len));
     __be16 new_len = bpf_htons(old_len + EXTEND_SIZE);
@@ -172,13 +188,13 @@ static __always_inline void handle_ipv6(struct __sk_buff *skb, u32 iphdr_offset,
     bpf_skb_change_tail(skb, skb->len + EXTEND_SIZE, 0);
     // NO MORE EARLY RETURNS
 
-    bpf_printk("change ipv6 payload len: %u -> %u", old_len, bpf_ntohs(new_len));
+    // Change ipv6 len
     bpf_skb_store_bytes(
         skb, iphdr_offset + offsetof(struct ipv6hdr, payload_len), &new_len, 2, 0
     );
 
-    bpf_printk("payload_len[%u] doff[%u]", bpf_ntohs(BPF_CORE_READ(iph, payload_len)), th.doff*4);
 
+    // Add tcp option 
     bpf_skb_load_bytes(skb, iphdr_offset + l3_hdr_len + th.doff*4, rb_data, tcp_data_len);
     char option_id[EXTEND_SIZE] = {253, EXTEND_SIZE, 0x69, 0x64};
     u32 *special = option_id;
@@ -186,17 +202,18 @@ static __always_inline void handle_ipv6(struct __sk_buff *skb, u32 iphdr_offset,
     *(special+1) = id;
     bpf_skb_store_bytes(skb, iphdr_offset + l3_hdr_len + th.doff*4, &option_id, EXTEND_SIZE, 0);
 
+    // Add reserved flag and change data offset
     th.doff += EXTEND_SIZE/4;
     th.res1 = 0b1011;
     bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct ipv6hdr), &th, sizeof(struct tcphdr), 0);
     bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct ipv6hdr) + th.doff*4, rb_data, tcp_data_len, 0);
 
+    // Change checksum
     struct in6_addr saddr = BPF_CORE_READ(iph, saddr);
     struct in6_addr daddr = BPF_CORE_READ(iph, daddr);
-    u16 csum = ~csum_ipv6_magic(&saddr, &daddr, bpf_htons(new_len), IPPROTO_TCP, 0);
+    __sum16 csum = ~csum_ipv6_magic(&saddr, &daddr, bpf_htons(new_len), IPPROTO_TCP, 0);
     bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct ipv6hdr) + offsetof(struct tcphdr, check), &csum, sizeof(csum), 0);
 
-    bpf_printk("computed csum: %x", csum);
     bpf_ringbuf_discard(rb_data, 0);
 }
 
@@ -214,14 +231,11 @@ static __always_inline void handle_ipv4(struct __sk_buff *skb, u32 iphdr_offset,
     if (nexthdr_type != 6)
         return;
 
-    bpf_printk("=> ipv4->nexthdr [%x]", nexthdr_type);
     if (((u8 *)iph) + sizeof(struct iphdr) + sizeof(struct tcphdr) > data_end) 
         return;
 
     struct tcphdr th;
     bpf_skb_load_bytes(skb, iphdr_offset + sizeof(struct iphdr), &th, sizeof(struct tcphdr));
-
-    bpf_printk("=> src[%u] dst[%u]", bpf_ntohs(th.source), bpf_ntohs(th.dest));
 
     __u16 old_len = bpf_ntohs(BPF_CORE_READ(iph, tot_len));
     __be16 new_len = bpf_htons(old_len + EXTEND_SIZE);
@@ -244,10 +258,12 @@ static __always_inline void handle_ipv4(struct __sk_buff *skb, u32 iphdr_offset,
     bpf_skb_change_tail(skb, skb->len + EXTEND_SIZE, 0);
     // NO MORE EARLY RETURNS
 
+
+
+    // Change ipv4 len and checksum
     __be32 before_word; 
     bpf_skb_load_bytes(skb, iphdr_offset + offsetof(struct iphdr, tot_len), &before_word, 4);
 
-    bpf_printk("change ipv4 len: %u -> %u", bpf_ntohs(BPF_CORE_READ(iph, tot_len)), bpf_ntohs(new_len));
     bpf_skb_store_bytes(
         skb, iphdr_offset + offsetof(struct iphdr, tot_len), &new_len, 2, 0
     );
@@ -261,6 +277,7 @@ static __always_inline void handle_ipv4(struct __sk_buff *skb, u32 iphdr_offset,
     bpf_skb_store_bytes(skb, iphdr_offset + offsetof(struct iphdr, check), &folded_csum, 2, 0);
 
 
+    // Add tcp option
     bpf_skb_load_bytes(skb, iphdr_offset + l3_hdr_len + th.doff*4, rb_data, tcp_data_len);
     char option_id[EXTEND_SIZE] = {253, EXTEND_SIZE, 0x69, 0x64};
     u32 *special = option_id;
@@ -268,37 +285,32 @@ static __always_inline void handle_ipv4(struct __sk_buff *skb, u32 iphdr_offset,
     *(special+1) = id;
     bpf_skb_store_bytes(skb, iphdr_offset + l3_hdr_len + th.doff*4, &option_id, EXTEND_SIZE, 0);
 
-    u32 src_ip = BPF_CORE_READ(iph, saddr);
-    u16 src_port = bpf_ntohs(th.source);
-    u32 dst_ip = BPF_CORE_READ(iph, daddr);
-    u16 dst_port = bpf_ntohs(th.dest);
+    // u32 src_ip = BPF_CORE_READ(iph, saddr);
+    // u16 src_port = bpf_ntohs(th.source);
+    // u32 dst_ip = BPF_CORE_READ(iph, daddr);
+    // u16 dst_port = bpf_ntohs(th.dest);
 
-    struct ipbytes src_bytes = ip_bytes(src_ip);
-    struct ipbytes dst_bytes = ip_bytes(dst_ip);
-    bpf_printk("send: %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%llu] [%x]", 
-               src_bytes.bytes[0] & 0xff, src_bytes.bytes[1], src_bytes.bytes[2], src_bytes.bytes[3], 
-               src_port,
-               dst_bytes.bytes[0] & 0xff, dst_bytes.bytes[1], dst_bytes.bytes[2], dst_bytes.bytes[3],
-               dst_port,
-               ino_id, bpf_ntohl(id)
-               );
+    // struct ipbytes src_bytes = ip_bytes(src_ip);
+    // struct ipbytes dst_bytes = ip_bytes(dst_ip);
+    // bpf_printk("send: %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%llu] [%x]", 
+    //            src_bytes.bytes[0] & 0xff, src_bytes.bytes[1], src_bytes.bytes[2], src_bytes.bytes[3], 
+    //            src_port,
+    //            dst_bytes.bytes[0] & 0xff, dst_bytes.bytes[1], dst_bytes.bytes[2], dst_bytes.bytes[3],
+    //            dst_port,
+    //            ino_id, bpf_ntohl(id)
+    //            );
 
+    // Add reserved flag and change data offset
     th.doff += EXTEND_SIZE/4;
     th.res1 = 0b1011;
     bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct iphdr), &th, sizeof(struct tcphdr), 0);
     bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct iphdr) + th.doff*4, rb_data, tcp_data_len, 0);
 
-    __be32 saddr, daddr;
-    bpf_skb_load_bytes(skb, iphdr_offset + offsetof(struct iphdr, saddr), &saddr, sizeof(saddr));
-    bpf_skb_load_bytes(skb, iphdr_offset + offsetof(struct iphdr, daddr), &daddr, sizeof(daddr));
-    u64 s = 0;
-    s += saddr; 
-    s += daddr; 
-    s += (6 + start_tcp_len + EXTEND_SIZE) << 8; 
-    __wsum wsum = from64to32(s);
-    u16 check = ~csum_fold_helper(wsum);
-    bpf_printk("computed: %u %u %x", bpf_ntohl(saddr), bpf_ntohl(daddr), check);
-    bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct iphdr) + offsetof(struct tcphdr, check), &check, sizeof(check), 0);
+    // Change checksum
+    __be32 saddr = BPF_CORE_READ(iph, saddr);
+    __be32 daddr = BPF_CORE_READ(iph, daddr);
+    __sum16 csum = ~csum_ipv4_magic(saddr, daddr, (start_tcp_len + EXTEND_SIZE), IPPROTO_TCP, 0);
+    bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct iphdr) + offsetof(struct tcphdr, check), &csum, sizeof(csum), 0);
 
     bpf_ringbuf_discard(rb_data, 0);
 }
