@@ -2,13 +2,13 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+#include <bpf/bpf_endian.h>
 
 #include <common.h>
 #include <consts.h>
 #include <vfs.h>
 #include <linux/socket.h>
 #include "discovery.h"
-#include "bpf_endian.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
