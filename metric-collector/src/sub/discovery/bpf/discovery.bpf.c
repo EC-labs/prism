@@ -161,14 +161,14 @@ static __always_inline void handle_ipv6(struct __sk_buff *skb, u32 iphdr_offset,
         return;
     }
 
-    // We don't want any more early returns after rb_data 
-    // has been successfully allocated
     char *rb_data = bpf_ringbuf_reserve(&rb_skb_data, MTU, 0);
     if (!rb_data) {
         bpf_printk("early return: ringbuf_reserve");
         return;
     }
 
+    // We don't want any more early returns after we 
+    // have extended the packet
     bpf_skb_change_tail(skb, skb->len + EXTEND_SIZE, 0);
     // NO MORE EARLY RETURNS
 
@@ -222,19 +222,31 @@ static __always_inline void handle_ipv4(struct __sk_buff *skb, u32 iphdr_offset,
     bpf_skb_load_bytes(skb, iphdr_offset + sizeof(struct iphdr), &th, sizeof(struct tcphdr));
 
     bpf_printk("=> src[%u] dst[%u]", bpf_ntohs(th.source), bpf_ntohs(th.dest));
+
+    __u16 old_len = bpf_ntohs(BPF_CORE_READ(iph, tot_len));
+    __be16 new_len = bpf_htons(old_len + EXTEND_SIZE);
+    u32 l3_hdr_len = sizeof(struct iphdr);
+    u32 start_tcp_len = old_len - sizeof(struct iphdr);
+    u32 tcp_data_len = start_tcp_len - th.doff*4;
+    if (tcp_data_len <= 1 || tcp_data_len > MTU) {
+        bpf_printk("early return: tcp_data_len [%u]", tcp_data_len);
+        return;
+    }
+
     char *rb_data = bpf_ringbuf_reserve(&rb_skb_data, MTU, 0);
     if (!rb_data) {
         bpf_printk("early return: ringbuf_reserve");
         return;
     }
 
+    // We don't want any more early returns after we 
+    // have extended the packet
     bpf_skb_change_tail(skb, skb->len + EXTEND_SIZE, 0);
+    // NO MORE EARLY RETURNS
 
     __be32 before_word; 
     bpf_skb_load_bytes(skb, iphdr_offset + offsetof(struct iphdr, tot_len), &before_word, 4);
 
-    __u16 old_len = bpf_ntohs(BPF_CORE_READ(iph, tot_len));
-    __be16 new_len = bpf_htons(old_len + EXTEND_SIZE);
     bpf_printk("change ipv4 len: %u -> %u", bpf_ntohs(BPF_CORE_READ(iph, tot_len)), bpf_ntohs(new_len));
     bpf_skb_store_bytes(
         skb, iphdr_offset + offsetof(struct iphdr, tot_len), &new_len, 2, 0
@@ -248,14 +260,6 @@ static __always_inline void handle_ipv4(struct __sk_buff *skb, u32 iphdr_offset,
     u16 folded_csum = csum_fold_helper(newcsum);
     bpf_skb_store_bytes(skb, iphdr_offset + offsetof(struct iphdr, check), &folded_csum, 2, 0);
 
-    u32 l3_hdr_len = sizeof(struct iphdr);
-    u32 start_tcp_len = old_len - sizeof(struct iphdr);
-    u32 tcp_data_len = start_tcp_len - th.doff*4;
-    if (tcp_data_len <= 1 || tcp_data_len > MTU) {
-        bpf_printk("early return: tcp_data_len [%u]", tcp_data_len);
-        bpf_ringbuf_discard(rb_data, 0);
-        return;
-    }
 
     bpf_skb_load_bytes(skb, iphdr_offset + l3_hdr_len + th.doff*4, rb_data, tcp_data_len);
     char option_id[EXTEND_SIZE] = {253, EXTEND_SIZE, 0x69, 0x64};
