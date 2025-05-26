@@ -291,6 +291,88 @@ static __always_inline void handle_ipv4(struct __sk_buff *skb, u32 iphdr_offset,
     bpf_ringbuf_discard(rb_data, 0);
 }
 
+static __always_inline void recv_ipv4(struct sk_buff *skb, struct sock *sk, struct tcphdr *th)
+{
+    void *head = BPF_CORE_READ(skb, head);
+    u16 network_header = BPF_CORE_READ(skb, network_header);
+    u16 transport_header = BPF_CORE_READ(skb, transport_header);
+
+    u32 option[2];
+    bpf_probe_read_kernel(&option, sizeof(option), head + transport_header + th->doff*4 - sizeof(option));
+
+    struct iphdr iph;
+    bpf_probe_read_kernel(&iph, sizeof(iph), head + network_header);
+
+    // packet direction is reversed to transform it into the (struct sock *)'s POV
+    u32 src_ip = iph.daddr;
+    u16 src_port = bpf_ntohs(th->dest);
+    u32 dst_ip = iph.saddr;
+    u16 dst_port = bpf_ntohs(th->source);
+
+    struct ipbytes src_bytes = ip_bytes(src_ip);
+    struct ipbytes dst_bytes = ip_bytes(dst_ip);
+    u64 ino_id = BPF_CORE_READ(sk, sk_socket, file, f_inode, i_ino);
+    bpf_printk("recv: %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%llu] [%x]", 
+               src_bytes.bytes[0] & 0xff, src_bytes.bytes[1], src_bytes.bytes[2], src_bytes.bytes[3], 
+               src_port,
+               dst_bytes.bytes[0] & 0xff, dst_bytes.bytes[1], dst_bytes.bytes[2], dst_bytes.bytes[3],
+               dst_port,
+               ino_id, bpf_ntohl(option[1])
+               );
+
+}
+
+static __always_inline void recv_ipv6(struct sk_buff *skb, struct sock *sk, struct tcphdr *th)
+{
+    void *head = BPF_CORE_READ(skb, head);
+    u16 network_header = BPF_CORE_READ(skb, network_header);
+    u16 transport_header = BPF_CORE_READ(skb, transport_header);
+
+    u32 option[2];
+    bpf_probe_read_kernel(&option, sizeof(option), head + transport_header + th->doff*4 - sizeof(option));
+
+    struct in6_addr ipv6_src = {0};
+    struct in6_addr ipv6_dst = {0};
+    u16 src_port = bpf_ntohs(th->dest);
+    u16 dst_port = bpf_ntohs(th->source);
+
+    u16 protocol = bpf_ntohs(BPF_CORE_READ(skb, protocol));
+    if (protocol == 0x0800) {
+        struct iphdr iph;
+        bpf_probe_read_kernel(&iph, sizeof(iph), head + network_header);
+
+        __be32 ipv4_src = iph.daddr;
+        __be32 ipv4_dst = iph.saddr;
+
+        ipv6_src.in6_u.u6_addr32[2] = 0xffff0000;
+        ipv6_src.in6_u.u6_addr32[3] = ipv4_src;
+
+        ipv6_dst.in6_u.u6_addr32[2] = 0xffff0000;
+        ipv6_dst.in6_u.u6_addr32[3] = ipv4_dst;
+    } else if (protocol == 0x86DD) {
+        struct ipv6hdr iph;
+        bpf_probe_read_kernel(&iph, sizeof(iph), head + network_header);
+
+        __builtin_memcpy(&ipv6_src, &iph.saddr, sizeof(ipv6_src));
+        __builtin_memcpy(&ipv6_dst, &iph.daddr, sizeof(ipv6_dst));
+    }
+
+    bpf_printk("recvmsgv6 %llu [%x:%x:%x:%x]:%u -> [%x:%x:%x:%x]:%u [%x]", 
+               BPF_CORE_READ(sk, __sk_common.skc_net.net, net_cookie),
+               bpf_ntohl(ipv6_src.in6_u.u6_addr32[0]),
+               bpf_ntohl(ipv6_src.in6_u.u6_addr32[1]),
+               bpf_ntohl(ipv6_src.in6_u.u6_addr32[2]),
+               bpf_ntohl(ipv6_src.in6_u.u6_addr32[3]),
+               src_port,
+               bpf_ntohl(ipv6_dst.in6_u.u6_addr32[0]),
+               bpf_ntohl(ipv6_dst.in6_u.u6_addr32[1]),
+               bpf_ntohl(ipv6_dst.in6_u.u6_addr32[2]),
+               bpf_ntohl(ipv6_dst.in6_u.u6_addr32[3]),
+               dst_port,
+               bpf_ntohl(option[1])
+    );
+}
+
 SEC("tc")
 int tc_egress(struct __sk_buff *skb)
 {
@@ -327,7 +409,7 @@ int BPF_PROG(inet_sendmsg, struct socket *sock)
 
     u64 ino_id = BPF_CORE_READ(sock, file, f_inode, i_ino);
     bpf_map_update_elem(&inodep, &ino_id, &truth, BPF_ANY);
-    bpf_printk("sendmsg: %llu", ino_id);
+    bpf_printk("sendmsgv4: %llu", ino_id);
     return 0;
 }
 
@@ -342,7 +424,24 @@ int BPF_PROG(inet6_sendmsg, struct socket *sock)
 
     u64 ino_id = BPF_CORE_READ(sock, file, f_inode, i_ino);
     bpf_map_update_elem(&inodep, &ino_id, &truth, BPF_ANY);
-    bpf_printk("sendmsg: %llu", ino_id);
+
+    struct in6_addr saddr = BPF_CORE_READ(sock, sk, __sk_common.skc_v6_rcv_saddr);
+    struct in6_addr daddr = BPF_CORE_READ(sock, sk, __sk_common.skc_v6_daddr);
+
+    bpf_printk("sendmsgv6 %llu [%x:%x:%x:%x]:%u -> [%x:%x:%x:%x]:%u", 
+               BPF_CORE_READ(sock, sk, __sk_common.skc_net.net, net_cookie),
+               bpf_ntohl(saddr.in6_u.u6_addr32[0]),
+               bpf_ntohl(saddr.in6_u.u6_addr32[1]),
+               bpf_ntohl(saddr.in6_u.u6_addr32[2]),
+               bpf_ntohl(saddr.in6_u.u6_addr32[3]),
+               BPF_CORE_READ(sock, sk, __sk_common.skc_num),
+               bpf_ntohl(daddr.in6_u.u6_addr32[0]),
+               bpf_ntohl(daddr.in6_u.u6_addr32[1]),
+               bpf_ntohl(daddr.in6_u.u6_addr32[2]),
+               bpf_ntohl(daddr.in6_u.u6_addr32[3]),
+               bpf_ntohs(BPF_CORE_READ(sock, sk, __sk_common.skc_dport))
+    );
+
     return 0;
 }
 
@@ -389,30 +488,11 @@ int BPF_PROG(discovery_tcp_data_queue, struct sock *sk, struct sk_buff *skb)
     if (th.res1 != 0xb)
         return 0;
 
-    u32 option[2];
-    bpf_probe_read_kernel(&option, sizeof(option), head + transport_header + th.doff*4 - sizeof(option));
+    u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
+    if (family == AF_INET) {
+        recv_ipv4(skb, sk, &th);
+    } else if (family == AF_INET6) {
+        recv_ipv6(skb, sk, &th);
+    }
 
-    u16 network_header = BPF_CORE_READ(skb, network_header);
-    struct iphdr iph;
-    bpf_probe_read_kernel(&iph, sizeof(iph), head + network_header);
-    
-    // packet direction is reversed to transform it into the (struct sock *)'s POV
-    u32 src_ip = iph.daddr;
-    u16 src_port = bpf_ntohs(th.dest);
-    u32 dst_ip = iph.saddr;
-    u16 dst_port = bpf_ntohs(th.source);
-
-    struct ipbytes src_bytes = ip_bytes(src_ip);
-    struct ipbytes dst_bytes = ip_bytes(dst_ip);
-    // struct ipbytes dst_bytes = ip_bytes(bpf_ntohl(iph.dest));
-    u64 ino_id = BPF_CORE_READ(sk, sk_socket, file, f_inode, i_ino);
-    bpf_printk("recv: %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%llu] [%x]", 
-               src_bytes.bytes[0] & 0xff, src_bytes.bytes[1], src_bytes.bytes[2], src_bytes.bytes[3], 
-               src_port,
-               dst_bytes.bytes[0] & 0xff, dst_bytes.bytes[1], dst_bytes.bytes[2], dst_bytes.bytes[3],
-               dst_port,
-               ino_id, bpf_ntohl(option[1])
-               );
-
-    return 0;
 }
