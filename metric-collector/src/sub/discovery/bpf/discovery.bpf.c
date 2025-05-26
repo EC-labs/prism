@@ -312,14 +312,15 @@ static __always_inline void recv_ipv4(struct sk_buff *skb, struct sock *sk, stru
     struct ipbytes src_bytes = ip_bytes(src_ip);
     struct ipbytes dst_bytes = ip_bytes(dst_ip);
     u64 ino_id = BPF_CORE_READ(sk, sk_socket, file, f_inode, i_ino);
-    bpf_printk("recv: %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%llu] [%x]", 
+
+    bpf_printk("recvmsgv4 %llu %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%x]", 
+               BPF_CORE_READ(sk, __sk_common.skc_net.net, net_cookie),
                src_bytes.bytes[0] & 0xff, src_bytes.bytes[1], src_bytes.bytes[2], src_bytes.bytes[3], 
                src_port,
                dst_bytes.bytes[0] & 0xff, dst_bytes.bytes[1], dst_bytes.bytes[2], dst_bytes.bytes[3],
                dst_port,
-               ino_id, bpf_ntohl(option[1])
-               );
-
+               bpf_ntohl(option[1])
+    );
 }
 
 static __always_inline void recv_ipv6(struct sk_buff *skb, struct sock *sk, struct tcphdr *th)
@@ -409,7 +410,25 @@ int BPF_PROG(inet_sendmsg, struct socket *sock)
 
     u64 ino_id = BPF_CORE_READ(sock, file, f_inode, i_ino);
     bpf_map_update_elem(&inodep, &ino_id, &truth, BPF_ANY);
-    bpf_printk("sendmsgv4: %llu", ino_id);
+
+    u32 saddr = BPF_CORE_READ(sock, sk, __sk_common.skc_rcv_saddr);
+    u32 daddr = BPF_CORE_READ(sock, sk, __sk_common.skc_daddr);
+    struct ipbytes saddr_bytes = ip_bytes(saddr);
+    struct ipbytes daddr_bytes = ip_bytes(daddr);
+
+    bpf_printk("sendmsgv4 %llu %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u", 
+               BPF_CORE_READ(sock, sk, __sk_common.skc_net.net, net_cookie),
+               saddr_bytes.bytes[0] & 0XFF,
+               saddr_bytes.bytes[1],
+               saddr_bytes.bytes[2],
+               saddr_bytes.bytes[3],
+               BPF_CORE_READ(sock, sk, __sk_common.skc_num),
+               daddr_bytes.bytes[0] & 0XFF,
+               daddr_bytes.bytes[1],
+               daddr_bytes.bytes[2],
+               daddr_bytes.bytes[3],
+               bpf_ntohs(BPF_CORE_READ(sock, sk, __sk_common.skc_dport))
+    );
     return 0;
 }
 
