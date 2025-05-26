@@ -147,7 +147,24 @@ static __always_inline __sum16 csum_ipv6_magic(
 	return csum_fold_helper((__wsum)sum);
 }
 
+static __always_inline void inject_identifier(
+    struct __sk_buff *skb, struct tcphdr th, 
+    u32 tcphdr_offset,  u8 *rb_data, u32 tcp_data_len)
+{
+    // Add tcp option
+    bpf_skb_load_bytes(skb, tcphdr_offset + th.doff*4, rb_data, tcp_data_len);
+    char option_id[EXTEND_SIZE] = {253, EXTEND_SIZE, 0x69, 0x64};
+    u32 *special = (u32 *) option_id;
+    u32 id = bpf_get_prandom_u32();
+    *(special+1) = id;
+    bpf_skb_store_bytes(skb, tcphdr_offset + th.doff*4, &option_id, EXTEND_SIZE, 0);
 
+    // Add reserved flag and change data offset
+    th.doff += EXTEND_SIZE/4;
+    th.res1 = 0b1011;
+    bpf_skb_store_bytes(skb, tcphdr_offset, &th, sizeof(struct tcphdr), 0);
+    bpf_skb_store_bytes(skb, tcphdr_offset + th.doff*4, rb_data, tcp_data_len, 0);
+}
 
 static __always_inline void handle_ipv6(struct __sk_buff *skb, u32 iphdr_offset, u64 ino_id)
 {
@@ -193,20 +210,8 @@ static __always_inline void handle_ipv6(struct __sk_buff *skb, u32 iphdr_offset,
         skb, iphdr_offset + offsetof(struct ipv6hdr, payload_len), &new_len, 2, 0
     );
 
-
-    // Add tcp option 
-    bpf_skb_load_bytes(skb, iphdr_offset + l3_hdr_len + th.doff*4, rb_data, tcp_data_len);
-    char option_id[EXTEND_SIZE] = {253, EXTEND_SIZE, 0x69, 0x64};
-    u32 *special = option_id;
-    u32 id = bpf_get_prandom_u32();
-    *(special+1) = id;
-    bpf_skb_store_bytes(skb, iphdr_offset + l3_hdr_len + th.doff*4, &option_id, EXTEND_SIZE, 0);
-
-    // Add reserved flag and change data offset
-    th.doff += EXTEND_SIZE/4;
-    th.res1 = 0b1011;
-    bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct ipv6hdr), &th, sizeof(struct tcphdr), 0);
-    bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct ipv6hdr) + th.doff*4, rb_data, tcp_data_len, 0);
+    // Add identifier to TCP
+    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, rb_data, tcp_data_len);
 
     // Change checksum
     struct in6_addr saddr = BPF_CORE_READ(iph, saddr);
@@ -258,8 +263,6 @@ static __always_inline void handle_ipv4(struct __sk_buff *skb, u32 iphdr_offset,
     bpf_skb_change_tail(skb, skb->len + EXTEND_SIZE, 0);
     // NO MORE EARLY RETURNS
 
-
-
     // Change ipv4 len and checksum
     __be32 before_word; 
     bpf_skb_load_bytes(skb, iphdr_offset + offsetof(struct iphdr, tot_len), &before_word, 4);
@@ -276,41 +279,14 @@ static __always_inline void handle_ipv4(struct __sk_buff *skb, u32 iphdr_offset,
     u16 folded_csum = csum_fold_helper(newcsum);
     bpf_skb_store_bytes(skb, iphdr_offset + offsetof(struct iphdr, check), &folded_csum, 2, 0);
 
-
-    // Add tcp option
-    bpf_skb_load_bytes(skb, iphdr_offset + l3_hdr_len + th.doff*4, rb_data, tcp_data_len);
-    char option_id[EXTEND_SIZE] = {253, EXTEND_SIZE, 0x69, 0x64};
-    u32 *special = option_id;
-    u32 id = bpf_get_prandom_u32();
-    *(special+1) = id;
-    bpf_skb_store_bytes(skb, iphdr_offset + l3_hdr_len + th.doff*4, &option_id, EXTEND_SIZE, 0);
-
-    // u32 src_ip = BPF_CORE_READ(iph, saddr);
-    // u16 src_port = bpf_ntohs(th.source);
-    // u32 dst_ip = BPF_CORE_READ(iph, daddr);
-    // u16 dst_port = bpf_ntohs(th.dest);
-
-    // struct ipbytes src_bytes = ip_bytes(src_ip);
-    // struct ipbytes dst_bytes = ip_bytes(dst_ip);
-    // bpf_printk("send: %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%llu] [%x]", 
-    //            src_bytes.bytes[0] & 0xff, src_bytes.bytes[1], src_bytes.bytes[2], src_bytes.bytes[3], 
-    //            src_port,
-    //            dst_bytes.bytes[0] & 0xff, dst_bytes.bytes[1], dst_bytes.bytes[2], dst_bytes.bytes[3],
-    //            dst_port,
-    //            ino_id, bpf_ntohl(id)
-    //            );
-
-    // Add reserved flag and change data offset
-    th.doff += EXTEND_SIZE/4;
-    th.res1 = 0b1011;
-    bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct iphdr), &th, sizeof(struct tcphdr), 0);
-    bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct iphdr) + th.doff*4, rb_data, tcp_data_len, 0);
+    // Add identifier to TCP
+    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, rb_data, tcp_data_len);
 
     // Change checksum
     __be32 saddr = BPF_CORE_READ(iph, saddr);
     __be32 daddr = BPF_CORE_READ(iph, daddr);
     __sum16 csum = ~csum_ipv4_magic(saddr, daddr, (start_tcp_len + EXTEND_SIZE), IPPROTO_TCP, 0);
-    bpf_skb_store_bytes(skb, iphdr_offset + sizeof(struct iphdr) + offsetof(struct tcphdr, check), &csum, sizeof(csum), 0);
+    bpf_skb_store_bytes(skb, iphdr_offset + l3_hdr_len + offsetof(struct tcphdr, check), &csum, sizeof(csum), 0);
 
     bpf_ringbuf_discard(rb_data, 0);
 }
