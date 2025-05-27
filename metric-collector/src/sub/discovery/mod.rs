@@ -33,6 +33,8 @@ impl<'a> Discovery<'a> {
         open_object: &'a mut MaybeUninit<OpenObject>,
         pid_map: BorrowedFd,
         pid_rb: BorrowedFd,
+        net_socket_context: BorrowedFd,
+        net_rb: BorrowedFd,
     ) -> Result<Self>
     where
     {
@@ -40,6 +42,8 @@ impl<'a> Discovery<'a> {
         let mut open_skel = skel_builder.open(open_object)?;
         open_skel.maps.pids.reuse_fd(pid_map)?;
         open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
+        open_skel.maps.socket_context.reuse_fd(net_socket_context)?;
+        open_skel.maps.rb.reuse_fd(net_rb)?;
 
         let mut skel = open_skel.load()?;
         let mut builder = RingBufferBuilder::new();

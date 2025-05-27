@@ -7,6 +7,7 @@
 #include <common.h>
 #include <consts.h>
 #include <vfs.h>
+#include <net.h>
 #include <linux/socket.h>
 #include "discovery.h"
 
@@ -39,6 +40,18 @@ struct {
     __type(key, struct pending_receives_key);
     __type(value, u32);
 } pending_receives SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, MAX_ENTRIES);
+    __type(key, u64);
+    __type(value, struct socket_context_value);
+} socket_context SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, sizeof(struct socket_context_value) * MAX_ENTRIES);
+} rb SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -217,7 +230,7 @@ static __always_inline int send_ipv6(struct __sk_buff *skb, u32 iphdr_offset, u6
     );
 
     // Add identifier to TCP
-    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, rb_data, tcp_data_len, id);
+    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, (u8 *)rb_data, tcp_data_len, id);
 
     // Change checksum
     struct in6_addr saddr = BPF_CORE_READ(iph, saddr);
@@ -288,7 +301,7 @@ static __always_inline int send_ipv4(struct __sk_buff *skb, u32 iphdr_offset, u6
     bpf_skb_store_bytes(skb, iphdr_offset + offsetof(struct iphdr, check), &folded_csum, 2, 0);
 
     // Add identifier to TCP
-    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, rb_data, tcp_data_len, id);
+    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, (u8 *)rb_data, tcp_data_len, id);
 
     // Change checksum
     __be32 saddr = BPF_CORE_READ(iph, saddr);
@@ -327,19 +340,6 @@ static __always_inline void recv_ipv4(struct sk_buff *skb, struct sock *sk, stru
     key.dst_port = dst_port;
     key.addr_pair.ipv4.saddr = src_ip;
     key.addr_pair.ipv4.daddr = dst_ip;
-
-    struct ipbytes src_bytes = ip_bytes(key.addr_pair.ipv4.saddr);
-    struct ipbytes dst_bytes = ip_bytes(key.addr_pair.ipv4.daddr);
-
-    bpf_printk("recvmsgv4 %llx %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u [%x]", 
-               key.sk_ptr,
-               src_bytes.bytes[0] & 0xff, src_bytes.bytes[1], src_bytes.bytes[2], src_bytes.bytes[3], 
-               key.src_port,
-               dst_bytes.bytes[0] & 0xff, dst_bytes.bytes[1], dst_bytes.bytes[2], dst_bytes.bytes[3],
-               key.dst_port,
-               bpf_ntohl(option[1])
-    );
-
     bpf_map_update_elem(&pending_receives, &key, &option[1], BPF_ANY);
 }
 
@@ -386,22 +386,6 @@ static __always_inline void recv_ipv6(struct sk_buff *skb, struct sock *sk, stru
     key.dst_port = dst_port;
     key.addr_pair.ipv6.saddr = ipv6_src;
     key.addr_pair.ipv6.daddr = ipv6_dst;
-
-    bpf_printk("recvmsgv6 %llx [%x:%x:%x:%x]:%u -> [%x:%x:%x:%x]:%u [%x]", 
-               key.sk_ptr,
-               bpf_ntohl(key.addr_pair.ipv6.saddr.in6_u.u6_addr32[0]),
-               bpf_ntohl(key.addr_pair.ipv6.saddr.in6_u.u6_addr32[1]),
-               bpf_ntohl(key.addr_pair.ipv6.saddr.in6_u.u6_addr32[2]),
-               bpf_ntohl(key.addr_pair.ipv6.saddr.in6_u.u6_addr32[3]),
-               key.src_port,
-               bpf_ntohl(key.addr_pair.ipv6.daddr.in6_u.u6_addr32[0]),
-               bpf_ntohl(key.addr_pair.ipv6.daddr.in6_u.u6_addr32[1]),
-               bpf_ntohl(key.addr_pair.ipv6.daddr.in6_u.u6_addr32[2]),
-               bpf_ntohl(key.addr_pair.ipv6.daddr.in6_u.u6_addr32[3]),
-               key.dst_port,
-               bpf_ntohl(option[1])
-    );
-
     bpf_map_update_elem(&pending_receives, &key, &option[1], BPF_ANY);
 }
 
@@ -434,7 +418,7 @@ int tc_egress(struct __sk_buff *skb)
         *count = *count + 1;
     }
 
-    bpf_printk("send [%llu] -> [%x]", context->ino_id, bpf_ntohl(id));
+    bpf_printk("send: [%llu] -> [%08x]", context->ino_id, bpf_ntohl(id));
 
     return 0;
 }
@@ -461,19 +445,6 @@ int BPF_PROG(inet_sendmsg, struct socket *sock)
     struct ipbytes saddr_bytes = ip_bytes(saddr);
     struct ipbytes daddr_bytes = ip_bytes(daddr);
 
-    bpf_printk("sendmsgv4 %llu %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u", 
-               BPF_CORE_READ(sock, sk, __sk_common.skc_net.net, net_cookie),
-               saddr_bytes.bytes[0] & 0XFF,
-               saddr_bytes.bytes[1],
-               saddr_bytes.bytes[2],
-               saddr_bytes.bytes[3],
-               BPF_CORE_READ(sock, sk, __sk_common.skc_num),
-               daddr_bytes.bytes[0] & 0XFF,
-               daddr_bytes.bytes[1],
-               daddr_bytes.bytes[2],
-               daddr_bytes.bytes[3],
-               bpf_ntohs(BPF_CORE_READ(sock, sk, __sk_common.skc_dport))
-    );
     return 0;
 }
 
@@ -493,24 +464,6 @@ int BPF_PROG(inet6_sendmsg, struct socket *sock)
     int ret = bpf_map_update_elem(&inodep, &ino_id, &z8, BPF_NOEXIST);
     if (ret)
         return 0;
-
-    struct in6_addr saddr = BPF_CORE_READ(sock, sk, __sk_common.skc_v6_rcv_saddr);
-    struct in6_addr daddr = BPF_CORE_READ(sock, sk, __sk_common.skc_v6_daddr);
-
-    bpf_printk("sendmsgv6 %llu [%x:%x:%x:%x]:%u -> [%x:%x:%x:%x]:%u", 
-               BPF_CORE_READ(sock, sk, __sk_common.skc_net.net, net_cookie),
-               bpf_ntohl(saddr.in6_u.u6_addr32[0]),
-               bpf_ntohl(saddr.in6_u.u6_addr32[1]),
-               bpf_ntohl(saddr.in6_u.u6_addr32[2]),
-               bpf_ntohl(saddr.in6_u.u6_addr32[3]),
-               BPF_CORE_READ(sock, sk, __sk_common.skc_num),
-               bpf_ntohl(daddr.in6_u.u6_addr32[0]),
-               bpf_ntohl(daddr.in6_u.u6_addr32[1]),
-               bpf_ntohl(daddr.in6_u.u6_addr32[2]),
-               bpf_ntohl(daddr.in6_u.u6_addr32[3]),
-               bpf_ntohs(BPF_CORE_READ(sock, sk, __sk_common.skc_dport))
-    );
-
 
     return 0;
 }
@@ -584,12 +537,20 @@ int BPF_PROG(inet6_recvmsg, struct socket *sock)
     if (!keyp)
         return 0;
 
-    bpf_printk("recvexit: [%llu] -> [%x]", 
-               BPF_CORE_READ(sock, file, f_inode, i_ino),
-               bpf_ntohl(*keyp));
+    u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
+    u32 tgid = get_tgid(tgid_pid);
+    struct sock *sk = BPF_CORE_READ(sock, sk);
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
+
+    bpf_printk("recv: [%llu] -> [%08x]", inode_id, bpf_ntohl(*keyp));
+    store_socket_context(sock, f_inode, &socket_context, &rb);
+    if (!bpf_map_update_elem(&pids, &tgid, &truth, BPF_NOEXIST)) {
+        bpf_printk("[tcp] discovered %u %llu", tgid, inode_id);
+        bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
+    }
 
     bpf_map_delete_elem(&pending_receives, &key);
-
     return 0;
 }
 
@@ -609,11 +570,19 @@ int BPF_PROG(inet_recvmsg, struct socket *sock)
     if (!keyp)
         return 0;
 
-    bpf_printk("recvexit: [%llu] -> [%x]", 
-               BPF_CORE_READ(sock, file, f_inode, i_ino),
-               bpf_ntohl(*keyp));
+    u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
+    u32 tgid = get_tgid(tgid_pid);
+    struct sock *sk = BPF_CORE_READ(sock, sk);
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
+
+    bpf_printk("recv: [%llu] -> [%08x]", inode_id, bpf_ntohl(*keyp));
+    store_socket_context(sock, f_inode, &socket_context, &rb);
+    if (!bpf_map_update_elem(&pids, &tgid, &truth, BPF_NOEXIST)) {
+        bpf_printk("[tcp] discovered %u %llu", tgid, inode_id);
+        bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
+    }
 
     bpf_map_delete_elem(&pending_receives, &key);
-
     return 0;
 }

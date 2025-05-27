@@ -96,6 +96,10 @@ fn main() -> Result<()> {
         "cargo:rerun-if-changed={}/src/sub/include/vfs.h",
         cargo_manifest_dir.to_str().unwrap()
     );
+    println!(
+        "cargo:rerun-if-changed={}/src/sub/include/net.h",
+        cargo_manifest_dir.to_str().unwrap()
+    );
 
     for sub in SUBS {
         let out = cargo_manifest_dir.join(format!("src/sub/{sub}/bpf/{sub}.skel.rs"));

@@ -249,6 +249,8 @@ impl Extractor {
             &mut discovery_open_object,
             pid_map.as_fd(),
             pid_rb.as_fd(),
+            net.skel.maps.socket_context.as_fd(),
+            net.skel.maps.rb.as_fd(),
         )
         .unwrap();
 
