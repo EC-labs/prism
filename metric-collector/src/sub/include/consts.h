@@ -10,6 +10,7 @@
 #define MTU 1500
 
 static __u8 truth = 1;
+static __u8 z8 = 0;
 static __u64 z64 = 0;
 static __u32 z32 = 0;
 
