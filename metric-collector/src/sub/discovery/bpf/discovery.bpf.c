@@ -156,13 +156,12 @@ static __always_inline __sum16 csum_ipv6_magic(
 
 static __always_inline void inject_identifier(
     struct __sk_buff *skb, struct tcphdr th, 
-    u32 tcphdr_offset,  u8 *rb_data, u32 tcp_data_len)
+    u32 tcphdr_offset,  u8 *rb_data, u32 tcp_data_len, u32 id)
 {
     // Add tcp option
     bpf_skb_load_bytes(skb, tcphdr_offset + th.doff*4, rb_data, tcp_data_len);
     char option_id[EXTEND_SIZE] = {253, EXTEND_SIZE, 0x69, 0x64};
     u32 *special = (u32 *) option_id;
-    u32 id = bpf_get_prandom_u32();
     *(special+1) = id;
     bpf_skb_store_bytes(skb, tcphdr_offset + th.doff*4, &option_id, EXTEND_SIZE, 0);
 
@@ -173,7 +172,7 @@ static __always_inline void inject_identifier(
     bpf_skb_store_bytes(skb, tcphdr_offset + th.doff*4, rb_data, tcp_data_len, 0);
 }
 
-static __always_inline int send_ipv6(struct __sk_buff *skb, u32 iphdr_offset, u64 ino_id)
+static __always_inline int send_ipv6(struct __sk_buff *skb, u32 iphdr_offset, u64 ino_id, u32 id)
 {
     u8 *data = (void *)(long)skb->data;
     u8 *data_end = (void *)(long)skb->data_end;
@@ -218,7 +217,7 @@ static __always_inline int send_ipv6(struct __sk_buff *skb, u32 iphdr_offset, u6
     );
 
     // Add identifier to TCP
-    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, rb_data, tcp_data_len);
+    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, rb_data, tcp_data_len, id);
 
     // Change checksum
     struct in6_addr saddr = BPF_CORE_READ(iph, saddr);
@@ -231,7 +230,7 @@ static __always_inline int send_ipv6(struct __sk_buff *skb, u32 iphdr_offset, u6
     return 0;
 }
 
-static __always_inline int send_ipv4(struct __sk_buff *skb, u32 iphdr_offset, u64 ino_id)
+static __always_inline int send_ipv4(struct __sk_buff *skb, u32 iphdr_offset, u64 ino_id, u32 id)
 {
     u8 *data = (void *)(long)skb->data;
     u8 *data_end = (void *)(long)skb->data_end;
@@ -289,7 +288,7 @@ static __always_inline int send_ipv4(struct __sk_buff *skb, u32 iphdr_offset, u6
     bpf_skb_store_bytes(skb, iphdr_offset + offsetof(struct iphdr, check), &folded_csum, 2, 0);
 
     // Add identifier to TCP
-    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, rb_data, tcp_data_len);
+    inject_identifier(skb, th, iphdr_offset + l3_hdr_len, rb_data, tcp_data_len, id);
 
     // Change checksum
     __be32 saddr = BPF_CORE_READ(iph, saddr);
@@ -298,6 +297,7 @@ static __always_inline int send_ipv4(struct __sk_buff *skb, u32 iphdr_offset, u6
     bpf_skb_store_bytes(skb, iphdr_offset + l3_hdr_len + offsetof(struct tcphdr, check), &csum, sizeof(csum), 0);
 
     bpf_ringbuf_discard(rb_data, 0);
+
     return 0;
 }
 
@@ -420,10 +420,11 @@ int tc_egress(struct __sk_buff *skb)
         return 0;
 
     int ret = -1;
+    u32 id = bpf_get_prandom_u32();
     if (context->eth_protocol == ETH_P_IP) {
-        ret = send_ipv4(skb, context->iphdr_offset, context->ino_id);
+        ret = send_ipv4(skb, context->iphdr_offset, context->ino_id, id);
     } else if (context ->eth_protocol == ETH_P_IPV6) {
-        ret = send_ipv6(skb, context->iphdr_offset, context->ino_id);
+        ret = send_ipv6(skb, context->iphdr_offset, context->ino_id, id);
     }
 
     if (!ret) { // SUCCESSFUL
@@ -432,6 +433,8 @@ int tc_egress(struct __sk_buff *skb)
             return 0;
         *count = *count + 1;
     }
+
+    bpf_printk("send [%llu] -> [%x]", context->ino_id, bpf_ntohl(id));
 
     return 0;
 }
@@ -581,20 +584,11 @@ int BPF_PROG(inet6_recvmsg, struct socket *sock)
     if (!keyp)
         return 0;
 
-    bpf_printk("fexit/inet6_recvmsg %llx [%x:%x:%x:%x]:%u -> [%x:%x:%x:%x]:%u %llu", 
-               key.sk_ptr,
-               bpf_ntohl(key.addr_pair.ipv6.saddr.in6_u.u6_addr32[0]),
-               bpf_ntohl(key.addr_pair.ipv6.saddr.in6_u.u6_addr32[1]),
-               bpf_ntohl(key.addr_pair.ipv6.saddr.in6_u.u6_addr32[2]),
-               bpf_ntohl(key.addr_pair.ipv6.saddr.in6_u.u6_addr32[3]),
-               key.src_port,
-               bpf_ntohl(key.addr_pair.ipv6.daddr.in6_u.u6_addr32[0]),
-               bpf_ntohl(key.addr_pair.ipv6.daddr.in6_u.u6_addr32[1]),
-               bpf_ntohl(key.addr_pair.ipv6.daddr.in6_u.u6_addr32[2]),
-               bpf_ntohl(key.addr_pair.ipv6.daddr.in6_u.u6_addr32[3]),
-               key.dst_port,
-               BPF_CORE_READ(sock, file, f_inode, i_ino)
-    );
+    bpf_printk("recvexit: [%llu] -> [%x]", 
+               BPF_CORE_READ(sock, file, f_inode, i_ino),
+               bpf_ntohl(*keyp));
+
+    bpf_map_delete_elem(&pending_receives, &key);
 
     return 0;
 }
@@ -615,8 +609,6 @@ int BPF_PROG(inet_recvmsg, struct socket *sock)
     if (!keyp)
         return 0;
 
-    struct ipbytes src_bytes = ip_bytes(key.addr_pair.ipv4.saddr);
-    struct ipbytes dst_bytes = ip_bytes(key.addr_pair.ipv4.daddr);
     bpf_printk("recvexit: [%llu] -> [%x]", 
                BPF_CORE_READ(sock, file, f_inode, i_ino),
                bpf_ntohl(*keyp));
