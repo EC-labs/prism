@@ -410,6 +410,29 @@ build_pending_receives_key(struct socket *sock)
     return key;
 }
 
+static __always_inline void match_receive(struct socket *sock)
+{
+    struct pending_receives_key key = build_pending_receives_key(sock);
+    u32 *keyp = bpf_map_lookup_elem(&pending_receives, &key);
+    if (!keyp)
+        return;
+
+    u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
+    u32 tgid = get_tgid(tgid_pid);
+    struct sock *sk = BPF_CORE_READ(sock, sk);
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
+
+    bpf_printk("recv: [%llu] -> [%08x]", inode_id, bpf_ntohl(*keyp));
+    store_socket_context(sock, f_inode, &socket_context, &rb);
+    if (!bpf_map_update_elem(&pids, &tgid, &truth, BPF_NOEXIST)) {
+        bpf_printk("[tcp] discovered %u %llu", tgid, inode_id);
+        bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
+    }
+
+    bpf_map_delete_elem(&pending_receives, &key);
+}
+
 SEC("tc")
 int tc_egress(struct __sk_buff *skb)
 {
@@ -545,50 +568,14 @@ int BPF_PROG(discovery_tcp_data_queue, struct sock *sk, struct sk_buff *skb)
 SEC("fexit/inet6_recvmsg")
 int BPF_PROG(inet6_recvmsg, struct socket *sock) 
 {
-    struct pending_receives_key key = build_pending_receives_key(sock);
-    u32 *keyp = bpf_map_lookup_elem(&pending_receives, &key);
-    if (!keyp)
-        return 0;
-
-    u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
-    u32 tgid = get_tgid(tgid_pid);
-    struct sock *sk = BPF_CORE_READ(sock, sk);
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-    u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
-
-    bpf_printk("recv: [%llu] -> [%08x]", inode_id, bpf_ntohl(*keyp));
-    store_socket_context(sock, f_inode, &socket_context, &rb);
-    if (!bpf_map_update_elem(&pids, &tgid, &truth, BPF_NOEXIST)) {
-        bpf_printk("[tcp] discovered %u %llu", tgid, inode_id);
-        bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
-    }
-
-    bpf_map_delete_elem(&pending_receives, &key);
+    match_receive(sock);
     return 0;
 }
 
 SEC("fexit/inet_recvmsg")
 int BPF_PROG(inet_recvmsg, struct socket *sock) 
 {
-    struct pending_receives_key key = build_pending_receives_key(sock);
-    u32 *keyp = bpf_map_lookup_elem(&pending_receives, &key);
-    if (!keyp)
-        return 0;
-
-    u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
-    u32 tgid = get_tgid(tgid_pid);
-    struct sock *sk = BPF_CORE_READ(sock, sk);
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-    u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
-
-    bpf_printk("recv: [%llu] -> [%08x]", inode_id, bpf_ntohl(*keyp));
-    store_socket_context(sock, f_inode, &socket_context, &rb);
-    if (!bpf_map_update_elem(&pids, &tgid, &truth, BPF_NOEXIST)) {
-        bpf_printk("[tcp] discovered %u %llu", tgid, inode_id);
-        bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
-    }
-
-    bpf_map_delete_elem(&pending_receives, &key);
+    match_receive(sock);
     return 0;
 }
 
@@ -596,24 +583,6 @@ SEC("fexit/sock_splice_read")
 int BPF_PROG(sock_splice_read, struct file *file) 
 {
     struct socket *sock = (struct socket *) BPF_CORE_READ(file, private_data);
-    struct pending_receives_key key = build_pending_receives_key(sock);
-    u32 *keyp = bpf_map_lookup_elem(&pending_receives, &key);
-    if (!keyp)
-        return 0;
-
-    u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
-    u32 tgid = get_tgid(tgid_pid);
-    struct sock *sk = BPF_CORE_READ(sock, sk);
-    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-    u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
-
-    bpf_printk("recv: [%llu] -> [%08x]", inode_id, bpf_ntohl(*keyp));
-    store_socket_context(sock, f_inode, &socket_context, &rb);
-    if (!bpf_map_update_elem(&pids, &tgid, &truth, BPF_NOEXIST)) {
-        bpf_printk("[tcp] discovered %u %llu", tgid, inode_id);
-        bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
-    }
-
-    bpf_map_delete_elem(&pending_receives, &key);
+    match_receive(sock);
     return 0;
 }
