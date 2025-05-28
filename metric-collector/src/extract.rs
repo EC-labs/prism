@@ -1,21 +1,17 @@
 use anyhow::Result;
+use bus::Bus;
 use ctrlc;
 use duckdb::{Connection, ToSql};
-use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
+use libbpf_rs::{libbpf_sys::{self, libbpf_set_print}, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, seteuid};
 use log::info;
 use nix::time::{self, ClockId};
 use regex::Regex;
 use std::{
-    env, fs,
-    mem::MaybeUninit,
-    os::fd::AsFd,
-    sync::{
+    env, fs, mem::MaybeUninit, os::fd::AsFd, ptr::null, sync::{
         mpsc::{self, Receiver},
         Arc, Mutex, RwLock,
-    },
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    }, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
 };
 use syn::{Expr, Item, Lit};
 
@@ -99,6 +95,7 @@ impl Extractor {
         let conn = Connection::open(&*config.prism_store)?;
         unsafe { seteuid(euid) };
 
+        unsafe { libbpf_set_print(None) };
         Self::insert_linux_consts(&conn)?;
         Ok(Self {
             conn,
@@ -214,6 +211,10 @@ impl Extractor {
             )?
         }
 
+        // To broadcast when a new pid is registered
+        let mut pid_bus = Bus::new(100);
+        let discovery_rx = pid_bus.add_rx();
+
         let conn = &self.conn;
 
         let mut iowait_open_object = MaybeUninit::uninit();
@@ -244,13 +245,12 @@ impl Extractor {
         )
         .unwrap();
 
-        let mut discovery_open_object = MaybeUninit::uninit();
         let mut discovery = Discovery::new(
-            &mut discovery_open_object,
-            pid_map.as_fd(),
-            pid_rb.as_fd(),
-            net.skel.maps.socket_context.as_fd(),
-            net.skel.maps.rb.as_fd(),
+            MapHandle::try_from(&pid_map)?,
+            MapHandle::try_from(&pid_rb)?,
+            MapHandle::try_from(&net.skel.maps.socket_context)?,
+            MapHandle::try_from(&net.skel.maps.rb)?,
+            discovery_rx
         )
         .unwrap();
 
@@ -265,6 +265,7 @@ impl Extractor {
             Duration::from_millis(self.config.period),
             pid_map,
             pid_rb,
+            pid_bus,
             conn.try_clone()?,
         );
 
@@ -322,13 +323,14 @@ impl TimeSensitive {
         sample_interval: Duration,
         pid_map: MapHandle,
         pid_rb: MapHandle,
+        pid_bus: Bus<u32>,
         conn: Connection,
     ) {
         let sample_rx = Self::start_timer_thread(terminate_flag.clone(), sample_interval);
         thread::Builder::new()
             .name("ts-collect".to_string())
             .spawn(move || {
-                let mut taskstats = TaskStatsIter::new(pid_map, pid_rb, &conn)?;
+                let mut taskstats = TaskStatsIter::new(pid_map, pid_rb, &conn, pid_bus)?;
                 loop {
                     sample_rx.recv()?;
                     while let Ok(_) = sample_rx.try_recv() {}

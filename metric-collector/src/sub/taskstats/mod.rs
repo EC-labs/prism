@@ -1,3 +1,4 @@
+use bus::Bus;
 use log::info;
 use std::{
     collections::HashMap,
@@ -65,10 +66,11 @@ pub struct TaskStatsIter<'conn> {
     link_rx: Receiver<(u32, Link)>,
     taskstats_appender: Appender<'conn>,
     pid_map: MapHandle,
+    pid_bus: Bus<u32>,
 }
 
 impl<'conn> TaskStatsIter<'conn> {
-    pub fn new(pid_map: MapHandle, pid_rb: MapHandle, conn: &'conn Connection) -> Result<Self> {
+    pub fn new(pid_map: MapHandle, pid_rb: MapHandle, conn: &'conn Connection, pid_bus: Bus<u32>) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
         let init_pids: Vec<u32> = pid_map
             .keys()
@@ -106,6 +108,7 @@ impl<'conn> TaskStatsIter<'conn> {
         init_store(conn)?;
         Ok(Self {
             pid_map,
+            pid_bus,
             links: HashMap::new(),
             link_rx: rx,
             taskstats_appender: conn.appender("taskstats")?,
@@ -145,6 +148,7 @@ impl<'conn> TaskStatsIter<'conn> {
         while let Ok((pid, link)) = self.link_rx.try_recv() {
             self.links.entry(pid).or_insert_with(|| {
                 info!("discovered {pid}");
+                self.pid_bus.broadcast(pid);
                 link
             });
         }

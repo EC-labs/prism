@@ -3,15 +3,13 @@
 use anyhow::Result;
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
-    skel::{OpenSkel, Skel, SkelBuilder}, MapCore, OpenObject, RingBuffer, RingBufferBuilder, TcHook, TcHookBuilder, TC_EGRESS
+    skel::{OpenSkel, Skel, SkelBuilder}, MapCore, MapHandle, OpenObject, RingBuffer, RingBufferBuilder, TcHook, TcHookBuilder, TC_EGRESS
 };
-use log::debug;
+use log::{debug, info};
 use std::{
-    fmt::Debug,
-    mem::MaybeUninit,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    os::fd::{BorrowedFd, AsFd},
+    fmt::Debug, mem::MaybeUninit, net::{IpAddr, Ipv4Addr, Ipv6Addr}, os::fd::{AsFd, BorrowedFd}, sync::mpsc::{Receiver, self}, thread, sync::mpsc::RecvTimeoutError, time::Duration,
 };
+use bus::{Bus, BusReader};
 
 use discovery::{DiscoverySkel, DiscoverySkelBuilder};
 
@@ -22,94 +20,104 @@ mod discovery {
     ));
 }
 
-pub struct Discovery<'a> {
-    skel: DiscoverySkel<'a>,
-    rb: RingBuffer<'a>,
-    hooks: Vec<TcHook>,
+struct TcHook_ {
+    pidfd: i64,
+    hook: TcHook,
 }
 
-impl<'a> Discovery<'a> {
+impl Drop for TcHook_ {
+    fn drop(&mut self) {
+        let ret = unsafe { libc::setns(self.pidfd as i32, libc::CLONE_NEWNET) };
+        if ret == 0 {
+            self.hook.detach();
+            self.hook.destroy();
+        }
+    }
+}
+
+pub struct Discovery {
+    hooks: Vec<TcHook_>,
+    hook_rx: Receiver<TcHook_>,
+}
+
+impl Discovery {
     pub fn new(
-        open_object: &'a mut MaybeUninit<OpenObject>,
-        pid_map: BorrowedFd,
-        pid_rb: BorrowedFd,
-        net_socket_context: BorrowedFd,
-        net_rb: BorrowedFd,
+        pid_map: MapHandle,
+        pid_rb: MapHandle,
+        net_socket_context: MapHandle,
+        net_rb: MapHandle,
+        mut pid_rx: BusReader<u32>,
     ) -> Result<Self>
     where
     {
-        let skel_builder = DiscoverySkelBuilder::default();
-        let mut open_skel = skel_builder.open(open_object)?;
-        open_skel.maps.pids.reuse_fd(pid_map)?;
-        open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
-        open_skel.maps.socket_context.reuse_fd(net_socket_context)?;
-        open_skel.maps.rb.reuse_fd(net_rb)?;
+        let (hook_tx, hook_rx) = mpsc::channel();
 
-        let mut skel = open_skel.load()?;
-        let mut builder = RingBufferBuilder::new();
-        builder.add(
-            &skel.maps.rb_skb_data,
-            |data: &[u8]| 0,
-        )?;
-        let rb = builder.build()?;
+        thread::spawn(move || -> Result<()> {
+            let skel_builder = DiscoverySkelBuilder::default();
+            let mut open_object = MaybeUninit::uninit();
+            let mut open_skel = skel_builder.open(&mut open_object)?;
+            open_skel.maps.pids.reuse_fd(pid_map.as_fd())?;
+            open_skel.maps.pid_rb.reuse_fd(pid_rb.as_fd())?;
+            open_skel.maps.socket_context.reuse_fd(net_socket_context.as_fd())?;
+            open_skel.maps.rb.reuse_fd(net_rb.as_fd())?;
 
-        let mut hooks = Vec::new();
-        for mut pid in skel.maps.pids.keys() {
-            let pid = u32::from_ne_bytes(pid.as_slice().try_into()?);
-            let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
-            if pidfd < 0 {
-                continue;
-            }
+            let mut skel = open_skel.load()?;
+            let mut builder = RingBufferBuilder::new();
+            builder.add(
+                &skel.maps.rb_skb_data,
+                |data: &[u8]| 0,
+            )?;
+            let rb = builder.build()?;
+            skel.attach()?;
 
-            let ret = unsafe { libc::setns(pidfd as i32, libc::CLONE_NEWNET) };
-            if ret == 0 {
-                for iface in pnet::datalink::interfaces() {
-                    let mut tc_builder = TcHookBuilder::new(skel.progs.tc_egress.as_fd());
-                    tc_builder
-                        .ifindex(iface.index as i32)
-                        .replace(true)
-                        .handle(1)
-                        .priority(1);
+            loop {
+                while let pid = pid_rx.recv_timeout(Duration::from_millis(100)) {
+                    let pid = match pid {
+                        Ok(pid) => pid,
+                        Err(RecvTimeoutError::Timeout) => { break }
+                        Err(e) => { return Err(e.into()); }
 
-                    match tc_builder.hook(TC_EGRESS).create() {
-                        Ok(mut hook) => {
-                            let Ok(hook) = hook.attach() else { hook.destroy(); continue; };
-                            hooks.push(hook);
-                        }
-                        Err(_) => {}
+                    };
+                    println!("discovery register {}", pid);
+                    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+                    if pidfd < 0 {
+                        continue;
                     }
 
-                    println!("{}: {:?}", iface.name, iface.index);
+                    let ret = unsafe { libc::setns(pidfd as i32, libc::CLONE_NEWNET) };
+                    if ret == 0 {
+                        for iface in pnet::datalink::interfaces() {
+                            let mut tc_builder = TcHookBuilder::new(skel.progs.tc_egress.as_fd());
+                            tc_builder
+                                .ifindex(iface.index as i32)
+                                .replace(true)
+                                .handle(1)
+                                .priority(1);
+
+                            match tc_builder.hook(TC_EGRESS).create() {
+                                Ok(mut hook) => {
+                                    let Ok(hook) = hook.attach() else { hook.destroy(); continue; };
+                                    hook_tx.send(TcHook_ { pidfd, hook });
+                                }
+                                Err(_) => {}
+                            }
+
+                            debug!("register interface for pid {}: {} {}", pid, iface.name, iface.index);
+                        }
+                    }
                 }
+                rb.consume()?;
             }
-            unsafe { libc::close(pidfd as i32) };
-        }
+            Ok(()) as Result<()>
+        });
 
-        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, std::process::id() as i32, 0) };
-        if pidfd < 0 {
-            println!("pidfd_open call failed {:?}", pidfd);
-        }
-
-        let ret = unsafe { libc::setns(pidfd as i32, libc::CLONE_NEWNET) };
-        if ret != 0 {
-            println!("setns failed {:?}", ret);
-        }
-
-        skel.attach()?;
-        Ok(Self { hooks, skel, rb })
+        Ok(Self { hook_rx, hooks: Vec::new() })
     }
 
     pub fn sample(&mut self) -> Result<()> {
-        self.rb.consume()?;
-        Ok(())
-    }
-}
-
-impl<'a> Drop for Discovery<'a> {
-    fn drop(&mut self) {
-        while let Some(mut hook) = self.hooks.pop() {
-            hook.detach();
-            hook.destroy();
+        while let Ok(hook) = self.hook_rx.try_recv() {
+            self.hooks.push(hook);
         }
+        Ok(())
     }
 }

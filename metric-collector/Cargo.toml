@@ -40,3 +40,4 @@ log = "0.4.26"
 env_logger = "0.11.6"
 
 dashmap = "6.1.0"
+bus = "2.4.1"
