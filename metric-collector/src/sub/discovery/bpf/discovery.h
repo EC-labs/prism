@@ -30,4 +30,13 @@ struct pending_receives_key {
     __u8  family;
 };
 
+struct tcp_discovery_event {
+    enum event_enum {
+        SEND, 
+        RECV,
+    } event_type;
+    __u64 inode_id;
+    __u32 id;
+} tcp_discovery_event;
+
 #endif /* __DISCOVERY_H */

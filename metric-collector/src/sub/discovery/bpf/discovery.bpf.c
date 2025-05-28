@@ -60,8 +60,13 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, MTU * 100);
+	__uint(max_entries, MTU * 1024);
 } rb_skb_data SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, sizeof(struct tcp_discovery_event) * MAX_ENTRIES);
+} tcp_discovery_rb SEC(".maps");
 
 struct ipbytes {
     char bytes[4];
@@ -423,7 +428,6 @@ static __always_inline void match_receive(struct socket *sock)
     struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
     u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
 
-    bpf_printk("recv: [%llu] -> [%08x]", inode_id, bpf_ntohl(*keyp));
     store_socket_context(sock, f_inode, &socket_context, &rb);
     if (!bpf_map_update_elem(&pids, &tgid, &truth, BPF_NOEXIST)) {
         bpf_printk("[tcp] discovered %u %llu", tgid, inode_id);
@@ -431,6 +435,13 @@ static __always_inline void match_receive(struct socket *sock)
     }
 
     bpf_map_delete_elem(&pending_receives, &key);
+
+    struct tcp_discovery_event event = {
+        .event_type = RECV,
+        .inode_id = inode_id,
+        .id = bpf_ntohl(*keyp)
+    };
+    bpf_ringbuf_output(&tcp_discovery_rb, &event, sizeof(event), 0);
 }
 
 SEC("tc")
@@ -462,7 +473,12 @@ int tc_egress(struct __sk_buff *skb)
         *count = *count + 1;
     }
 
-    bpf_printk("send: [%llu] -> [%08x]", context->ino_id, bpf_ntohl(id));
+    struct tcp_discovery_event event = {
+        .event_type = SEND,
+        .inode_id = context->ino_id,
+        .id = bpf_ntohl(id)
+    };
+    bpf_ringbuf_output(&tcp_discovery_rb, &event, sizeof(event), 0);
 
     return 0;
 }

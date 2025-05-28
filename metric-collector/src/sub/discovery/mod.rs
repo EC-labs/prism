@@ -11,14 +11,16 @@ use std::{
 };
 use bus::{Bus, BusReader};
 
-use discovery::{DiscoverySkel, DiscoverySkelBuilder};
-
 mod discovery {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/sub/discovery/bpf/discovery.skel.rs"
     ));
 }
+use discovery::{
+    types::{tcp_discovery_event, tcphdr},
+    DiscoverySkel, DiscoverySkelBuilder,
+};
 
 struct TcHook_ {
     pidfd: i64,
@@ -41,7 +43,8 @@ pub struct Discovery {
 }
 
 impl Discovery {
-    pub fn new(
+    pub fn new<'conn>(
+        conn: &'conn Connection,
         pid_map: MapHandle,
         pid_rb: MapHandle,
         net_socket_context: MapHandle,
@@ -51,6 +54,8 @@ impl Discovery {
     where
     {
         let (hook_tx, hook_rx) = mpsc::channel();
+        let conn = conn.try_clone()?;
+        Self::init_store(&conn);
 
         thread::spawn(move || -> Result<()> {
             let skel_builder = DiscoverySkelBuilder::default();
@@ -68,6 +73,14 @@ impl Discovery {
                 |data: &[u8]| 0,
             )?;
             let rb = builder.build()?;
+
+            let mut builder = RingBufferBuilder::new();
+            builder.add(
+                &skel.maps.tcp_discovery_rb,
+                tcp_discovery_callback(conn.appender("tcp_discovery").unwrap()),
+            )?;
+            let tcp_discovery_rb = builder.build()?;
+
             skel.attach()?;
 
             loop {
@@ -106,6 +119,7 @@ impl Discovery {
                         }
                     }
                 }
+                tcp_discovery_rb.consume()?;
                 rb.consume()?;
             }
             Ok(()) as Result<()>
@@ -114,10 +128,36 @@ impl Discovery {
         Ok(Self { hook_rx, hooks: Vec::new() })
     }
 
+    fn init_store(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            r"
+                CREATE OR REPLACE TABLE tcp_discovery (
+                    event_type  USMALLINT,
+                    inode_id    UBIGINT,
+                    id          UINTEGER,
+                );
+            ",
+        )?;
+        Ok(())
+    }
+
     pub fn sample(&mut self) -> Result<()> {
         while let Ok(hook) = self.hook_rx.try_recv() {
             self.hooks.push(hook);
         }
         Ok(())
+    }
+}
+
+fn tcp_discovery_callback<'conn>(
+    mut tcp_discovery_appender: Appender<'conn>,
+) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
+    move |data: &[u8]| {
+        let event: &[u8; size_of::<tcp_discovery_event>()] = &data[..size_of::<tcp_discovery_event>()].try_into().unwrap();
+        let event = unsafe {std::mem::transmute::<_, &tcp_discovery_event>(event)};
+        let event_type = unsafe { event.event_type.assume_init() };
+        debug!("{:?} {} {:x}", unsafe { event.event_type.assume_init() }, event.inode_id, event.id);
+        tcp_discovery_appender.append_row([&(event_type as u8) as &dyn ToSql, &event.inode_id, &event.id]);
+        0
     }
 }
