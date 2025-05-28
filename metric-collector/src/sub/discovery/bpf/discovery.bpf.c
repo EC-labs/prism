@@ -389,6 +389,27 @@ static __always_inline void recv_ipv6(struct sk_buff *skb, struct sock *sk, stru
     bpf_map_update_elem(&pending_receives, &key, &option[1], BPF_ANY);
 }
 
+static __always_inline struct pending_receives_key 
+build_pending_receives_key(struct socket *sock) 
+{
+    struct pending_receives_key key = {0};
+    key.sk_ptr = (u64) BPF_CORE_READ(sock, sk);
+    key.family = BPF_CORE_READ(sock, sk, __sk_common.skc_family);
+    key.netns_cookie = BPF_CORE_READ(sock, sk, __sk_common.skc_net.net, net_cookie);
+    if (key.family == AF_INET) {
+        key.src_port = BPF_CORE_READ(sock, sk, __sk_common.skc_num);
+        key.dst_port = bpf_ntohs(BPF_CORE_READ(sock, sk, __sk_common.skc_dport));
+        key.addr_pair.ipv4.saddr = BPF_CORE_READ(sock, sk, __sk_common.skc_rcv_saddr);
+        key.addr_pair.ipv4.daddr = BPF_CORE_READ(sock, sk, __sk_common.skc_daddr);
+    } else if (key.family == AF_INET6) {
+        key.src_port = BPF_CORE_READ(sock, sk, __sk_common.skc_num);
+        key.dst_port = bpf_ntohs(BPF_CORE_READ(sock, sk, __sk_common.skc_dport));
+        key.addr_pair.ipv6.saddr = BPF_CORE_READ(sock, sk, __sk_common.skc_v6_rcv_saddr);
+        key.addr_pair.ipv6.daddr = BPF_CORE_READ(sock, sk, __sk_common.skc_v6_daddr);
+    }
+    return key;
+}
+
 SEC("tc")
 int tc_egress(struct __sk_buff *skb)
 {
@@ -524,15 +545,7 @@ int BPF_PROG(discovery_tcp_data_queue, struct sock *sk, struct sk_buff *skb)
 SEC("fexit/inet6_recvmsg")
 int BPF_PROG(inet6_recvmsg, struct socket *sock) 
 {
-    struct pending_receives_key key = {0};
-    key.sk_ptr = (u64) BPF_CORE_READ(sock, sk);
-    key.family = AF_INET6;
-    key.netns_cookie = BPF_CORE_READ(sock, sk, __sk_common.skc_net.net, net_cookie);
-    key.src_port = BPF_CORE_READ(sock, sk, __sk_common.skc_num);
-    key.dst_port = bpf_ntohs(BPF_CORE_READ(sock, sk, __sk_common.skc_dport));
-    key.addr_pair.ipv6.saddr = BPF_CORE_READ(sock, sk, __sk_common.skc_v6_rcv_saddr);
-    key.addr_pair.ipv6.daddr = BPF_CORE_READ(sock, sk, __sk_common.skc_v6_daddr);
-
+    struct pending_receives_key key = build_pending_receives_key(sock);
     u32 *keyp = bpf_map_lookup_elem(&pending_receives, &key);
     if (!keyp)
         return 0;
@@ -557,15 +570,33 @@ int BPF_PROG(inet6_recvmsg, struct socket *sock)
 SEC("fexit/inet_recvmsg")
 int BPF_PROG(inet_recvmsg, struct socket *sock) 
 {
-    struct pending_receives_key key = {0};
-    key.sk_ptr = (u64) BPF_CORE_READ(sock, sk);
-    key.family = AF_INET;
-    key.netns_cookie = BPF_CORE_READ(sock, sk, __sk_common.skc_net.net, net_cookie);
-    key.src_port = BPF_CORE_READ(sock, sk, __sk_common.skc_num);
-    key.dst_port = bpf_ntohs(BPF_CORE_READ(sock, sk, __sk_common.skc_dport));
-    key.addr_pair.ipv4.saddr = BPF_CORE_READ(sock, sk, __sk_common.skc_rcv_saddr);
-    key.addr_pair.ipv4.daddr = BPF_CORE_READ(sock, sk, __sk_common.skc_daddr);
+    struct pending_receives_key key = build_pending_receives_key(sock);
+    u32 *keyp = bpf_map_lookup_elem(&pending_receives, &key);
+    if (!keyp)
+        return 0;
 
+    u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
+    u32 tgid = get_tgid(tgid_pid);
+    struct sock *sk = BPF_CORE_READ(sock, sk);
+    struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
+    u64 inode_id = BPF_CORE_READ(f_inode, i_ino);
+
+    bpf_printk("recv: [%llu] -> [%08x]", inode_id, bpf_ntohl(*keyp));
+    store_socket_context(sock, f_inode, &socket_context, &rb);
+    if (!bpf_map_update_elem(&pids, &tgid, &truth, BPF_NOEXIST)) {
+        bpf_printk("[tcp] discovered %u %llu", tgid, inode_id);
+        bpf_ringbuf_output(&pid_rb, &tgid, sizeof(tgid), 0);
+    }
+
+    bpf_map_delete_elem(&pending_receives, &key);
+    return 0;
+}
+
+SEC("fexit/sock_splice_read")
+int BPF_PROG(sock_splice_read, struct file *file) 
+{
+    struct socket *sock = (struct socket *) BPF_CORE_READ(file, private_data);
+    struct pending_receives_key key = build_pending_receives_key(sock);
     u32 *keyp = bpf_map_lookup_elem(&pending_receives, &key);
     if (!keyp)
         return 0;
