@@ -95,7 +95,6 @@ impl Extractor {
         let conn = Connection::open(&*config.prism_store)?;
         unsafe { seteuid(euid) };
 
-        unsafe { libbpf_set_print(None) };
         Self::insert_linux_consts(&conn)?;
         Ok(Self {
             conn,

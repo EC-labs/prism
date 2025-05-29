@@ -61,6 +61,7 @@ impl Discovery {
             let skel_builder = DiscoverySkelBuilder::default();
             let mut open_object = MaybeUninit::uninit();
             let mut open_skel = skel_builder.open(&mut open_object)?;
+            open_skel.maps.rodata_data.machine_id = 0xccccdddd;
             open_skel.maps.pids.reuse_fd(pid_map.as_fd())?;
             open_skel.maps.pid_rb.reuse_fd(pid_rb.as_fd())?;
             open_skel.maps.socket_context.reuse_fd(net_socket_context.as_fd())?;
@@ -91,7 +92,6 @@ impl Discovery {
                         Err(e) => { return Err(e.into()); }
 
                     };
-                    println!("discovery register {}", pid);
                     let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
                     if pidfd < 0 {
                         continue;

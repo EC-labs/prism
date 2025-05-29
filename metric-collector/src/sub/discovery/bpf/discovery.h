@@ -1,10 +1,15 @@
 #ifndef __DISCOVERY_H
 #define __DISCOVERY_H
 
-#define EXTEND_SIZE 8 
-
 #define ETH_P_IP   0x0800
 #define ETH_P_IPV6 0x86DD
+
+#define EXTEND_SIZE (4 + sizeof(__u32) + sizeof(__u64))
+
+struct discovery_id {
+    __u32 machine_id;
+    __u64 inode_id;
+};
 
 struct discovery_context {
     __u64 ino_id;
