@@ -36,12 +36,10 @@ struct pending_receives_key {
 };
 
 struct tcp_discovery_event {
-    enum event_enum {
-        SEND, 
-        RECV,
-    } event_type;
-    __u64 inode_id;
-    __u32 id;
+    __u64 local_machine_id;
+    __u32 local_inode_id;
+    __u64 remote_machine_id;
+    __u32 remote_inode_id;
 } tcp_discovery_event;
 
 #endif /* __DISCOVERY_H */

@@ -429,7 +429,7 @@ static __always_inline void match_receive(struct socket *sock)
     if (!keyp)
         return;
 
-    bpf_printk("recv: [%x] -> [%llu]", keyp->machine_id, keyp->inode_id);
+    // bpf_printk("recv: [%x] -> [%llu]", keyp->machine_id, keyp->inode_id);
 
     u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
     u32 tgid = get_tgid(tgid_pid);
@@ -446,9 +446,10 @@ static __always_inline void match_receive(struct socket *sock)
     bpf_map_delete_elem(&pending_receives, &key);
 
     struct tcp_discovery_event event = {
-        .event_type = RECV,
-        .inode_id = inode_id,
-        .id = bpf_ntohl(keyp->machine_id),
+        .local_machine_id = machine_id,
+        .local_inode_id = inode_id,
+        .remote_machine_id = keyp->machine_id,
+        .remote_inode_id = keyp->inode_id,
     };
     bpf_ringbuf_output(&tcp_discovery_rb, &event, sizeof(event), 0);
 }
@@ -481,12 +482,13 @@ int tc_egress(struct __sk_buff *skb)
         *count = *count + 1;
     }
 
-    bpf_printk("send: [%x] -> [%llu]", machine_id, context->ino_id);
+    // bpf_printk("send: [%x] -> [%llu]", machine_id, context->ino_id);
 
     struct tcp_discovery_event event = {
-        .event_type = SEND,
-        .inode_id = context->ino_id,
-        .id = bpf_ntohl(machine_id)
+        .local_machine_id = machine_id,
+        .local_inode_id = context->ino_id,
+        .remote_machine_id = 0,
+        .remote_inode_id = 0,
     };
     bpf_ringbuf_output(&tcp_discovery_rb, &event, sizeof(event), 0);
 

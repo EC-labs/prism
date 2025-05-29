@@ -132,9 +132,10 @@ impl Discovery {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE tcp_discovery (
-                    event_type  USMALLINT,
-                    inode_id    UBIGINT,
-                    id          UINTEGER,
+                    local_machine_id    UINTEGER,
+                    local_inode_id      UBIGINT,
+                    remote_machine_id   UINTEGER,
+                    remote_inode_id     UBIGINT,
                 );
             ",
         )?;
@@ -155,9 +156,8 @@ fn tcp_discovery_callback<'conn>(
     move |data: &[u8]| {
         let event: &[u8; size_of::<tcp_discovery_event>()] = &data[..size_of::<tcp_discovery_event>()].try_into().unwrap();
         let event = unsafe {std::mem::transmute::<_, &tcp_discovery_event>(event)};
-        let event_type = unsafe { event.event_type.assume_init() };
-        debug!("{:?} {} {:x}", unsafe { event.event_type.assume_init() }, event.inode_id, event.id);
-        tcp_discovery_appender.append_row([&(event_type as u8) as &dyn ToSql, &event.inode_id, &event.id]);
+        debug!("{:x} {} {:x} {}", event.local_machine_id, event.local_inode_id, event.remote_machine_id, event.remote_inode_id);
+        tcp_discovery_appender.append_row([&event.local_machine_id as &dyn ToSql, &event.local_inode_id, &event.remote_machine_id, &event.remote_inode_id]);
         0
     }
 }
