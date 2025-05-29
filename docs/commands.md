@@ -12,7 +12,7 @@ sudo cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
 ```bash
-RUST_LOG=info cargo run -r -p metric-collector --config 'target."cfg(all())".runner="sudo -E"' -- --pids 1
+RUST_LOG=info cargo run -r -p metric-collector --config 'target."cfg(all())".runner="sudo -E"' -- --machine-id 1 --pids 1
 ```
 
 Filter on packets that contain our magic
@@ -41,5 +41,19 @@ Run bpftrace with manually unpacked kernel headers [link](https://github.com/bpf
 ```bash
 modprobe kheaders
 tar -xf /sys/kernel/kheaders.tar.xz
-BPFTRACE_KERNEL_SOURCE="/path/to/unpacked/headers" bpftrace runqlat.bt
+sudo BPFTRACE_KERNEL_SOURCE="/path/to/unpacked/headers" bpftrace runqlat.bt
+```
+
+wireshark filter such that tcp_len is greater than 0
+```
+(ip.proto==6) and (ip.src == 172.18.0.3) and (tcp.len > 0)
+```
+
+Create an ipv6 socket that can also receive ipv4 connections:
+```bash
+socat tcp6-listen:3000,reuseaddr -
+```
+
+```bash
+tc filter show dev lo egress
 ```

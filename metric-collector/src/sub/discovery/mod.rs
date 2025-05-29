@@ -45,6 +45,7 @@ pub struct Discovery {
 impl Discovery {
     pub fn new<'conn>(
         conn: &'conn Connection,
+        machine_id: u32,
         pid_map: MapHandle,
         pid_rb: MapHandle,
         net_socket_context: MapHandle,
@@ -61,7 +62,7 @@ impl Discovery {
             let skel_builder = DiscoverySkelBuilder::default();
             let mut open_object = MaybeUninit::uninit();
             let mut open_skel = skel_builder.open(&mut open_object)?;
-            open_skel.maps.rodata_data.machine_id = 0xccccdddd;
+            open_skel.maps.rodata_data.machine_id = machine_id;
             open_skel.maps.pids.reuse_fd(pid_map.as_fd())?;
             open_skel.maps.pid_rb.reuse_fd(pid_rb.as_fd())?;
             open_skel.maps.socket_context.reuse_fd(net_socket_context.as_fd())?;

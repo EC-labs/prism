@@ -246,6 +246,7 @@ impl Extractor {
 
         let mut discovery = Discovery::new(
             conn,
+            self.config.machine_id,
             MapHandle::try_from(&pid_map)?,
             MapHandle::try_from(&pid_rb)?,
             MapHandle::try_from(&net.skel.maps.socket_context)?,

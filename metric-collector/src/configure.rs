@@ -3,6 +3,7 @@ use clap::ArgMatches;
 use eyre::eyre;
 
 pub struct Config {
+    pub machine_id: u32,
     pub pids: Option<Vec<usize>>,
     pub period: u64,
     pub prism_store: Box<str>,
@@ -27,6 +28,8 @@ impl TryFrom<ArgMatches> for Config {
             _ => {}
         }
 
+        let machine_id = matches.remove_one::<u32>("machine-id").expect("Missing machine-id");
+
         let period: u64 = matches
             .remove_one::<u64>("period")
             .expect("Missing period")
@@ -40,6 +43,7 @@ impl TryFrom<ArgMatches> for Config {
         prism_store += &format!("/prism-{}.db3", utc.to_rfc3339());
 
         Ok(Self {
+            machine_id,
             pids,
             period,
             prism_store: Box::from(prism_store),

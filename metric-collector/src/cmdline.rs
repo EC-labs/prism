@@ -4,6 +4,14 @@ pub fn register_args() -> Command {
     command!() // requires `cargo` feature
         .next_line_help(true)
         .arg(
+            Arg::new("machine-id")
+                .required(true)
+                .long("machine-id")
+                .action(ArgAction::Set)
+                .value_parser(value_parser!(u32))
+                .help("ID of the machine"),
+        )
+        .arg(
             Arg::new("pids")
                 .required(false)
                 .long("pids")
