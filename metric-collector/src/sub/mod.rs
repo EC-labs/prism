@@ -17,6 +17,7 @@ pub mod muxio;
 pub mod net;
 pub mod taskstats;
 pub mod vfs;
+pub mod process_context;
 
 mod consts {
     #![allow(dead_code)]

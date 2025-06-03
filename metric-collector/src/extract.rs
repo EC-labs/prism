@@ -26,6 +26,7 @@ use crate::{
         net::Net,
         taskstats::{TaskStatsIter, TaskStatsTrace},
         vfs::Vfs,
+        process_context,
         MAX_ENTRIES,
     },
     target,
@@ -213,6 +214,7 @@ impl Extractor {
         // To broadcast when a new pid is registered
         let mut pid_bus = Bus::new(100);
         let discovery_rx = pid_bus.add_rx();
+        let process_context_rx = pid_bus.add_rx();
 
         let conn = &self.conn;
 
@@ -269,6 +271,12 @@ impl Extractor {
             pid_bus,
             conn.try_clone()?,
         );
+
+        let process_context = process_context::init_thread(
+            self.terminate_flag.clone(),
+            conn, 
+            process_context_rx
+        )?;
 
         let rx_timer = self.rx_timer.take().unwrap();
         loop {
