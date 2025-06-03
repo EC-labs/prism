@@ -475,12 +475,13 @@ int tc_egress(struct __sk_buff *skb)
         ret = send_ipv6(skb, context->iphdr_offset, context->ino_id, machine_id);
     }
 
-    if (!ret) { // SUCCESSFUL
-        u8 *count = bpf_map_lookup_elem(&inodep, &context->ino_id);
-        if (!count)
-            return 0;
-        *count = *count + 1;
-    }
+    if (ret) //UNSUCCESSFUL
+        return 0;
+
+    u8 *count = bpf_map_lookup_elem(&inodep, &context->ino_id);
+    if (!count)
+        return 0;
+    *count = *count + 1;
 
     // bpf_printk("send: [%x] -> [%llu]", machine_id, context->ino_id);
 
