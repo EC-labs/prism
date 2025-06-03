@@ -18,15 +18,6 @@ impl TryFrom<ArgMatches> for Config {
             .map(|pids| pids.collect());
 
         let process_name = matches.remove_one::<String>("process-name");
-        match (&pids, &process_name) {
-            (None, None) => return Err(eyre!("Pass --process-name or --pid arg required").into()),
-            (Some(_), Some(_)) => {
-                return Err(
-                    eyre!("Arguments --process-name and --pid are mutually exclusive").into(),
-                )
-            }
-            _ => {}
-        }
 
         let machine_id = matches.remove_one::<u32>("machine-id").expect("Missing machine-id");
 
