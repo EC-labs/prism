@@ -25,6 +25,7 @@ with pkgs; stdenv.mkDerivation {
     buildInputs = [ 
         duckdb
         openssl
+        protobuf
     ];
 
     LIBCLANG_PATH = "${libclang.lib}/lib";
