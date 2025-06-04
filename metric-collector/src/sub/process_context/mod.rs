@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use bus::BusReader;
-use duckdb::Connection;
+use duckdb::{Connection, Appender};
 use log::{debug, warn, error};
 use tokio::{runtime::Runtime, sync::mpsc::{self, Receiver, Sender}};
 use std::{ffi::CStr, fs::{self, File}, io::{BufRead, BufReader, Read}, path::{Path, PathBuf}, sync::{mpsc::channel, Arc, Mutex}, thread, time::Duration};
@@ -19,12 +19,36 @@ lazy_static! {
     static ref RE_CONTAINERD: Regex = Regex::new(r"containerd-(\w+)").unwrap();
 }
 
-
 #[derive(Debug)]
 enum Container {
     Docker { cgroup: String, id: String, name: Option<String>, image_name: Option<String>, image_hash: Option<String> },
     K8s { cgroup: String, id: String, namespace: Option<String>, pod_name: Option<String>, container_name: Option<String>, image_name: String },
     Unknown
+}
+
+impl Container {
+    fn init_store(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            r"
+                CREATE OR REPLACE TABLE docker (
+                    cgroup          VARCHAR,
+                    id              VARCHAR,
+                    name            VARCHAR,
+                    image_name      VARCHAR,
+                    image_hash      VARCHAR,
+                );
+                CREATE OR REPLACE TABLE k8s (
+                    cgroup          VARCHAR,
+                    id              VARCHAR,
+                    namespace       VARCHAR,
+                    pod_name        VARCHAR,
+                    container_name  VARCHAR,
+                    image_name      VARCHAR,
+                );
+            ",
+        )?;
+        Ok(())
+    }
 }
 
 struct ContainerRuntimes {
@@ -33,22 +57,24 @@ struct ContainerRuntimes {
 }
 
 impl ContainerRuntimes {
-    fn init_async_runtime(mut cgroup_rx: Receiver<Cgroup>) -> Result<Runtime> {
-        let mut runtimes = ContainerRuntimes::new();
+    fn init_async_runtime(mut cgroup_rx: Receiver<Cgroup>, conn: &Connection) -> Result<Runtime> {
+        let mut runtimes = ContainerRuntimes::new(conn)?;
         let async_rt = Runtime::new()?;
         async_rt.spawn(async move {
             loop {
                 let Some(cgroup) = cgroup_rx.recv().await else { break };
                 println!("{:?}", runtimes.get_container_metadata(cgroup).await);
             }
+            Ok(()) as Result<()>
         });
         Ok(async_rt)
     }
 
-    fn new() -> Self {
+    fn new(conn: &Connection) -> Result<Self> {
         let docker_client = Docker::connect_with_socket_defaults().ok();
         let containerd_client = None;
-        Self { docker_client, containerd_client }
+        Container::init_store(conn);
+        Ok(Self { docker_client, containerd_client })
     }
 
     async fn connect_containerd(&mut self) {
@@ -138,6 +164,22 @@ pub struct ProcessContext {
     exe: PathBuf,
 }
 
+impl ProcessContext {
+    fn init_store(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            r"
+                CREATE OR REPLACE TABLE process_context (
+                    pid         UINTEGER,
+                    cgroup      VARCHAR,
+                    argv        VARCHAR,
+                    exe         VARCHAR,
+                );
+            ",
+        )?;
+        Ok(())
+    }
+}
+
 impl TryFrom<Pid> for ProcessContext {
     type Error = anyhow::Error;
 
@@ -188,7 +230,8 @@ impl TryFrom<Pid> for ProcessContext {
 
 fn process_context_thread(terminate_flag: Arc<Mutex<bool>>, conn: Connection, mut pid_rx: BusReader<u32>) -> Result<()> {
     let (tx, rx) = mpsc::channel(1000);
-    let async_rt = ContainerRuntimes::init_async_runtime(rx);
+    ProcessContext::init_store(&conn);
+    let async_rt = ContainerRuntimes::init_async_runtime(rx, &conn);
 
     loop {
         let Ok(terminate) = terminate_flag.lock() else { break };
@@ -204,6 +247,7 @@ fn process_context_thread(terminate_flag: Arc<Mutex<bool>>, conn: Connection, mu
         };
         let Ok(context) = ProcessContext::try_from(pid) else { continue };
         debug!("process context {:?}", context);
+
         match tx.blocking_send(context.cgroup) {
             Ok(_) => {}
             Err(e) => {
