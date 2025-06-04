@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use bus::BusReader;
-use duckdb::{Connection, Appender};
+use duckdb::{Connection, Appender, ToSql};
 use log::{debug, warn, error};
 use tokio::{runtime::Runtime, sync::mpsc::{self, Receiver, Sender}};
 use std::{ffi::CStr, fs::{self, File}, io::{BufRead, BufReader, Read}, path::{Path, PathBuf}, sync::{mpsc::channel, Arc, Mutex}, thread, time::Duration};
@@ -17,6 +17,11 @@ lazy_static! {
 }
 lazy_static! {
     static ref RE_CONTAINERD: Regex = Regex::new(r"containerd-(\w+)").unwrap();
+}
+
+struct ContainerAppenders<'a> {
+    docker: Appender<'a>,
+    k8s: Appender<'a>,
 }
 
 #[derive(Debug)]
@@ -49,6 +54,19 @@ impl Container {
         )?;
         Ok(())
     }
+
+    fn append_row(self, appenders: &mut ContainerAppenders) -> Result<()> {
+        match self {
+            Container::Docker { cgroup, id, name, image_name, image_hash } => {
+                appenders.docker.append_row([&cgroup as &dyn ToSql, &id, &name, &image_name, &image_hash]);
+            }
+            Container::K8s { cgroup, id, namespace, pod_name, container_name, image_name } => {
+                appenders.k8s.append_row([&cgroup as &dyn ToSql, &id, &namespace, &pod_name, &container_name, &image_name]);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 struct ContainerRuntimes {
@@ -57,13 +75,14 @@ struct ContainerRuntimes {
 }
 
 impl ContainerRuntimes {
-    fn init_async_runtime(mut cgroup_rx: Receiver<Cgroup>, conn: &Connection) -> Result<Runtime> {
+    fn init_async_runtime(mut cgroup_rx: Receiver<Cgroup>, conn: &Connection, store_object_tx: Sender<ProcessObject>) -> Result<Runtime> {
         let mut runtimes = ContainerRuntimes::new(conn)?;
         let async_rt = Runtime::new()?;
         async_rt.spawn(async move {
             loop {
                 let Some(cgroup) = cgroup_rx.recv().await else { break };
-                println!("{:?}", runtimes.get_container_metadata(cgroup).await);
+                let Ok(container) = runtimes.get_container_metadata(cgroup).await else { continue };
+                store_object_tx.send(ProcessObject::Container(container)).await;
             }
             Ok(()) as Result<()>
         });
@@ -152,13 +171,14 @@ impl ContainerRuntimes {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Cgroup(PathBuf);
 
 struct Pid(u32);
 
 #[derive(Debug)]
 pub struct ProcessContext {
+    pid: u32,
     cgroup: Cgroup, 
     argv: Vec<String>,
     exe: PathBuf,
@@ -176,6 +196,11 @@ impl ProcessContext {
                 );
             ",
         )?;
+        Ok(())
+    }
+
+    fn append_row(self, appender: &mut Appender) -> Result<()> {
+        appender.append_row([&self.pid as &dyn ToSql, &self.cgroup.0.to_str(), &self.argv.join(" "), &self.exe.to_str()]);
         Ok(())
     }
 }
@@ -224,14 +249,17 @@ impl TryFrom<Pid> for ProcessContext {
         let exe_file = pid_proc_path.join("exe");
         let exe = fs::read_link(exe_file)?;
 
-        Ok(Self { cgroup, argv, exe })
+        Ok(Self { cgroup, argv, exe, pid: value.0 })
     }
 }
 
 fn process_context_thread(terminate_flag: Arc<Mutex<bool>>, conn: Connection, mut pid_rx: BusReader<u32>) -> Result<()> {
     let (tx, rx) = mpsc::channel(1000);
+    let (store_object_tx, store_object_rx) = mpsc::channel(1000);
     ProcessContext::init_store(&conn);
-    let async_rt = ContainerRuntimes::init_async_runtime(rx, &conn);
+    let async_rt = ContainerRuntimes::init_async_runtime(rx, &conn, store_object_tx.clone());
+
+    thread::spawn(|| start_appender_thread(conn, store_object_rx));
 
     loop {
         let Ok(terminate) = terminate_flag.lock() else { break };
@@ -246,9 +274,11 @@ fn process_context_thread(terminate_flag: Arc<Mutex<bool>>, conn: Connection, mu
             Err(e) => { break }
         };
         let Ok(context) = ProcessContext::try_from(pid) else { continue };
+        let cgroup = context.cgroup.clone();
         debug!("process context {:?}", context);
+        store_object_tx.blocking_send(ProcessObject::ProcessContext(context));
 
-        match tx.blocking_send(context.cgroup) {
+        match tx.blocking_send(cgroup) {
             Ok(_) => {}
             Err(e) => {
                 error!("failed to send cgroup event");
@@ -257,6 +287,31 @@ fn process_context_thread(terminate_flag: Arc<Mutex<bool>>, conn: Connection, mu
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+enum ProcessObject {
+    ProcessContext(ProcessContext),
+    Container(Container),
+}
+
+fn start_appender_thread(conn: Connection, mut rx: Receiver<ProcessObject>) -> Result<()> {
+    let mut pc_appender = conn.appender("process_context")?;
+    let mut container_appenders = ContainerAppenders {
+        docker: conn.appender("docker")?,
+        k8s: conn.appender("k8s")?,
+    };
+    while let Some(o) = rx.blocking_recv() {
+        match o {
+            ProcessObject::ProcessContext(pc) => {
+                pc.append_row(&mut pc_appender);
+            },
+            ProcessObject::Container(c) => {
+                c.append_row(&mut container_appenders);
+            },
+        }
+    }
+    Ok(()) as Result<()>
 }
 
 pub fn init_thread(terminate_flag: Arc<Mutex<bool>>, conn: &Connection, pid_rx: BusReader<u32>) -> Result<()> {
