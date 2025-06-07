@@ -1,0 +1,18 @@
+#include <linux/netdevice.h>
+#include <linux/net.h>
+#include <linux/socket.h>
+#include <net/sock.h>
+
+kfunc:vmlinux:inet_sendmsg
+/ comm == "nc" /
+{
+    printf("send: %s %u %p\n", comm, pid, args->sock->sk);
+    @[args->sock->sk] = 1;
+}
+
+kfunc:vmlinux:__dev_queue_xmit
+/ @[args->skb->sk] / 
+{
+    printf("xmit: %s %u %p\n", comm, pid, args->skb->sk);
+    delete(@[args->skb->sk]);
+}

@@ -1,0 +1,44 @@
+kfunc:vmlinux:__futex_queue
+/ comm == "mysqld" / 
+{
+    @q[tid] = (args->q->key.both.ptr, args->q->key.both.word, args->q->key.both.offset);
+    /*
+    printf("queue %u %u: %llx %u %u\n", 
+           pid, 
+           tid,
+           args->q->key.both.ptr, 
+           args->q->key.both.word,
+           args->q->key.both.offset);
+    */
+}
+
+kfunc:vmlinux:__futex_unqueue
+{
+    $task = (struct task_struct *) curtask;
+    $tid = $task->pid;
+    $wake_thread = args->q->task->pid;
+
+    if (!@q[$wake_thread].0) {
+        return;
+    }
+
+    $key = @q[$wake_thread];
+    $keysdiff = ($key.0 == args->q->key.both.ptr) 
+                && ($key.1 == args->q->key.both.word) 
+                && ($key.2 == args->q->key.both.offset);
+
+    // print(kstack);
+    printf("deque %u %u: %llx %u %u %u %u %s %s [%llx %u %u]\n", 
+           args->q->task->tgid,
+           args->q->task->pid, 
+           args->q->key.both.ptr, 
+           args->q->key.both.word,
+           args->q->key.both.offset,
+           pid, 
+           tid,
+           $tid == $wake_thread ? "to" : "wk",
+           $keysdiff ? "same" : "diff",
+           $key.0, 
+           $key.1,
+           $key.2);
+}
