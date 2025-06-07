@@ -24,29 +24,7 @@ enum HttpMethod {
 }
 
 async fn writer(mut rx: Receiver<(String, Duration)>) -> Result<()> {
-    let mut dirs: Vec<DirEntry> = fs::read_dir("./data")
-        .unwrap()
-        .into_iter()
-        .map(|path| path.unwrap())
-        .collect();
-
-    dirs.sort_by(|a, b| {
-        let a = a.path();
-        let a = a.to_str();
-        let b = b.path();
-        let b = b.to_str();
-        a.partial_cmp(&b).unwrap()
-    });
-
-    if dirs.len() == 0 {
-        println!("No directory found");
-        return Err(Error::from(ErrorKind::NotFound).into());
-    }
-    let data_directory = &dirs[dirs.len() - 1];
-    let data_directory = format!(
-        "{}/application-metrics",
-        data_directory.path().to_str().unwrap()
-    );
+    let data_directory = "./data/application-metrics";
     fs::create_dir(&data_directory).expect("Failed to create application-metrics directory");
 
     let filename = format!("{}/response_time.csv", data_directory);

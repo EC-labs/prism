@@ -57,3 +57,8 @@ socat tcp6-listen:3000,reuseaddr -
 ```bash
 tc filter show dev lo egress
 ```
+
+Command to get resource usage per cgroup:
+```bash
+systemd-cgtop --depth 10
+```
