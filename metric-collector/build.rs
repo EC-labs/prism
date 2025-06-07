@@ -32,6 +32,7 @@ fn generate_linux_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
 
     let bindings = bindgen::Builder::default()
         .headers(headers)
+        .rustfmt_bindings(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("Unable to generate linux header bindings");
@@ -48,6 +49,7 @@ fn generate_consts_header_bindings(cargo_manifest_dir: &PathBuf, arch: &str) -> 
     let common = cargo_manifest_dir.join("src/sub/include/consts.h");
     let bindings = bindgen::Builder::default()
         .header(common.to_str().unwrap())
+        .rustfmt_bindings(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .clang_args([
             "-I",
@@ -69,6 +71,7 @@ fn generate_sub_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
                     .to_str()
                     .unwrap(),
             )
+            .rustfmt_bindings(true)
             .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
             .generate()?;
 
