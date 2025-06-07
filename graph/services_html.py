@@ -241,4 +241,4 @@ def write_html(graph: nx.Graph, outfile: Path, launch=True):
         f.write(html)
 
 G = build_graph_with_clusters(connections)
-write_html(G, Path("connections.html"))
+write_html(G, Path("services.html"))
