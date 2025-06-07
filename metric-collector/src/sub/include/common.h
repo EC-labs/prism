@@ -3,10 +3,13 @@
 
 #include <consts.h>
 
-__always_inline static void discover_tgid(void *pids, void *pid_rb, __u32 tgid) 
+__always_inline static int discover_tgid(void *pids, void *pid_rb, __u32 tgid) 
 {
-    bpf_map_update_elem(pids, &tgid, &truth, BPF_ANY);
-    bpf_ringbuf_output(pid_rb, &tgid, sizeof(tgid), 0);
+    if (!bpf_map_update_elem(pids, &tgid, &truth, BPF_NOEXIST)) {
+        bpf_ringbuf_output(pid_rb, &tgid, sizeof(tgid), 0);
+        return 0;
+    }
+    return 1;
 }
 
 __always_inline __u32 get_tgid(__u64 tgid_pid) 
