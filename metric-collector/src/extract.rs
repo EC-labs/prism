@@ -1,21 +1,17 @@
 use anyhow::Result;
+use bus::Bus;
 use ctrlc;
 use duckdb::{Connection, ToSql};
-use libbpf_rs::{libbpf_sys, MapCore, MapFlags, MapHandle, MapType};
+use libbpf_rs::{libbpf_sys::{self, libbpf_set_print}, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, seteuid};
 use log::info;
 use nix::time::{self, ClockId};
 use regex::Regex;
 use std::{
-    env, fs,
-    mem::MaybeUninit,
-    os::fd::AsFd,
-    sync::{
+    env, fs, mem::MaybeUninit, os::fd::AsFd, ptr::null, sync::{
         mpsc::{self, Receiver},
         Arc, Mutex, RwLock,
-    },
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    }, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
 };
 use syn::{Expr, Item, Lit};
 
@@ -23,12 +19,14 @@ use crate::{
     configure::Config,
     sub::{
         self,
+        discovery::Discovery,
         futex::Futex,
         iowait::IOWait,
         muxio::Muxio,
         net::Net,
         taskstats::{TaskStatsIter, TaskStatsTrace},
         vfs::Vfs,
+        process_context,
         MAX_ENTRIES,
     },
     target,
@@ -213,6 +211,11 @@ impl Extractor {
             )?
         }
 
+        // To broadcast when a new pid is registered
+        let mut pid_bus = Bus::new(100);
+        let discovery_rx = pid_bus.add_rx();
+        let process_context_rx = pid_bus.add_rx();
+
         let conn = &self.conn;
 
         let mut iowait_open_object = MaybeUninit::uninit();
@@ -243,6 +246,17 @@ impl Extractor {
         )
         .unwrap();
 
+        let mut discovery = Discovery::new(
+            conn,
+            self.config.machine_id,
+            MapHandle::try_from(&pid_map)?,
+            MapHandle::try_from(&pid_rb)?,
+            MapHandle::try_from(&net.skel.maps.socket_context)?,
+            MapHandle::try_from(&net.skel.maps.rb)?,
+            discovery_rx
+        )
+        .unwrap();
+
         let mut taskstats_open_object = MaybeUninit::uninit();
         let mut taskstats =
             TaskStatsTrace::new(&mut taskstats_open_object, &conn, pid_map.as_fd())?;
@@ -254,8 +268,15 @@ impl Extractor {
             Duration::from_millis(self.config.period),
             pid_map,
             pid_rb,
+            pid_bus,
             conn.try_clone()?,
         );
+
+        let process_context = process_context::init_thread(
+            self.terminate_flag.clone(),
+            conn, 
+            process_context_rx
+        )?;
 
         let rx_timer = self.rx_timer.take().unwrap();
         loop {
@@ -277,19 +298,23 @@ impl Extractor {
             net.sample()?;
             let net_elapsed = start.elapsed().as_nanos();
             let net_acct = net_elapsed - futex_elapsed;
+            discovery.sample();
+            let discovery_elapsed = start.elapsed().as_nanos();
+            let discovery_acct = discovery_elapsed - net_elapsed;
             taskstats.sample()?;
             let taskstats_elapsed = start.elapsed().as_nanos();
-            let taskstats_acct = taskstats_elapsed - net_elapsed;
+            let taskstats_acct = taskstats_elapsed - discovery_elapsed;
             muxio.sample()?;
             let muxio_elapsed = start.elapsed().as_nanos();
             let muxio_acct = muxio_elapsed - taskstats_elapsed;
             info!(
-                "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] taskstats[{}%] muxio[{}%]",
+                "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%] muxio[{}%]",
                 muxio_elapsed / 1_000_000,
                 iowait_elapsed * 100 / muxio_elapsed,
                 vfs_acct * 100 / muxio_elapsed,
                 futex_acct * 100 / muxio_elapsed,
                 net_acct * 100 / muxio_elapsed,
+                discovery_acct * 100 / muxio_elapsed,
                 taskstats_acct * 100 / muxio_elapsed,
                 muxio_acct * 100 / muxio_elapsed,
             );
@@ -307,13 +332,14 @@ impl TimeSensitive {
         sample_interval: Duration,
         pid_map: MapHandle,
         pid_rb: MapHandle,
+        pid_bus: Bus<u32>,
         conn: Connection,
     ) {
         let sample_rx = Self::start_timer_thread(terminate_flag.clone(), sample_interval);
         thread::Builder::new()
             .name("ts-collect".to_string())
             .spawn(move || {
-                let mut taskstats = TaskStatsIter::new(pid_map, pid_rb, &conn)?;
+                let mut taskstats = TaskStatsIter::new(pid_map, pid_rb, &conn, pid_bus)?;
                 loop {
                     sample_rx.recv()?;
                     while let Ok(_) = sample_rx.try_recv() {}

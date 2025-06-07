@@ -1,0 +1,3 @@
+- [ ] Collect CPU PMU data
+- [ ] Rethink epoll: Re-design to determine whether it is possible to defer the heavy processing to after the fact.
+- [ ] Analyse why futex, vfs, and iowait are taking longer than expected with low load. Could it be disk writes.

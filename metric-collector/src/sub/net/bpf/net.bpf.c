@@ -6,8 +6,8 @@
 #include <common.h>
 #include <consts.h>
 #include <vfs.h>
+#include <net.h>
 #include <linux/socket.h>
-#include "net.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -82,51 +82,6 @@ struct {
     __type(value, struct internal_disc);
 } sending_sk SEC(".maps");
 
-__always_inline int store_socket_context(struct socket *sock, struct inode *f_inode) 
-{
-    if (!sock || !f_inode) {
-        return 0;
-    }
-
-    u64 socket_inoid = BPF_CORE_READ(f_inode, i_ino);
-    struct socket_context_value *v = bpf_map_lookup_elem(&socket_context, &socket_inoid);
-    if (v)
-        return 0;
-
-    struct sock *sk = BPF_CORE_READ(sock, sk);
-    struct socket_context_value *init = bpf_ringbuf_reserve(&rb, sizeof(struct socket_context_value), 0);
-    if (!init)
-        return 0;
-
-    init->inode_id = socket_inoid;
-    init->netns_cookie = BPF_CORE_READ(sk, __sk_common.skc_net.net, net_cookie);
-    init->family = BPF_CORE_READ(sk, __sk_common.skc_family);
-    init->sk_type = BPF_CORE_READ(sk, sk_type);
-    init->sk_protocol = BPF_CORE_READ(sk, sk_protocol);
-
-    if (init->family == AF_INET) {
-        init->ipv4.src_addr = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
-        init->ipv4.dst_addr = BPF_CORE_READ(sk, __sk_common.skc_daddr);
-    } else if (init->family == AF_INET6) {
-        init->ipv6.src_addr = BPF_CORE_READ(sk, __sk_common.skc_v6_rcv_saddr);
-        init->ipv6.dst_addr = BPF_CORE_READ(sk, __sk_common.skc_v6_daddr);
-    }
-
-    if (((init->family == AF_INET) || (init->family == AF_INET6)) 
-         && ((init->sk_type == SOCK_STREAM)
-             || (init->sk_type == SOCK_DGRAM) 
-             || (init->sk_type == SOCK_SEQPACKET))) 
-    {
-        init->src_port = BPF_CORE_READ(sk, __sk_common.skc_num);
-        init->dst_port = BPF_CORE_READ(sk, __sk_common.skc_dport);
-    }
-
-    bpf_map_update_elem(&socket_context, &socket_inoid, init, BPF_ANY);
-	bpf_ringbuf_submit(init, 0);
-
-    return 0;
-}
-
 __always_inline bool track(struct inode *f_inode) {
     u64 tgid_pid = (u64) bpf_get_current_pid_tgid();
     u32 tgid = get_tgid(tgid_pid);
@@ -185,12 +140,12 @@ __always_inline int internal_discovery(struct sock *sk)
         struct sock *sk = v->sk;
         struct socket *sock = BPF_CORE_READ(sk, sk_socket);
         struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-        store_socket_context(sock, f_inode);
+        store_socket_context(sock, f_inode, &socket_context, &rb);
         map_sockets(v->inode_id, recv_inode_id);
     } else if (send) {
         struct socket *sock = BPF_CORE_READ(sk, sk_socket);
         struct inode *f_inode = BPF_CORE_READ(sock, file, f_inode);
-        store_socket_context(sock, f_inode);
+        store_socket_context(sock, f_inode, &socket_context, &rb);
         map_sockets(v->inode_id, recv_inode_id);
     }
 
@@ -221,7 +176,7 @@ int BPF_PROG(inet_recvmsg, struct socket *sock)
     if (!track(f_inode))
         return 0;
 
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     u64 tgid_pid = bpf_get_current_pid_tgid();
     vfs_acct_start(&pending, tgid_pid, &file, READ);
@@ -243,7 +198,7 @@ int BPF_PROG(inet_sendmsg, struct socket *sock)
     if (!track(f_inode))
         return 0;
 
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     u64 tgid_pid = bpf_get_current_pid_tgid();
     vfs_acct_start(&pending, tgid_pid, &file, WRITE);
@@ -264,7 +219,7 @@ int BPF_PROG(inet6_recvmsg, struct socket *sock)
     if (!track(f_inode))
         return 0;
 
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     u64 tgid_pid = bpf_get_current_pid_tgid();
     vfs_acct_start(&pending, tgid_pid, &file, READ);
@@ -286,7 +241,7 @@ int BPF_PROG(inet6_sendmsg, struct socket *sock)
     if (!track(f_inode))
         return 0;
 
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     u64 tgid_pid = bpf_get_current_pid_tgid();
     vfs_acct_start(&pending, tgid_pid, &file, WRITE);
@@ -309,7 +264,7 @@ int BPF_PROG(sock_splice_read, struct file *f)
         return 0;
 
     struct socket *sock = BPF_CORE_READ(f, private_data);
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     u64 tgid_pid = bpf_get_current_pid_tgid();
     vfs_acct_start(&pending, tgid_pid, &file, READ);
@@ -331,7 +286,7 @@ int BPF_PROG(splice_to_socket, struct pipe_inode_info *pipe, struct file *f)
         return 0;
 
     struct socket *sock = BPF_CORE_READ(f, private_data);
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     u64 tgid_pid = bpf_get_current_pid_tgid();
     vfs_acct_start(&pending, tgid_pid, &file, WRITE);
@@ -355,7 +310,7 @@ int BPF_PROG(unix_stream_recvmsg, struct socket *sock)
     u64 tgid_pid = bpf_get_current_pid_tgid();
     unix_discovery(sock, tgid_pid);
 
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     vfs_acct_start(&pending, tgid_pid, &file, READ);
     return 0;
@@ -378,7 +333,7 @@ int BPF_PROG(unix_stream_sendmsg, struct socket *sending)
     u64 tgid_pid = bpf_get_current_pid_tgid();
     unix_discovery(sending, tgid_pid);
 
-    store_socket_context(sending, f_inode);
+    store_socket_context(sending, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     return 0;
@@ -401,7 +356,7 @@ int BPF_PROG(unix_dgram_recvmsg, struct socket *sock)
     u64 tgid_pid = bpf_get_current_pid_tgid();
     unix_discovery(sock, tgid_pid);
 
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     vfs_acct_start(&pending, tgid_pid, &file, READ);
     return 0;
@@ -424,7 +379,7 @@ int BPF_PROG(unix_dgram_sendmsg, struct socket *sending)
     u64 tgid_pid = bpf_get_current_pid_tgid();
     unix_discovery(sending, tgid_pid);
 
-    store_socket_context(sending, f_inode);
+    store_socket_context(sending, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     return 0;
@@ -447,7 +402,7 @@ int BPF_PROG(unix_seqpacket_recvmsg, struct socket *sock)
     u64 tgid_pid = bpf_get_current_pid_tgid();
     unix_discovery(sock, tgid_pid);
 
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     vfs_acct_start(&pending, tgid_pid, &file, READ);
     return 0;
@@ -470,7 +425,7 @@ int BPF_PROG(unix_seqpacket_sendmsg, struct socket *sending)
     u64 tgid_pid = bpf_get_current_pid_tgid();
     unix_discovery(sending, tgid_pid);
 
-    store_socket_context(sending, f_inode);
+    store_socket_context(sending, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     vfs_acct_start(&pending, tgid_pid, &file, WRITE);
     return 0;
@@ -490,7 +445,7 @@ int BPF_PROG(unix_accept, struct socket *sock)
     if (!track(f_inode))
         return 0;
 
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     u64 tgid_pid = bpf_get_current_pid_tgid();
     vfs_acct_start(&pending, tgid_pid, &file, ACCEPT);
@@ -511,7 +466,7 @@ int BPF_PROG(inet_accept, struct socket *sock)
     if (!track(f_inode))
         return 0;
 
-    store_socket_context(sock, f_inode);
+    store_socket_context(sock, f_inode, &socket_context, &rb);
     struct bri file = inode_to_vfs_bri(f_inode);
     u64 tgid_pid = bpf_get_current_pid_tgid();
     vfs_acct_start(&pending, tgid_pid, &file, ACCEPT);
@@ -523,37 +478,4 @@ int BPF_PROG(inet_accept_exit)
 {
     vfs_acct_end(&pending, &samples, &to_update);
     return 0;
-}
-
-SEC("fentry/__dev_queue_xmit")
-int BPF_PROG(__dev_queue_xmit, struct sk_buff *skb) 
-{
-    struct internal_disc v = {0};
-    v.sk = BPF_CORE_READ(skb, sk);
-    v.inode_id = BPF_CORE_READ(skb, sk, sk_socket, file, f_inode, i_ino);
-    u64 tgid_pid = bpf_get_current_pid_tgid();
-
-    bpf_map_update_elem(&sending_sk, &tgid_pid, &v, BPF_NOEXIST);
-    return 0;
-}
-
-
-SEC("fexit/__dev_queue_xmit")
-int BPF_PROG(__dev_queue_xmit_exit, struct sk_buff *skb) 
-{
-    u64 tgid_pid = bpf_get_current_pid_tgid();
-    bpf_map_delete_elem(&sending_sk, &tgid_pid);
-    return 0;
-}
-
-SEC("fentry/tcp_data_queue")
-int BPF_PROG(tcp_data_queue, struct sock *sk, struct sk_buff *skb) 
-{
-    return internal_discovery(sk);
-}
-
-SEC("fentry/__udp_enqueue_schedule_skb")
-int BPF_PROG(__udp_enqueue_schedule_skb, struct sock *sk, struct sk_buff *skb) 
-{
-    return internal_discovery(sk);
 }

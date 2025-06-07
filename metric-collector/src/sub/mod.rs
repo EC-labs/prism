@@ -10,12 +10,14 @@ use std::{
     os::fd::{AsFd, AsRawFd, RawFd},
 };
 
+pub mod discovery;
 pub mod futex;
 pub mod iowait;
 pub mod muxio;
 pub mod net;
 pub mod taskstats;
 pub mod vfs;
+pub mod process_context;
 
 mod consts {
     #![allow(dead_code)]

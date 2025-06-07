@@ -7,7 +7,7 @@ use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     MapCore, MapFlags, MapHandle, OpenObject,
 };
-use libc::{clock_gettime, timespec, CLOCK_MONOTONIC, FUTEX_WAIT, FUTEX_WAKE};
+use libc::{clock_gettime, timespec, CLOCK_BOOTTIME, CLOCK_MONOTONIC, FUTEX_WAIT, FUTEX_WAKE};
 use log::debug;
 use std::{
     collections::HashMap,
@@ -316,7 +316,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
         now: &timespec,
         records: &mut Vec<PendingRecord>,
     ) where
-        I: Iterator<Item = (K, V)>,
+        I: Iterator<Item = (K, V)> + ExactSizeIterator,
         UpdatedKey: From<(K, V)>,
         V: UpdateEnd<V>,
         K: Copy,
@@ -373,7 +373,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
 
     pub fn sample(&mut self) -> Result<()> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
-        unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
+        unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts as *mut timespec) };
         let (keys, values) = replace_samples(&self.skel.maps.samples, &ts);
         self.store_samples(keys.iter().zip(values.iter()))?;
         self.futex_wake_appender.flush();
@@ -389,8 +389,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
         self.create_pending_records(
             pending_keys
                 .iter()
-                .zip(pending_values.iter())
-                .filter(|(_, value)| value.op as i32 == FUTEX_WAIT),
+                .zip(pending_values.iter()),
             &ts,
             &mut pending_records,
         );

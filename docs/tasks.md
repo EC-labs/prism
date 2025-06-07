@@ -1,0 +1,5 @@
+- [ ] Create simple discovery module
+- [ ] Add `tc/egress` debug program
+- [ ] Attempt to modify a packet in `tc/egress`
+- [ ] Analyse the impact packet modification has on the packet's checksums (ip and tcp)
+- [ ] Address checksum impacts

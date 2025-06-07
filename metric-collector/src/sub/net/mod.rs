@@ -92,7 +92,7 @@ impl TryFrom<&socket_context_value> for SocketContext {
 }
 
 pub struct Net<'obj> {
-    _skel: NetSkel<'obj>,
+    pub skel: NetSkel<'obj>,
     rb: RingBuffer<'obj>,
     socket_socket_rb: RingBuffer<'obj>,
 }
@@ -140,7 +140,7 @@ impl<'obj> Net<'obj> {
         skel.attach()?;
 
         Ok(Self {
-            _skel: skel,
+            skel,
             rb,
             socket_socket_rb,
         })

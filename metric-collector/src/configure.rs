@@ -3,6 +3,7 @@ use clap::ArgMatches;
 use eyre::eyre;
 
 pub struct Config {
+    pub machine_id: u32,
     pub pids: Option<Vec<usize>>,
     pub period: u64,
     pub prism_store: Box<str>,
@@ -17,15 +18,8 @@ impl TryFrom<ArgMatches> for Config {
             .map(|pids| pids.collect());
 
         let process_name = matches.remove_one::<String>("process-name");
-        match (&pids, &process_name) {
-            (None, None) => return Err(eyre!("Pass --process-name or --pid arg required").into()),
-            (Some(_), Some(_)) => {
-                return Err(
-                    eyre!("Arguments --process-name and --pid are mutually exclusive").into(),
-                )
-            }
-            _ => {}
-        }
+
+        let machine_id = matches.remove_one::<u32>("machine-id").expect("Missing machine-id");
 
         let period: u64 = matches
             .remove_one::<u64>("period")
@@ -40,6 +34,7 @@ impl TryFrom<ArgMatches> for Config {
         prism_store += &format!("/prism-{}.db3", utc.to_rfc3339());
 
         Ok(Self {
+            machine_id,
             pids,
             period,
             prism_store: Box::from(prism_store),

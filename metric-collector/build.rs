@@ -5,7 +5,15 @@ use std::{env, fs};
 
 use libbpf_cargo::SkeletonBuilder;
 
-const SUBS: [&str; 6] = ["iowait", "vfs", "futex", "net", "muxio", "taskstats"];
+const SUBS: [&str; 7] = [
+    "iowait",
+    "vfs",
+    "futex",
+    "net",
+    "muxio",
+    "taskstats",
+    "discovery",
+];
 
 fn generate_linux_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
     let dir = cargo_manifest_dir.join("src/sub/include/linux");
@@ -86,6 +94,10 @@ fn main() -> Result<()> {
     );
     println!(
         "cargo:rerun-if-changed={}/src/sub/include/vfs.h",
+        cargo_manifest_dir.to_str().unwrap()
+    );
+    println!(
+        "cargo:rerun-if-changed={}/src/sub/include/net.h",
         cargo_manifest_dir.to_str().unwrap()
     );
 
