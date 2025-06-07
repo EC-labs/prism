@@ -153,6 +153,13 @@ impl Extractor {
                 appender.append_row([&"family_protocol" as &dyn ToSql, &const_name, &literal])?;
                 continue;
             }
+
+            let re = Regex::new(r"(.*_MAGIC)").unwrap();
+            if let Some(captures) = re.captures(&identifier) {
+                let const_name = captures.get(1).unwrap().as_str();
+                appender.append_row([&"fs_magic" as &dyn ToSql, &const_name, &literal])?;
+                continue;
+            }
         }
 
         return Ok(());
