@@ -500,6 +500,7 @@ WITH
         SELECT DISTINCT
             fwake.pid,
             fwake.tid, 
+            "wake" as op,
             fwake.futex_key_addr, 
             fwake.futex_key_word, 
             fwake.futex_key_offset 
@@ -510,6 +511,7 @@ WITH
         SELECT DISTINCT
             fwait.pid,
             fwait.tid, 
+            "wait" as op,
             fwait.futex_key_addr, 
             fwait.futex_key_word, 
             fwait.futex_key_offset 
@@ -595,5 +597,229 @@ ORDER BY
     mf.futex_key_word,
     mf.futex_key_offset,
     waits, 
+    wakes
+```
+
+```sql
+WITH 
+    fwake AS (
+        SELECT DISTINCT
+            fwake.pid,
+            fwake.tid, 
+            'wake' as op,
+            fwake.futex_key_addr, 
+            fwake.futex_key_word, 
+            fwake.futex_key_offset 
+        FROM 
+            futex_wake as fwake
+    ),
+    fwait AS (
+        SELECT DISTINCT
+            fwait.pid,
+            fwait.tid, 
+            'wait' as op,
+            fwait.futex_key_addr, 
+            fwait.futex_key_word, 
+            fwait.futex_key_offset 
+        FROM 
+            futex_wait as fwait
+    ),
+    process_meta AS (
+        SELECT DISTINCT
+            *
+        FROM
+            process_context pc
+        LEFT JOIN 
+            (SELECT DISTINCT pid, comm FROM taskstats_view WHERE pid = tid) as pcomm
+            ON pc.pid = pcomm.pid
+        LEFT JOIN
+            docker dock
+            ON dock.cgroup = pc.cgroup
+        LEFT JOIN
+            k8s
+            ON k8s.cgroup = pc.cgroup
+    ),
+    matched_futexes AS (
+        SELECT DISTINCT
+            fwait.futex_key_addr,
+            fwait.futex_key_word,
+            fwait.futex_key_offset
+        FROM
+            fwait
+        LEFT JOIN
+            fwake
+            ON fwait.futex_key_addr = fwake.futex_key_addr
+            AND fwait.futex_key_word = fwake.futex_key_word
+            AND fwait.futex_key_offset = fwake.futex_key_offset
+        WHERE 
+            fwake.tid IS NOT NULL
+    ),
+    unmatched_waits AS (
+        SELECT DISTINCT
+            fwait.futex_key_addr,
+            fwait.futex_key_word,
+            fwait.futex_key_offset
+        FROM
+            fwait
+        LEFT JOIN
+            fwake
+            ON fwait.futex_key_addr = fwake.futex_key_addr
+            AND fwait.futex_key_word = fwake.futex_key_word
+            AND fwait.futex_key_offset = fwake.futex_key_offset
+        WHERE 
+            fwake.tid IS NULL
+    ),
+    unmatched_wakes AS (
+        SELECT DISTINCT
+            fwake.futex_key_addr,
+            fwake.futex_key_word,
+            fwake.futex_key_offset
+        FROM 
+            fwake
+        LEFT JOIN
+            fwait
+            ON fwake.futex_key_addr = fwait.futex_key_addr
+            AND fwake.futex_key_word = fwait.futex_key_word
+            AND fwake.futex_key_offset = fwait.futex_key_offset
+        WHERE 
+            fwait.tid IS NULL
+    )
+SELECT DISTINCT * FROM (
+    SELECT * FROM fwait
+    UNION ALL
+    SELECT * FROM fwake
+)
+ORDER BY futex_key_addr, futex_key_word, futex_key_offset, pid, tid, op
+```
+
+```sql
+WITH 
+    fwake AS (
+        SELECT DISTINCT
+            fwake.pid,
+            fwake.tid, 
+            'wake' as op,
+            fwake.futex_key_addr, 
+            fwake.futex_key_word, 
+            fwake.futex_key_offset 
+        FROM 
+            futex_wake as fwake
+    ),
+    fwait AS (
+        SELECT DISTINCT
+            fwait.pid,
+            fwait.tid, 
+            'wait' as op,
+            fwait.futex_key_addr, 
+            fwait.futex_key_word, 
+            fwait.futex_key_offset 
+        FROM 
+            futex_wait as fwait
+    ),
+    process_meta AS (
+        SELECT DISTINCT
+            *
+        FROM
+            process_context pc
+        LEFT JOIN 
+            (SELECT DISTINCT pid, comm FROM taskstats_view WHERE pid = tid) as pcomm
+            ON pc.pid = pcomm.pid
+        LEFT JOIN
+            docker dock
+            ON dock.cgroup = pc.cgroup
+        LEFT JOIN
+            k8s
+            ON k8s.cgroup = pc.cgroup
+    ),
+    matched_futexes AS (
+        SELECT DISTINCT
+            fwait.futex_key_addr,
+            fwait.futex_key_word,
+            fwait.futex_key_offset
+        FROM
+            fwait
+        LEFT JOIN
+            fwake
+            ON fwait.futex_key_addr = fwake.futex_key_addr
+            AND fwait.futex_key_word = fwake.futex_key_word
+            AND fwait.futex_key_offset = fwake.futex_key_offset
+        WHERE 
+            fwake.tid IS NOT NULL
+    ),
+    unmatched_waits AS (
+        SELECT DISTINCT
+            fwait.futex_key_addr,
+            fwait.futex_key_word,
+            fwait.futex_key_offset
+        FROM
+            fwait
+        LEFT JOIN
+            fwake
+            ON fwait.futex_key_addr = fwake.futex_key_addr
+            AND fwait.futex_key_word = fwake.futex_key_word
+            AND fwait.futex_key_offset = fwake.futex_key_offset
+        WHERE 
+            fwake.tid IS NULL
+    ),
+    unmatched_wakes AS (
+        SELECT DISTINCT
+            fwake.futex_key_addr,
+            fwake.futex_key_word,
+            fwake.futex_key_offset
+        FROM 
+            fwake
+        LEFT JOIN
+            fwait
+            ON fwake.futex_key_addr = fwait.futex_key_addr
+            AND fwake.futex_key_word = fwait.futex_key_word
+            AND fwake.futex_key_offset = fwait.futex_key_offset
+        WHERE 
+            fwait.tid IS NULL
+    ),
+    contention_futexes AS (
+        SELECT
+            mf.*
+        FROM
+            matched_futexes mf
+        LEFT JOIN
+            fwait 
+            ON mf.futex_key_addr = fwait.futex_key_addr
+            AND mf.futex_key_word = fwait.futex_key_word
+            AND mf.futex_key_offset = fwait.futex_key_offset
+        LEFT JOIN
+            fwake 
+            ON mf.futex_key_addr = fwake.futex_key_addr
+            AND mf.futex_key_word = fwake.futex_key_word
+            AND mf.futex_key_offset = fwake.futex_key_offset
+        WHERE 
+            fwait.tid = fwake.tid
+    ),
+    schedule_futexes AS (
+        SELECT * FROM matched_futexes
+        EXCEPT ALL 
+        SELECT * FROM contention_futexes
+    ), 
+    futex_by_type AS (
+        SELECT *, 'schedule' AS futex_type
+        FROM schedule_futexes
+        UNION ALL 
+        SELECT *, 'contention' AS futex_type
+        FROM contention_futexes
+    )
+SELECT ft.*, fwait.tid as waits, fwake.tid as wakes
+FROM futex_by_type ft
+LEFT JOIN fwait
+    ON ft.futex_key_addr = fwait.futex_key_addr
+    AND ft.futex_key_word = fwait.futex_key_word
+    AND ft.futex_key_offset = fwait.futex_key_offset
+LEFT JOIN fwake
+    ON ft.futex_key_addr = fwake.futex_key_addr
+    AND ft.futex_key_word = fwake.futex_key_word
+    AND ft.futex_key_offset = fwake.futex_key_offset
+ORDER BY 
+    ft.futex_key_addr,
+    ft.futex_key_word,
+    ft.futex_key_offset,
+    waits,
     wakes
 ```
