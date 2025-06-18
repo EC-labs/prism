@@ -9,40 +9,59 @@ from pathlib import Path
 
 conn = duckdb.connect(database=':memory:')
 
-conn.execute("""ATTACH 'data/gijs2.db3' as gijs2""")
-conn.execute("""ATTACH 'data/gijs3.db3' as gijs3""")
+conn.execute("""ATTACH 'data/vm1.db3' as vm1""")
+conn.execute("""ATTACH 'data/vm2.db3' as vm2""")
+conn.execute("""ATTACH 'data/vm3.db3' as vm3""")
 
 connections = conn.execute("""
     WITH 
         tcp_discovery AS (
-            SELECT * FROM gijs2.tcp_discovery tcp
+            SELECT * FROM vm1.tcp_discovery tcp
             WHERE tcp.remote_inode_id <> 0
             UNION ALL
-            SELECT * FROM gijs3.tcp_discovery tcp
+            SELECT * FROM vm2.tcp_discovery tcp
+            WHERE tcp.remote_inode_id <> 0
+            UNION ALL
+            SELECT * FROM vm3.tcp_discovery tcp
             WHERE tcp.remote_inode_id <> 0
         ),
         process_context AS (
-            SELECT 2 as machine_id, * FROM gijs2.process_context
+            SELECT 1 as machine_id, * FROM vm1.process_context
             UNION ALL
-            SELECT 3 as machine_id, * FROM gijs3.process_context
+            SELECT 2 as machine_id, * FROM vm2.process_context
+            UNION ALL
+            SELECT 3 as machine_id, * FROM vm3.process_context
         ),
         docker AS (
-            SELECT 2 as machine_id, * FROM gijs2.docker
+            SELECT 1 as machine_id, * FROM vm1.docker
             UNION ALL
-            SELECT 3 as machine_id, * FROM gijs3.docker
+            SELECT 2 as machine_id, * FROM vm2.docker
+            UNION ALL
+            SELECT 3 as machine_id, * FROM vm3.docker
         ),
         k8s AS (
-            SELECT 2 as machine_id, * FROM gijs2.k8s
+            SELECT 1 as machine_id, * FROM vm1.k8s
             UNION ALL
-            SELECT 3 as machine_id, * FROM gijs3.k8s
+            SELECT 2 as machine_id, * FROM vm2.k8s
+            UNION ALL
+            SELECT 3 as machine_id, * FROM vm3.k8s
         ),
         pids AS (
+            SELECT DISTINCT
+                1 as machine_id,
+                pid, 
+                inode_id,
+            FROM 
+                vm1.vfs vfs
+            WHERE 
+                vfs.fs_magic = 1397703499
+            UNION ALL
             SELECT DISTINCT
                 2 as machine_id,
                 pid, 
                 inode_id,
             FROM 
-                gijs2.vfs vfs
+                vm2.vfs vfs
             WHERE 
                 vfs.fs_magic = 1397703499
             UNION ALL
@@ -51,7 +70,7 @@ connections = conn.execute("""
                 pid, 
                 inode_id,
             FROM 
-                gijs3.vfs vfs
+                vm3.vfs vfs
             WHERE 
                 vfs.fs_magic = 1397703499
         )

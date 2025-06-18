@@ -6,7 +6,6 @@ with pkgs; stdenv.mkDerivation {
     hardeningDisable = [ "stackprotector" "zerocallusedregs" ];
 
     nativeBuildInputs = [ 
-        rustup
         rust-analyzer
         rustc
         cargo
