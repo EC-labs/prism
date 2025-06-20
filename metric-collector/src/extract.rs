@@ -4,7 +4,7 @@ use ctrlc;
 use duckdb::{Connection, ToSql};
 use libbpf_rs::{libbpf_sys::{self, libbpf_set_print}, MapCore, MapFlags, MapHandle, MapType};
 use libc::{geteuid, seteuid};
-use log::info;
+use log::{info, warn, error};
 use nix::time::{self, ClockId};
 use regex::Regex;
 use std::{
@@ -169,6 +169,7 @@ impl Extractor {
         let terminate_flag = self.terminate_flag.clone();
         ctrlc::set_handler(move || {
             let mut terminate_flag = terminate_flag.lock().unwrap();
+            info!("received termination signal");
             *terminate_flag = true;
         })
         .expect("Error setting Ctrl-C handler");
@@ -198,6 +199,7 @@ impl Extractor {
         self.register_sighandler();
         self.start_timer_thread();
 
+        info!("starting bpf programs");
         let pid_map = create_pid_map()?;
         let pid_rb = create_pid_rb()?;
         let mut init_pids: Vec<usize> = Vec::new();
@@ -286,6 +288,7 @@ impl Extractor {
         )?;
 
         let rx_timer = self.rx_timer.take().unwrap();
+        info!("starting metric collection loop");
         loop {
             rx_timer.recv().unwrap();
             while let Ok(_) = rx_timer.try_recv() {}
@@ -311,20 +314,35 @@ impl Extractor {
             taskstats.sample()?;
             let taskstats_elapsed = start.elapsed().as_nanos();
             let taskstats_acct = taskstats_elapsed - discovery_elapsed;
-            muxio.sample()?;
+            // muxio.sample()?;
             let muxio_elapsed = start.elapsed().as_nanos();
             let muxio_acct = muxio_elapsed - taskstats_elapsed;
-            info!(
-                "sample loop elapsed time: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%] muxio[{}%]",
-                muxio_elapsed / 1_000_000,
-                iowait_elapsed * 100 / muxio_elapsed,
-                vfs_acct * 100 / muxio_elapsed,
-                futex_acct * 100 / muxio_elapsed,
-                net_acct * 100 / muxio_elapsed,
-                discovery_acct * 100 / muxio_elapsed,
-                taskstats_acct * 100 / muxio_elapsed,
-                muxio_acct * 100 / muxio_elapsed,
-            );
+
+            if muxio_elapsed > 1_000_000_000 {
+                warn!(
+                    "sample loop exceeded 1s: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%] muxio[{}%]",
+                    muxio_elapsed / 1_000_000,
+                    iowait_elapsed * 100 / muxio_elapsed,
+                    vfs_acct * 100 / muxio_elapsed,
+                    futex_acct * 100 / muxio_elapsed,
+                    net_acct * 100 / muxio_elapsed,
+                    discovery_acct * 100 / muxio_elapsed,
+                    taskstats_acct * 100 / muxio_elapsed,
+                    muxio_acct * 100 / muxio_elapsed,
+                );
+            } else if muxio_elapsed > 10_000_000_000 {
+                error!(
+                    "sample loop exceeded 10s: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%] muxio[{}%]",
+                    muxio_elapsed / 1_000_000,
+                    iowait_elapsed * 100 / muxio_elapsed,
+                    vfs_acct * 100 / muxio_elapsed,
+                    futex_acct * 100 / muxio_elapsed,
+                    net_acct * 100 / muxio_elapsed,
+                    discovery_acct * 100 / muxio_elapsed,
+                    taskstats_acct * 100 / muxio_elapsed,
+                    muxio_acct * 100 / muxio_elapsed,
+                );
+            }
         }
 
         Ok(())
@@ -355,10 +373,13 @@ impl TimeSensitive {
                     }
                     let start = Instant::now();
                     taskstats.sample()?;
-                    info!(
-                        "time sensitive loop duration: {}us",
-                        start.elapsed().as_micros()
-                    );
+                    let elapsed_us = start.elapsed().as_micros();
+                    if elapsed_us > 10_000 {
+                        warn!(
+                            "time sensitive loop duration: {}us",
+                            start.elapsed().as_micros()
+                        );
+                    }
                 }
                 Ok(()) as Result<()>
             })
