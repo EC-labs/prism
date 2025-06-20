@@ -7,7 +7,7 @@ use libbpf_rs::{
 };
 use log::{debug, info};
 use std::{
-    fmt::Debug, mem::MaybeUninit, net::{IpAddr, Ipv4Addr, Ipv6Addr}, os::fd::{AsFd, BorrowedFd}, sync::mpsc::{Receiver, self}, thread, sync::mpsc::RecvTimeoutError, time::Duration,
+    fmt::Debug, mem::MaybeUninit, net::{IpAddr, Ipv4Addr, Ipv6Addr}, os::fd::{AsFd, BorrowedFd}, sync::mpsc::{Receiver, self}, thread, sync::mpsc::RecvTimeoutError, time::{Duration, SystemTime},
 };
 use bus::{Bus, BusReader};
 
@@ -137,6 +137,7 @@ impl Discovery {
                     local_inode_id      UBIGINT,
                     remote_machine_id   UINTEGER,
                     remote_inode_id     UBIGINT,
+                    inserted_at         TIMESTAMP,
                 );
             ",
         )?;
@@ -158,7 +159,8 @@ fn tcp_discovery_callback<'conn>(
         let event: &[u8; size_of::<tcp_discovery_event>()] = &data[..size_of::<tcp_discovery_event>()].try_into().unwrap();
         let event = unsafe {std::mem::transmute::<_, &tcp_discovery_event>(event)};
         debug!("{:x} {} {:x} {}", event.local_machine_id, event.local_inode_id, event.remote_machine_id, event.remote_inode_id);
-        tcp_discovery_appender.append_row([&event.local_machine_id as &dyn ToSql, &event.local_inode_id, &event.remote_machine_id, &event.remote_inode_id]);
+        let epoch = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
+        tcp_discovery_appender.append_row([&event.local_machine_id as &dyn ToSql, &event.local_inode_id, &event.remote_machine_id, &event.remote_inode_id, &epoch]);
         0
     }
 }
