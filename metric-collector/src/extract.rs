@@ -91,7 +91,7 @@ impl Extractor {
         sub::bump_memlock_rlimit()?;
 
         let euid = unsafe { geteuid() };
-        let uid = env::var("SUDO_UID")?.parse::<u32>()?;
+        let uid = env::var("SUDO_UID").unwrap_or(format!("{euid}")).parse::<u32>()?;
         unsafe { seteuid(uid) };
         let conn = Connection::open(&*config.prism_store)?;
         unsafe { seteuid(euid) };
