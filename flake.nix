@@ -1,16 +1,17 @@
 {
     inputs = {
         nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-        crane.url = "github:ipetkov/crane";
+        flake-utils.url = "github:numtide/flake-utils";
     };
-    outputs = { self, nixpkgs, crane }: 
+    outputs = { self, nixpkgs, flake-utils }: 
         let 
-            system = "x86_64-linux";
-            pkgs = nixpkgs.legacyPackages.${system};
-            generatedBuild = import ./default.nix { inherit pkgs; };
+            systems = [ "x86_64-linux" "aarch64-linux" ];
         in
-        {
-            packages.${system} = rec {
+        flake-utils.lib.eachSystem systems (system:
+            let 
+                pkgs = nixpkgs.legacyPackages.${system};
+                generatedBuild = import ./default.nix { inherit pkgs; };
+            in rec {
                 prism = generatedBuild.workspaceMembers.metric-collector.build;
                 prismImage = pkgs.dockerTools.buildImage {
                     name = "prism";
@@ -20,6 +21,6 @@
                         Entrypoint = [ "/bin/metric-collector" ];
                     };
                 };
-            };
-        };
+            }
+        );
 }
