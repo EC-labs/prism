@@ -1,11 +1,16 @@
+use std::time::Duration;
+
 use poem::{
     get, handler, listener::TcpListener, middleware::Tracing, web::Path, EndpointExt, Route, Server,
 };
-use reqwest::Client;
-use tokio::io::AsyncReadExt;
+use tokio::{
+    io::AsyncReadExt,
+    time
+};
 
 #[handler]
 async fn hello() -> String {
+    time::sleep(Duration::from_secs(5)).await;
     format!("response")
 }
 

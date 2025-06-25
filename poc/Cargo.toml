@@ -51,6 +51,10 @@ path = "src/sync-udp/client.rs"
 name = "multithreaded"
 path = "src/multithreaded/main.rs"
 
+[[bin]]
+name = "async-http-client"
+path = "src/async-http-client/main.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"]}
 poem = "1.2"
@@ -58,3 +62,4 @@ reqwest = { version = "0.11", features = ["json"] }
 libc = "0.2.153"
 nix = { version = "0.28.0", features = ["process"] }
 rand = "0.8"
+anyhow = "1.0.98"
