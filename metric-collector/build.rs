@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::ffi::OsStr;
+use std::fs::ReadDir;
 use std::path::PathBuf;
 use std::{env, fs};
 
@@ -34,6 +35,7 @@ fn generate_linux_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
         .headers(headers)
         .rustfmt_bindings(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .clang_arg(format!("--target={}", env::var("HOST").unwrap()))
         .generate()
         .expect("Unable to generate linux header bindings");
 
@@ -51,9 +53,10 @@ fn generate_consts_header_bindings(cargo_manifest_dir: &PathBuf, arch: &str) -> 
         .header(common.to_str().unwrap())
         .rustfmt_bindings(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .clang_arg(format!("--target={}", env::var("HOST").unwrap()))
         .clang_args([
             "-I",
-            vmlinux::include_path_root().join(arch).to_str().unwrap(),
+            "src/vmlinux",
         ])
         .generate()?;
 
@@ -72,6 +75,7 @@ fn generate_sub_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
                     .unwrap(),
             )
             .rustfmt_bindings(true)
+            .clang_arg(format!("--target={}", env::var("HOST").unwrap()))
             .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
             .generate()?;
 
@@ -111,10 +115,10 @@ fn main() -> Result<()> {
         SkeletonBuilder::new()
             .source(&src)
             .clang_args([
-                OsStr::new("-I"),
-                vmlinux::include_path_root().join(&arch).as_os_str(),
-                OsStr::new("-I"),
-                include_common.as_os_str(),
+                "-I",
+                "src/vmlinux",
+                "-I",
+                include_common.to_str().unwrap(),
             ])
             .build_and_generate(&out)
             .unwrap();
