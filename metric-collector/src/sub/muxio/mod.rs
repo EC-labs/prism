@@ -5,7 +5,7 @@ use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     RingBufferBuilder,
 };
-use libc::{clock_gettime, timespec, CLOCK_MONOTONIC};
+use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
 use log::{debug, error};
 use std::{
     cell::RefCell,
@@ -82,7 +82,7 @@ impl<'conn> Muxio<'conn> {
             loop {
                 rb.poll(Duration::from_millis(100)).unwrap();
                 let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
-                unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
+                unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts as *mut timespec) };
                 let mut v = last_snapshot.borrow_mut();
 
                 match *v {

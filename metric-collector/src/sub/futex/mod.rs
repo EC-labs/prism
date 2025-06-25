@@ -7,7 +7,7 @@ use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     MapCore, MapFlags, MapHandle, OpenObject,
 };
-use libc::{clock_gettime, timespec, CLOCK_BOOTTIME, CLOCK_MONOTONIC, FUTEX_WAIT, FUTEX_WAKE};
+use libc::{clock_gettime, timespec, CLOCK_BOOTTIME, FUTEX_WAIT, FUTEX_WAKE};
 use log::debug;
 use std::{
     collections::HashMap,

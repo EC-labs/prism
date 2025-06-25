@@ -117,8 +117,8 @@ impl Extractor {
         )?;
         let mut appender = conn.appender("linux_consts")?;
 
-        let src = fs::read_to_string("metric-collector/src/sub/include/linux/bindings.rs")?;
-        let syntax = syn::parse_file(&src).expect("Unable to parse file");
+        let src = include_str!("sub/include/linux/bindings.rs");
+        let syntax = syn::parse_file(src).expect("Unable to parse file");
         for item in syntax.items {
             let Item::Const(itemconst) = item else {
                 continue;
@@ -314,7 +314,7 @@ impl Extractor {
             taskstats.sample()?;
             let taskstats_elapsed = start.elapsed().as_nanos();
             let taskstats_acct = taskstats_elapsed - discovery_elapsed;
-            // muxio.sample()?;
+            muxio.sample()?;
             let muxio_elapsed = start.elapsed().as_nanos();
             let muxio_acct = muxio_elapsed - taskstats_elapsed;
 

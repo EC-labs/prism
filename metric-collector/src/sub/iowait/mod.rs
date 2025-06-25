@@ -29,7 +29,7 @@ use libbpf_rs::MapFlags;
 use libbpf_rs::MapHandle;
 use libc::clock_gettime;
 use libc::timespec;
-use libc::CLOCK_MONOTONIC;
+use libc::CLOCK_BOOTTIME;
 
 use crate::sub::{replace_samples, BATCH_SIZE, MAX_ENTRIES, SAMPLES};
 
@@ -142,7 +142,7 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
 
     pub fn sample(&mut self) -> Result<()> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
-        unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
+        unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts as *mut timespec) };
         let (keys, values) = replace_samples(&self.skel.maps.samples, &ts);
         self.store(keys.iter().zip(values.iter()))?;
         Ok(())

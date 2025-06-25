@@ -7,7 +7,7 @@ use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     MapCore, MapFlags, MapHandle, OpenObject,
 };
-use libc::{clock_gettime, timespec, CLOCK_MONOTONIC};
+use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
 use log::debug;
 use std::{
     collections::HashMap,
@@ -350,7 +350,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
 
     pub fn sample(&mut self) -> Result<()> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
-        unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts as *mut timespec) };
+        unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts as *mut timespec) };
         let (keys, values) = replace_samples(&self.skel.maps.samples, &ts);
         self.store_samples(keys.iter().zip(values.iter()))?;
         self.appender.flush();
