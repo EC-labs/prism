@@ -3,3 +3,4 @@ data/
 notebooks/prelimenary
 *.skel.rs
 bpftrace-hdrs/
+result
