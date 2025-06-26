@@ -13,6 +13,23 @@ Prism is a fine-grained metric collection tool that aims to facilitate uncoverin
 
 ## Usage
 
+### Docker
+
+```bash
+docker run \
+    --rm -it --privileged \
+    -e RUST_LOG=info \
+    --pid host \
+    -v "$(pwd)"/cdata:/data \
+    -v /sys/fs/cgroup:/sys/fs/cgroup \
+    -v /sys/kernel/tracing:/sys/kernel/tracing \
+    -v /sys/kernel/debug:/sys/kernel/debug \
+    --name prism \
+    prism:latest --machine-id 1
+```
+
+### Nix
+
 We start by creating a data directory, which is where Prism will write its data to: 
 
 ```bash

@@ -6,7 +6,7 @@ use tokio::{runtime::Runtime, sync::mpsc::{self, Receiver, Sender}};
 use std::{ffi::CStr, fs::{self, File}, io::{BufRead, BufReader, Read}, path::{Path, PathBuf}, sync::{mpsc::channel, Arc, Mutex}, thread, time::Duration};
 use lazy_static::lazy_static;
 use regex::Regex;
-use bollard::{query_parameters::InspectContainerOptions, Docker};
+use bollard::{query_parameters::InspectContainerOptions, Docker, API_DEFAULT_VERSION};
 use containerd_client::{
     connect, services::v1::{containers_client::ContainersClient, GetContainerRequest}, tonic::transport::Channel, with_namespace
 };
@@ -98,10 +98,10 @@ impl ContainerRuntimes {
 
     async fn connect_containerd(&mut self) {
         let socks = [
-            "/run/containerd/containerd.sock",
-            "/var/snap/microk8s/common/run/containerd.sock",
-            "/run/k0s/containerd.sock",
-            "/run/k3s/containerd/containerd.sock",
+            "/proc/1/root/run/containerd/containerd.sock",
+            "/proc/1/root/var/snap/microk8s/common/run/containerd.sock",
+            "/proc/1/root/run/k0s/containerd.sock",
+            "/proc/1/root/run/k3s/containerd/containerd.sock",
         ];
         for sock in socks {
             match connect(sock).await {
@@ -115,7 +115,7 @@ impl ContainerRuntimes {
     }
 
     fn connect_docker(&mut self) {
-        self.docker_client = Docker::connect_with_socket_defaults().ok();
+        self.docker_client = Docker::connect_with_socket("unix:///proc/1/root/var/run/docker.sock", 120, API_DEFAULT_VERSION).ok();
     }
 
     async fn get_container_metadata(&mut self, cgroup: Cgroup) -> Result<Container> {
@@ -163,6 +163,7 @@ impl ContainerRuntimes {
                 image_name: container.image.into(),
             };
 
+            debug!("{:?}", container);
             Ok(container)
         } else {
             warn!("unknown cgroup manager {:?}", cgroup);
