@@ -51,6 +51,16 @@
 
                     LIBCLANG_PATH = "${libclang.lib}/lib";
                 };
+                notebooks = pkgs.mkShell {
+                    packages = [
+                        (pkgs.python3.withPackages (python-pkgs: with python-pkgs; [
+                          # select Python packages here
+                          pandas
+                          matplotlib
+                          notebook
+                        ]))
+                    ];
+                };
             }
         );
 }
