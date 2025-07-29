@@ -1,4 +1,4 @@
-{ pkgs }:
+{ pkgs ? import <nixpkgs> {} }:
     let
 
       customBuildRustCrateForPkgs = pkgs: pkgs.buildRustCrate.override {
