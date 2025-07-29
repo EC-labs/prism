@@ -262,10 +262,10 @@ tid_futex = conn.execute("""
             SELECT * FROM contention_futexes
         ), 
         futex_by_type AS (
-            SELECT *, 'schedule' AS futex_type
+            SELECT DISTINCT *, 'schedule' AS futex_type
             FROM schedule_futexes
             UNION ALL 
-            SELECT *, 'contention' AS futex_type
+            SELECT DISTINCT *, 'contention' AS futex_type
             FROM contention_futexes
         )
     SELECT ft.*, fwait.tid as waits, fwake.tid as wakes
