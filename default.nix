@@ -40,6 +40,15 @@
             hardeningDisable = [ "stackprotector" "zerocallusedregs" ];
 
           };
+          vmlinux = attrs: {
+            postPatch = ''
+                substituteInPlace \
+                  src/lib.rs \
+                  --replace-fail \
+                  'env!("CARGO_MANIFEST_DIR")' \
+                  \"$src\"
+            '';
+          };
         };
       };
     in pkgs.callPackage ./Cargo.nix {

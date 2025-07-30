@@ -54,10 +54,7 @@ fn generate_consts_header_bindings(cargo_manifest_dir: &PathBuf, arch: &str) -> 
         .rustfmt_bindings(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .clang_arg(format!("--target={}", env::var("HOST").unwrap()))
-        .clang_args([
-            "-I",
-            "src/vmlinux",
-        ])
+        .clang_args(["-I", "src/vmlinux"])
         .generate()?;
 
     let out = cargo_manifest_dir.join("src/sub/include/consts.bindings.rs");
@@ -108,6 +105,7 @@ fn main() -> Result<()> {
         cargo_manifest_dir.to_str().unwrap()
     );
 
+    eprintln!("{:?}", vmlinux::include_path_root().join(&arch));
     for sub in SUBS {
         let out = cargo_manifest_dir.join(format!("src/sub/{sub}/bpf/{sub}.skel.rs"));
 
@@ -115,10 +113,10 @@ fn main() -> Result<()> {
         SkeletonBuilder::new()
             .source(&src)
             .clang_args([
-                "-I",
-                "src/vmlinux",
-                "-I",
-                include_common.to_str().unwrap(),
+                OsStr::new("-I"),
+                vmlinux::include_path_root().join(&arch).as_os_str(),
+                OsStr::new("-I"),
+                include_common.as_os_str(),
             ])
             .build_and_generate(&out)
             .unwrap();
