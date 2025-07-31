@@ -1,6 +1,5 @@
-{ pkgs ? import <nixpkgs> {} }:
+{ pkgs ? import <nixpkgs> {}, crate2nixTools }:
     let
-
       customBuildRustCrateForPkgs = pkgs: pkgs.buildRustCrate.override {
         defaultCrateOverrides = pkgs.defaultCrateOverrides // {
           libbpf-sys = attrs: {
@@ -51,6 +50,14 @@
           };
         };
       };
-    in pkgs.callPackage ./Cargo.nix {
+      generatedCargoNix = import (
+        (pkgs.callPackage crate2nixTools {}).generatedCargoNix { 
+          src = ./.; 
+          name = "prism";
+          additionalCrateHashes = { "git+https://github.com/libbpf/vmlinux.h.git?rev=172793d6a409d98d1cfb843c80df73733e9f832f#vmlinux@0.0.0" = "0m1afca7w0fhb4szai65y09j8xf2mxzlns70k6bpngz1rsrds2cb"; };
+        }
+      );
+
+    in pkgs.callPackage generatedCargoNix {
         buildRustCrateForPkgs = customBuildRustCrateForPkgs;
     }
