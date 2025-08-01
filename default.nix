@@ -1,28 +1,44 @@
 { pkgs ? import <nixpkgs> {}, crate2nixTools }:
     let
-      customBuildRustCrateForPkgs = pkgs: pkgs.buildRustCrate.override {
-        defaultCrateOverrides = pkgs.defaultCrateOverrides // {
+      lockfile = builtins.fromTOML (builtins.readFile ./Cargo.lock);
+      gitDeps = (builtins.filter (pkg: (pkg ? source) && ((builtins.match ''git\+(.*)\?rev=([0-9a-f]+)(#.*)?'' pkg.source) != null)) lockfile.package);
+      getGitMetadata = giturl: let reGroups = builtins.match ''git\+(.*)\?rev=([0-9a-f]+)(#.*)?'' giturl; in {
+        url = builtins.elemAt reGroups 0;
+        rev = builtins.elemAt reGroups 1;
+      };
+
+      gitSrcOverrides = builtins.listToAttrs (
+        builtins.map
+        (pkg: {
+            name = pkg.name;
+            value = attr: {
+                src = builtins.fetchGit (getGitMetadata pkg.source);
+            };
+        })
+        gitDeps
+      );
+      crateOverrides = {
           libbpf-sys = attrs: {
-            buildInputs = with pkgs; [ 
-                pkg-config 
+            buildInputs = with pkgs; [
+                pkg-config
                 libz
                 elfutils
             ];
           };
 
           containerd-client = attrs: {
-            buildInputs = with pkgs; [ 
+            buildInputs = with pkgs; [
                 protobuf
             ];
           };
 
           metric-collector = attrs: {
-            nativeBuildInputs = with pkgs; [ 
+            nativeBuildInputs = with pkgs; [
                 rustfmt
                 rust-analyzer
                 rustc
                 cargo
-                pkg-config 
+                pkg-config
                 libclang.lib
                 clang
                 protobuf
@@ -48,13 +64,33 @@
                   \"$src\"
             '';
           };
-        };
       };
+      keys = pkgs.lib.unique (builtins.attrNames crateOverrides) ++ (builtins.attrNames gitSrcOverrides);
+      getOrDefault = key: set: default: if builtins.hasAttr key set then builtins.getAttr key set else default;
+      crateOverridesMerged = builtins.listToAttrs (
+          builtins.map
+          (key: {
+            name = key;
+            value = attr:
+              getOrDefault key crateOverrides (x: {}) attr
+              // getOrDefault key gitSrcOverrides (x: {}) attr;
+          })
+          keys
+      );
+
+      customBuildRustCrateForPkgs = pkgs: pkgs.buildRustCrate.override {
+        defaultCrateOverrides = pkgs.defaultCrateOverrides // crateOverridesMerged;
+      };
+
       generatedCargoNix = import (
-        (pkgs.callPackage crate2nixTools {}).generatedCargoNix { 
-          src = ./.; 
+        (pkgs.callPackage crate2nixTools {}).generatedCargoNix {
+          src = ./.;
           name = "prism";
-          additionalCrateHashes = { "git+https://github.com/libbpf/vmlinux.h.git?rev=172793d6a409d98d1cfb843c80df73733e9f832f#vmlinux@0.0.0" = "0m1afca7w0fhb4szai65y09j8xf2mxzlns70k6bpngz1rsrds2cb"; };
+          # When using crate2nix IFD, crate2nix will try to prefetch the dependencies that do not have their checksums in the Cargo.lock file.
+          # Overriding the git crates' src attribute to use builtins.fetchgit and passing dummy hashes for these crates stops crate2nix from prefetching these crates.
+          additionalCrateHashes = builtins.listToAttrs (
+            builtins.map (pkg: let gitMetadata = getGitMetadata pkg.source; in {name = "git+${gitMetadata.url}?rev=${gitMetadata.rev}#${pkg.name}@${pkg.version}"; value = "";}) gitDeps
+          );
         }
       );
 
