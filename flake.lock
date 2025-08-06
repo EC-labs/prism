@@ -107,15 +107,15 @@
         "pre-commit-hooks": "pre-commit-hooks_3"
       },
       "locked": {
-        "lastModified": 1739473963,
-        "narHash": "sha256-ItAhpjNUzEWd/cgZVyW/jvoGbCec4TK29e1Mnmn1oJE=",
-        "owner": "nix-community",
+        "lastModified": 1754483494,
+        "narHash": "sha256-Wb8hVu3SZykgREp4DVo0qEQnedZ8MoHVzXAyRWvLLnY=",
+        "owner": "landaudiogo",
         "repo": "crate2nix",
-        "rev": "be31feae9a82c225c0fd1bdf978565dc452a483a",
+        "rev": "05ae98840be0f0ecdeca42b25469872c67652e96",
         "type": "github"
       },
       "original": {
-        "owner": "nix-community",
+        "owner": "landaudiogo",
         "repo": "crate2nix",
         "type": "github"
       }
