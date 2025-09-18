@@ -4,8 +4,12 @@ resolver = "2"
 
 members = [
     "metric-collector",
-    "example-application",
-    "poc", "percentile-ps"
 ]
 
-exclude = ["benchmarks/kafka/scrape-experiment-producer", "benchmarks/dependencies/goose", "benchmarks/dependencies/solr-benchmark", "benchmarks/kafka/scrape-cc2023-producer"]
+exclude = [
+    "misc", 
+    "benchmarks/kafka/scrape-experiment-producer", 
+    "benchmarks/dependencies/goose", 
+    "benchmarks/dependencies/solr-benchmark", 
+    "benchmarks/kafka/scrape-cc2023-producer"
+]

@@ -147,7 +147,7 @@ def write_html(graph: nx.Graph, outfile: Path, launch=True):
 
 
 if len(sys.argv) != 2: 
-    usage = f"Usage: {sys.argv[0]} <duckdb-databse>"
+    usage = f"Usage: {sys.argv[0]} <duckdb-database>"
     print(usage)
     sys.exit(0)
 
