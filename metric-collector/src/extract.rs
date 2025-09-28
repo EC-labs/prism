@@ -2,16 +2,25 @@ use anyhow::Result;
 use bus::Bus;
 use ctrlc;
 use duckdb::{Connection, ToSql};
-use libbpf_rs::{libbpf_sys::{self, libbpf_set_print}, MapCore, MapFlags, MapHandle, MapType};
+use libbpf_rs::{
+    libbpf_sys::{self, libbpf_set_print},
+    MapCore, MapFlags, MapHandle, MapType,
+};
 use libc::{geteuid, seteuid};
-use log::{info, warn, error};
+use log::{error, info, warn};
 use nix::time::{self, ClockId};
 use regex::Regex;
 use std::{
-    env, fs, mem::MaybeUninit, os::fd::AsFd, ptr::null, sync::{
+    env, fs,
+    mem::MaybeUninit,
+    os::fd::AsFd,
+    ptr::null,
+    sync::{
         mpsc::{self, Receiver},
         Arc, Mutex, RwLock,
-    }, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use syn::{Expr, Item, Lit};
 
@@ -22,11 +31,10 @@ use crate::{
         discovery::Discovery,
         futex::Futex,
         iowait::IOWait,
-        muxio::Muxio,
         net::Net,
+        process_context,
         taskstats::{TaskStatsIter, TaskStatsTrace},
         vfs::Vfs,
-        process_context,
         MAX_ENTRIES,
     },
     target,
@@ -91,7 +99,9 @@ impl Extractor {
         sub::bump_memlock_rlimit()?;
 
         let euid = unsafe { geteuid() };
-        let uid = env::var("SUDO_UID").unwrap_or(format!("{euid}")).parse::<u32>()?;
+        let uid = env::var("SUDO_UID")
+            .unwrap_or(format!("{euid}"))
+            .parse::<u32>()?;
         unsafe { seteuid(uid) };
         let conn = Connection::open(&*config.prism_store)?;
         unsafe { seteuid(euid) };
@@ -262,15 +272,13 @@ impl Extractor {
             MapHandle::try_from(&pid_rb)?,
             MapHandle::try_from(&net.skel.maps.socket_context)?,
             MapHandle::try_from(&net.skel.maps.rb)?,
-            discovery_rx
+            discovery_rx,
         )
         .unwrap();
 
         let mut taskstats_open_object = MaybeUninit::uninit();
         let mut taskstats =
             TaskStatsTrace::new(&mut taskstats_open_object, &conn, pid_map.as_fd())?;
-
-        let mut muxio = Muxio::new(pid_map.as_fd(), conn).unwrap();
 
         TimeSensitive::init_thread(
             self.terminate_flag.clone(),
@@ -281,11 +289,8 @@ impl Extractor {
             conn.try_clone()?,
         );
 
-        let process_context = process_context::init_thread(
-            self.terminate_flag.clone(),
-            conn, 
-            process_context_rx
-        )?;
+        let process_context =
+            process_context::init_thread(self.terminate_flag.clone(), conn, process_context_rx)?;
 
         let rx_timer = self.rx_timer.take().unwrap();
         info!("starting metric collection loop");
@@ -314,33 +319,28 @@ impl Extractor {
             taskstats.sample()?;
             let taskstats_elapsed = start.elapsed().as_nanos();
             let taskstats_acct = taskstats_elapsed - discovery_elapsed;
-            muxio.sample()?;
-            let muxio_elapsed = start.elapsed().as_nanos();
-            let muxio_acct = muxio_elapsed - taskstats_elapsed;
 
-            if muxio_elapsed > 1_000_000_000 {
+            if taskstats_elapsed > 1_000_000_000 {
                 warn!(
-                    "sample loop exceeded 1s: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%] muxio[{}%]",
-                    muxio_elapsed / 1_000_000,
-                    iowait_elapsed * 100 / muxio_elapsed,
-                    vfs_acct * 100 / muxio_elapsed,
-                    futex_acct * 100 / muxio_elapsed,
-                    net_acct * 100 / muxio_elapsed,
-                    discovery_acct * 100 / muxio_elapsed,
-                    taskstats_acct * 100 / muxio_elapsed,
-                    muxio_acct * 100 / muxio_elapsed,
+                    "sample loop exceeded 1s: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%]",
+                    taskstats_elapsed / 1_000_000,
+                    iowait_elapsed * 100 / taskstats_elapsed,
+                    vfs_acct * 100 / taskstats_elapsed,
+                    futex_acct * 100 / taskstats_elapsed,
+                    net_acct * 100 / taskstats_elapsed,
+                    discovery_acct * 100 / taskstats_elapsed,
+                    taskstats_acct * 100 / taskstats_elapsed,
                 );
-            } else if muxio_elapsed > 10_000_000_000 {
+            } else if taskstats_elapsed > 10_000_000_000 {
                 error!(
-                    "sample loop exceeded 10s: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%] muxio[{}%]",
-                    muxio_elapsed / 1_000_000,
-                    iowait_elapsed * 100 / muxio_elapsed,
-                    vfs_acct * 100 / muxio_elapsed,
-                    futex_acct * 100 / muxio_elapsed,
-                    net_acct * 100 / muxio_elapsed,
-                    discovery_acct * 100 / muxio_elapsed,
-                    taskstats_acct * 100 / muxio_elapsed,
-                    muxio_acct * 100 / muxio_elapsed,
+                    "sample loop exceeded 10s: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%]",
+                    taskstats_elapsed / 1_000_000,
+                    iowait_elapsed * 100 / taskstats_elapsed,
+                    vfs_acct * 100 / taskstats_elapsed,
+                    futex_acct * 100 / taskstats_elapsed,
+                    net_acct * 100 / taskstats_elapsed,
+                    discovery_acct * 100 / taskstats_elapsed,
+                    taskstats_acct * 100 / taskstats_elapsed,
                 );
             }
         }
