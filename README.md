@@ -6,14 +6,7 @@ Prism is a fine-grained metric collection tool that aims to facilitate uncoverin
 
 # Getting Started
 
-## Prerequisites
-
-1. Install [nix](https://nixos.org/download/) for your distro
-2. Get a local clone of this repository
-
-## Usage
-
-### Docker
+## Docker
 
 ```bash
 docker run \
@@ -24,11 +17,14 @@ docker run \
     -v /sys/fs/cgroup:/sys/fs/cgroup \
     -v /sys/kernel/tracing:/sys/kernel/tracing \
     -v /sys/kernel/debug:/sys/kernel/debug \
-    --name prism \
+    --name ripple \
     dclandau/ripple --machine-id <machine-id>
 ```
 
-### Nix
+## Nix
+
+1. Install [nix](https://nixos.org/download/) for your distro
+2. Get a local clone of this repository
 
 We start by creating a data directory, which is where Prism will write its data to: 
 
@@ -95,20 +91,22 @@ D show tables;
 │      name       │
 │     varchar     │
 ├─────────────────┤
+│ docker          │
 │ futex_wait      │
 │ futex_wake      │
 │ iowait          │
+│ k8s             │
 │ linux_consts    │
-│ muxio_file_wait │
-│ muxio_wait      │
+│ process_context │
 │ socket_context  │
 │ socket_inet     │
 │ socket_map      │
 │ taskstats       │
 │ taskstats_view  │
+│ tcp_discovery   │
 │ vfs             │
 ├─────────────────┤
-│     12 rows     │
+│     14 rows     │
 └─────────────────┘
 ```
 
@@ -152,4 +150,4 @@ Each application has its own jupyter notebook script in the `notebooks` director
 
 ## Reproducibility
 
-To generate similar datasets for the same applications as those presented in the paper, we have provided a description, and in some cases a run script in the `benchmarks/` directory for each application.
+To generate similar datasets for the same applications as those presented in the paper, we have provided a description, and in some cases a run script in  `artifacts/paper-1/benchmarks/` directory for each application.
