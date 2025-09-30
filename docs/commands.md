@@ -21,7 +21,7 @@ sudo tcpdump -i any -n '(tcp dst port 9000) and (tcp[12] = 0xdb)'
 ```
 
 ```bash
-sudo crictl inspect "$(sudo crictl ps 2>/dev/null | grep registry | awk '{print $1}')" 2>/dev/null | jq '.info.pid'
+sudo crictl inspect "$(sudo crictl ps 2>/dev/null | grep adservice | awk "{print \$1}")" 2>/dev/null | jq ".info.pid"
 ```
 
 ```bash
@@ -65,5 +65,5 @@ systemd-cgtop --depth 10
 
 Command to copy the latest prism data from the 3 vms:
 ```bash
-echo '1\n2\n3' | xargs -I @ bash -c 'scp gijs@:/home/ubuntu/prism/data/"$(ssh gijs@ "ls -Art /home/ubuntu/prism/data | tail -n 1")" ./media/vm@.db3'
+echo 'vm1\nvm2\nvm3' | xargs -I @ bash -c 'scp @:/home/ubuntu/prism/data/"$(ssh @ "ls -Art /home/ubuntu/prism/data | tail -n 1")" ./media/vm@.db3'
 ```

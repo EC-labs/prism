@@ -20,12 +20,12 @@ docker run \
     --rm -it --privileged \
     -e RUST_LOG=info \
     --pid host \
-    -v "$(pwd)"/cdata:/data \
+    -v ./cdata:/data \
     -v /sys/fs/cgroup:/sys/fs/cgroup \
     -v /sys/kernel/tracing:/sys/kernel/tracing \
     -v /sys/kernel/debug:/sys/kernel/debug \
     --name prism \
-    prism:latest --machine-id 1
+    dclandau/ripple --machine-id <machine-id>
 ```
 
 ### Nix
