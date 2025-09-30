@@ -2,12 +2,9 @@ use anyhow::Result;
 use bus::Bus;
 use ctrlc;
 use duckdb::{Connection, ToSql};
-use libbpf_rs::{
-    libbpf_sys::{self, libbpf_set_print},
-    MapCore, MapFlags, MapHandle, MapType,
-};
+use libbpf_rs::{libbpf_sys, set_print, MapCore, MapFlags, MapHandle, MapType, PrintLevel};
 use libc::{geteuid, seteuid};
-use log::{error, info, warn};
+use log::{debug, error, info, trace, warn, Level, LevelFilter};
 use nix::time::{self, ClockId};
 use regex::Regex;
 use std::{
@@ -44,6 +41,21 @@ pub static BOOT_EPOCH_NS: RwLock<u64> = RwLock::new(0);
 
 pub fn boot_to_epoch(boot_ns: u64) -> u64 {
     *BOOT_EPOCH_NS.read().unwrap() + boot_ns
+}
+
+fn filter_print(level: PrintLevel, msg: String) {
+    if msg.contains("Exclusivity flag on, cannot modify")
+        || msg.contains("Cannot find specified filter chain")
+    {
+        trace!("Ignoring msg: {}", msg.trim_end());
+        return;
+    }
+
+    match level {
+        PrintLevel::Debug => debug!("{}", msg.trim_end()),
+        PrintLevel::Info => info!("{}", msg.trim_end()),
+        PrintLevel::Warn => warn!("{}", msg.trim_end()),
+    };
 }
 
 fn create_pid_map() -> Result<MapHandle> {
@@ -95,6 +107,15 @@ impl Extractor {
                 .as_nanos();
             *BOOT_EPOCH_NS.write().unwrap() = (ns_since_epoch - ns_since_boot) as u64;
         }
+
+        match log::max_level() {
+            LevelFilter::Trace => set_print(Some((PrintLevel::Debug, filter_print))),
+            LevelFilter::Debug => set_print(Some((PrintLevel::Debug, filter_print))),
+            LevelFilter::Info => set_print(Some((PrintLevel::Info, filter_print))),
+            LevelFilter::Warn => set_print(Some((PrintLevel::Warn, filter_print))),
+            LevelFilter::Error => set_print(Some((PrintLevel::Warn, filter_print))),
+            LevelFilter::Off => set_print(None),
+        };
 
         sub::bump_memlock_rlimit()?;
 
