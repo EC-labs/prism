@@ -42,11 +42,10 @@ int block_io_start(u64 *ctx)
     u32 major = BPF_CORE_READ(req, q, disk, major);
     u32 minor = BPF_CORE_READ(req, q, disk, first_minor);
 
-    struct inflight k = {
-        .part0 = major << 20 | minor,
-        .sector = BPF_CORE_READ(req, __sector),
-        .op = BPF_CORE_READ(req, cmd_flags),
-    };
+    struct inflight k = {0};
+    k.part0 = major << 20 | minor;
+    k.sector = BPF_CORE_READ(req, __sector);
+    k.op = BPF_CORE_READ(req, cmd_flags);
 
     struct inflight_val v = {
         .ts = bpf_ktime_get_boot_ns(),
@@ -69,11 +68,10 @@ int raw_block_io_done(u64 *ctx)
     u32 major = BPF_CORE_READ(req, q, disk, major);
     u32 minor = BPF_CORE_READ(req, q, disk, first_minor);
 
-    struct inflight k = {
-        .part0 = major << 20 | minor,
-        .sector = BPF_CORE_READ(req, __sector),
-        .op = BPF_CORE_READ(req, cmd_flags),
-    };
+    struct inflight k = {0};
+    k.part0 = major << 20 | minor;
+    k.sector = BPF_CORE_READ(req, __sector);
+    k.op = BPF_CORE_READ(req, cmd_flags);
 
     struct inflight_val *v = bpf_map_lookup_elem(&pending, &k);
     if (!v)
