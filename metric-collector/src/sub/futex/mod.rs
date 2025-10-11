@@ -119,6 +119,7 @@ pub struct Futex<'obj, 'conn> {
     updated: HashMap<UpdatedKey, u64>,
     staging_appender: Appender<'conn>,
     conn: &'conn Connection,
+    machine_id: u32,
 }
 
 impl<'obj, 'conn> Futex<'obj, 'conn> {
@@ -127,6 +128,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
         pid_map: BorrowedFd,
         pid_rb: BorrowedFd,
         conn: &'conn Connection,
+        machine_id: u32,
     ) -> Result<Self> {
         let skel_builder = FutexSkelBuilder::default();
 
@@ -146,6 +148,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
             staging_appender: conn.appender("futex_wait_staging")?,
             updated: HashMap::new(),
             conn,
+            machine_id,
         })
     }
 
@@ -153,6 +156,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE futex_wait (
+                    machine_id UINTEGER,
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
@@ -172,6 +176,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
                 );
 
                 CREATE OR REPLACE TEMP TABLE futex_wait_staging (
+                    machine_id UINTEGER,
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
@@ -182,6 +187,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
                 );
 
                 CREATE OR REPLACE TABLE futex_wake (
+                    machine_id UINTEGER,
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
@@ -213,7 +219,8 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
                     let fkey = unsafe { granularity.fkey.both };
                     let ts_s = crate::extract::boot_to_epoch(stat.ts_s * 1_000_000_000);
                     self.futex_wait_appender.append_row([
-                        &Duration::from_nanos(ts_s) as &dyn ToSql,
+                        &self.machine_id as &dyn ToSql,
+                        &Duration::from_nanos(ts_s),
                         &granularity.tgid,
                         &granularity.pid,
                         &fkey.ptr,
@@ -236,7 +243,8 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
                     let fkey = unsafe { granularity.fkey.both };
                     let ts_s = crate::extract::boot_to_epoch(stat.ts_s * 1_000_000_000);
                     self.futex_wake_appender.append_row([
-                        &Duration::from_nanos(ts_s) as &dyn ToSql,
+                        &self.machine_id as &dyn ToSql,
+                        &Duration::from_nanos(ts_s),
                         &granularity.tgid,
                         &granularity.pid,
                         &fkey.ptr,
@@ -266,7 +274,8 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
         for record in records {
             let ts_s = crate::extract::boot_to_epoch(record.ts_s * 1_000_000_000);
             self.staging_appender.append_row([
-                &Duration::from_nanos(ts_s) as &dyn ToSql,
+                &self.machine_id as &dyn ToSql,
+                &Duration::from_nanos(ts_s),
                 &record.pid,
                 &record.tid,
                 &record.futex_key.ptr,
@@ -295,7 +304,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
                 AND f.futex_key_word = fs.futex_key_word
                 AND f.futex_key_offset = fs.futex_key_offset;
 
-            INSERT INTO futex_wait (ts_s, pid, tid, futex_key_addr, futex_key_word, futex_key_offset, total_time)
+            INSERT INTO futex_wait (machine_id, ts_s, pid, tid, futex_key_addr, futex_key_word, futex_key_offset, total_time)
                 SELECT
                     fs.*
                 FROM futex_wait_staging as fs

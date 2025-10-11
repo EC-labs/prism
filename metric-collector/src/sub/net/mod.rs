@@ -106,6 +106,7 @@ impl<'obj> Net<'obj> {
         samples_map: BorrowedFd,
         pending_map: BorrowedFd,
         to_update_map: BorrowedFd,
+        machine_id: u32,
     ) -> Result<Self>
     where
         'conn: 'obj,
@@ -126,6 +127,7 @@ impl<'obj> Net<'obj> {
             wrapped_callback(
                 conn.appender("socket_context").unwrap(),
                 conn.appender("socket_inet").unwrap(),
+                machine_id,
             ),
         )?;
         let rb = builder.build()?;
@@ -133,7 +135,7 @@ impl<'obj> Net<'obj> {
         let mut builder = RingBufferBuilder::new();
         builder.add(
             &skel.maps.socket_socket_rb,
-            socket_socket_callback(conn.appender("socket_map").unwrap()),
+            socket_socket_callback(conn.appender("socket_map").unwrap(), machine_id),
         )?;
         let socket_socket_rb = builder.build()?;
 
@@ -150,6 +152,7 @@ impl<'obj> Net<'obj> {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE socket_context (
+                    machine_id UINTEGER,
                     inode_id UBIGINT,
                     family          USMALLINT, 
                     type            USMALLINT, 
@@ -157,6 +160,7 @@ impl<'obj> Net<'obj> {
                 );
 
                 CREATE OR REPLACE TABLE socket_inet (
+                    machine_id UINTEGER,
                     inode_id        UBIGINT,
                     netns_cookie    UBIGINT,
                     src_address     VARCHAR,
@@ -166,6 +170,7 @@ impl<'obj> Net<'obj> {
                 );
 
                 CREATE OR REPLACE TABLE socket_map (
+                    machine_id UINTEGER,
                     sock1_inode_id UBIGINT,
                     sock2_inode_id UBIGINT,
                 );
@@ -184,14 +189,15 @@ impl<'obj> Net<'obj> {
 
 fn socket_socket_callback<'conn>(
     mut socket_socket_appender: Appender<'conn>,
+    machine_id: u32,
 ) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
     move |data: &[u8]| {
         let data: &[u8; size_of::<[u64; 2]>()] = &data[..size_of::<[u64; 2]>()].try_into().unwrap();
         let data: &[u64; 2] = unsafe { std::mem::transmute::<_, _>(data) };
         let (sock1, sock2) = (data[0], data[1]);
         debug!("map {sock1} - {sock2}");
-        socket_socket_appender.append_row([sock1, sock2]).unwrap();
-        socket_socket_appender.append_row([sock2, sock1]).unwrap();
+        socket_socket_appender.append_row([&machine_id as &dyn ToSql, &sock1, &sock2]).unwrap();
+        socket_socket_appender.append_row([&machine_id as &dyn ToSql, &sock2, &sock1]).unwrap();
         0
     }
 }
@@ -199,6 +205,7 @@ fn socket_socket_callback<'conn>(
 fn wrapped_callback<'conn>(
     mut socket_context_appender: Appender<'conn>,
     mut socket_inet_appender: Appender<'conn>,
+    machine_id: u32,
 ) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
     move |data: &[u8]| {
         let data: &[u8; size_of::<socket_context_value>()] = &data
@@ -222,7 +229,8 @@ fn wrapped_callback<'conn>(
 
         socket_context_appender
             .append_row([
-                &context.inode_id as &dyn ToSql,
+                &machine_id as &dyn ToSql,
+                &context.inode_id,
                 &context.sk_family,
                 &context.sk_type,
                 &context.sk_protocol,
@@ -232,8 +240,9 @@ fn wrapped_callback<'conn>(
             (Some(IpAddr::V4(src_addr)), Some(IpAddr::V4(dst_addr))) => {
                 socket_inet_appender
                     .append_row([
-                        &context.inode_id as &dyn ToSql,
-                        &context.netns_cookie as &dyn ToSql,
+                        &machine_id as &dyn ToSql,
+                        &context.inode_id,
+                        &context.netns_cookie,
                         &src_addr.to_string(),
                         &context.src_port.unwrap_or(0),
                         &dst_addr.to_string(),
@@ -244,11 +253,12 @@ fn wrapped_callback<'conn>(
             (Some(IpAddr::V4(src_addr)), None) => {
                 socket_inet_appender
                     .append_row([
-                        &context.inode_id as &dyn ToSql,
-                        &context.netns_cookie as &dyn ToSql,
+                        &machine_id as &dyn ToSql,
+                        &context.inode_id,
+                        &context.netns_cookie,
                         &src_addr.to_string(),
                         &context.src_port.unwrap_or(0),
-                        &Ipv4Addr::from(0).to_string() as &dyn ToSql,
+                        &Ipv4Addr::from(0).to_string(),
                         &context.dst_port.unwrap_or(0),
                     ])
                     .unwrap();
@@ -256,8 +266,9 @@ fn wrapped_callback<'conn>(
             (Some(IpAddr::V6(src_addr)), Some(IpAddr::V6(dst_addr))) => {
                 socket_inet_appender
                     .append_row([
-                        &context.inode_id as &dyn ToSql,
-                        &context.netns_cookie as &dyn ToSql,
+                        &machine_id as &dyn ToSql,
+                        &context.inode_id,
+                        &context.netns_cookie,
                         &src_addr.to_string(),
                         &context.src_port.unwrap_or(0),
                         &dst_addr.to_string(),
@@ -268,11 +279,12 @@ fn wrapped_callback<'conn>(
             (Some(IpAddr::V6(src_addr)), None) => {
                 socket_inet_appender
                     .append_row([
-                        &context.inode_id as &dyn ToSql,
-                        &context.netns_cookie as &dyn ToSql,
+                        &machine_id as &dyn ToSql,
+                        &context.inode_id,
+                        &context.netns_cookie,
                         &src_addr.to_string(),
                         &context.src_port.unwrap_or(0),
-                        &Ipv4Addr::from(0).to_string() as &dyn ToSql,
+                        &Ipv4Addr::from(0).to_string(),
                         &context.dst_port.unwrap_or(0),
                     ])
                     .unwrap();

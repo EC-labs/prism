@@ -36,6 +36,7 @@ impl Container {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE docker (
+                    machine_id UINTEGER,
                     cgroup          VARCHAR,
                     id              VARCHAR,
                     name            VARCHAR,
@@ -43,6 +44,7 @@ impl Container {
                     image_hash      VARCHAR,
                 );
                 CREATE OR REPLACE TABLE k8s (
+                    machine_id UINTEGER,
                     cgroup          VARCHAR,
                     id              VARCHAR,
                     namespace       VARCHAR,
@@ -55,13 +57,13 @@ impl Container {
         Ok(())
     }
 
-    fn append_row(self, appenders: &mut ContainerAppenders) -> Result<()> {
+    fn append_row(self, appenders: &mut ContainerAppenders, machine_id: u32) -> Result<()> {
         match self {
             Container::Docker { cgroup, id, name, image_name, image_hash } => {
-                appenders.docker.append_row([&cgroup as &dyn ToSql, &id, &name, &image_name, &image_hash]);
+                appenders.docker.append_row([&machine_id as &dyn ToSql, &cgroup, &id, &name, &image_name, &image_hash]);
             }
             Container::K8s { cgroup, id, namespace, pod_name, container_name, image_name } => {
-                appenders.k8s.append_row([&cgroup as &dyn ToSql, &id, &namespace, &pod_name, &container_name, &image_name]);
+                appenders.k8s.append_row([&machine_id as &dyn ToSql, &cgroup, &id, &namespace, &pod_name, &container_name, &image_name]);
             }
             _ => {}
         }
@@ -175,6 +177,7 @@ impl ContainerRuntimes {
 #[derive(Debug, Clone)]
 struct Cgroup(PathBuf);
 
+struct MachineId(u32);
 struct Pid(u32);
 
 #[derive(Debug)]
@@ -190,6 +193,7 @@ impl ProcessContext {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE process_context (
+                    machine_id UINTEGER,
                     pid         UINTEGER,
                     cgroup      VARCHAR,
                     argv        VARCHAR,
@@ -200,8 +204,8 @@ impl ProcessContext {
         Ok(())
     }
 
-    fn append_row(self, appender: &mut Appender) -> Result<()> {
-        appender.append_row([&self.pid as &dyn ToSql, &self.cgroup.0.to_str(), &self.argv.join(" "), &self.exe.to_str()]);
+    fn append_row(self, appender: &mut Appender, machine_id: u32) -> Result<()> {
+        appender.append_row([&machine_id as &dyn ToSql, &self.pid, &self.cgroup.0.to_str(), &self.argv.join(" "), &self.exe.to_str()]);
         Ok(())
     }
 }
@@ -209,8 +213,8 @@ impl ProcessContext {
 impl TryFrom<Pid> for ProcessContext {
     type Error = anyhow::Error;
 
-    fn try_from(value: Pid) -> Result<Self> {
-        let pid_proc = format!("/proc/{}", value.0);
+    fn try_from(pid: Pid) -> Result<Self> {
+        let pid_proc = format!("/proc/{}", pid.0);
         let pid_proc_path = Path::new(pid_proc.as_str());
 
         let pid_cgroup_path = pid_proc_path.join("cgroup");
@@ -250,17 +254,17 @@ impl TryFrom<Pid> for ProcessContext {
         let exe_file = pid_proc_path.join("exe");
         let exe = fs::read_link(exe_file)?;
 
-        Ok(Self { cgroup, argv, exe, pid: value.0 })
+        Ok(Self { cgroup, argv, exe, pid: pid.0 })
     }
 }
 
-fn process_context_thread(terminate_flag: Arc<Mutex<bool>>, conn: Connection, mut pid_rx: BusReader<u32>) -> Result<()> {
+fn process_context_thread(terminate_flag: Arc<Mutex<bool>>, conn: Connection, mut pid_rx: BusReader<u32>, machine_id: u32) -> Result<()> {
     let (tx, rx) = mpsc::channel(1000);
     let (store_object_tx, store_object_rx) = mpsc::channel(1000);
     ProcessContext::init_store(&conn);
     let async_rt = ContainerRuntimes::init_async_runtime(rx, &conn, store_object_tx.clone());
 
-    thread::spawn(|| start_appender_thread(conn, store_object_rx));
+    thread::spawn(move || start_appender_thread(conn, store_object_rx, machine_id));
 
     loop {
         let Ok(terminate) = terminate_flag.lock() else { break };
@@ -296,7 +300,7 @@ enum ProcessObject {
     Container(Container),
 }
 
-fn start_appender_thread(conn: Connection, mut rx: Receiver<ProcessObject>) -> Result<()> {
+fn start_appender_thread(conn: Connection, mut rx: Receiver<ProcessObject>, machine_id: u32) -> Result<()> {
     let mut pc_appender = conn.appender("process_context")?;
     let mut container_appenders = ContainerAppenders {
         docker: conn.appender("docker")?,
@@ -305,18 +309,18 @@ fn start_appender_thread(conn: Connection, mut rx: Receiver<ProcessObject>) -> R
     while let Some(o) = rx.blocking_recv() {
         match o {
             ProcessObject::ProcessContext(pc) => {
-                pc.append_row(&mut pc_appender);
+                pc.append_row(&mut pc_appender, machine_id);
             },
             ProcessObject::Container(c) => {
-                c.append_row(&mut container_appenders);
+                c.append_row(&mut container_appenders, machine_id);
             },
         }
     }
     Ok(()) as Result<()>
 }
 
-pub fn init_thread(terminate_flag: Arc<Mutex<bool>>, conn: &Connection, pid_rx: BusReader<u32>) -> Result<()> {
+pub fn init_thread(terminate_flag: Arc<Mutex<bool>>, conn: &Connection, pid_rx: BusReader<u32>, machine_id: u32) -> Result<()> {
     let conn = conn.try_clone()?;
-    thread::spawn(move || process_context_thread(terminate_flag, conn, pid_rx));
+    thread::spawn(move || process_context_thread(terminate_flag, conn, pid_rx, machine_id));
     Ok(())
 }

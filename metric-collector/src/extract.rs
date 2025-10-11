@@ -259,11 +259,11 @@ impl Extractor {
         let conn = &self.conn;
 
         let mut iowait_open_object = MaybeUninit::uninit();
-        let mut iowait = IOWait::new(&mut iowait_open_object, conn).unwrap();
+        let mut iowait = IOWait::new(&mut iowait_open_object, conn, self.config.machine_id).unwrap();
 
         let mut vfs_open_object = MaybeUninit::uninit();
         let mut vfs =
-            Vfs::new(&mut vfs_open_object, conn, pid_map.as_fd(), pid_rb.as_fd()).unwrap();
+            Vfs::new(&mut vfs_open_object, conn, pid_map.as_fd(), pid_rb.as_fd(), self.config.machine_id).unwrap();
 
         let mut futex_open_object = MaybeUninit::uninit();
         let mut futex = Futex::new(
@@ -271,6 +271,7 @@ impl Extractor {
             pid_map.as_fd(),
             pid_rb.as_fd(),
             conn,
+            self.config.machine_id,
         )
         .unwrap();
 
@@ -283,6 +284,7 @@ impl Extractor {
             vfs.skel.maps.samples.as_fd(),
             vfs.skel.maps.pending.as_fd(),
             vfs.skel.maps.to_update.as_fd(),
+            self.config.machine_id,
         )
         .unwrap();
 
@@ -299,7 +301,7 @@ impl Extractor {
 
         let mut taskstats_open_object = MaybeUninit::uninit();
         let mut taskstats =
-            TaskStatsTrace::new(&mut taskstats_open_object, &conn, pid_map.as_fd(), MapHandle::try_from(&pid_rb)?)?;
+            TaskStatsTrace::new(&mut taskstats_open_object, &conn, pid_map.as_fd(), MapHandle::try_from(&pid_rb)?, self.config.machine_id)?;
 
         TimeSensitive::init_thread(
             self.terminate_flag.clone(),
@@ -308,10 +310,11 @@ impl Extractor {
             pid_rb,
             pid_bus,
             conn.try_clone()?,
+            self.config.machine_id,
         );
 
         let process_context =
-            process_context::init_thread(self.terminate_flag.clone(), conn, process_context_rx)?;
+            process_context::init_thread(self.terminate_flag.clone(), conn, process_context_rx, self.config.machine_id)?;
 
         let rx_timer = self.rx_timer.take().unwrap();
         info!("starting metric collection loop");
@@ -380,12 +383,13 @@ impl TimeSensitive {
         pid_rb: MapHandle,
         pid_bus: Bus<u32>,
         conn: Connection,
+        machine_id: u32,
     ) {
         let sample_rx = Self::start_timer_thread(terminate_flag.clone(), sample_interval);
         thread::Builder::new()
             .name("ts-collect".to_string())
             .spawn(move || {
-                let mut taskstats = TaskStatsIter::new(pid_map, pid_rb, &conn, pid_bus)?;
+                let mut taskstats = TaskStatsIter::new(pid_map, pid_rb, &conn, pid_bus, machine_id)?;
                 loop {
                     sample_rx.recv()?;
                     while let Ok(_) = sample_rx.try_recv() {}

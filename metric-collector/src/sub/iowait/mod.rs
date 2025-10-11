@@ -36,12 +36,14 @@ use crate::sub::{replace_samples, BATCH_SIZE, MAX_ENTRIES, SAMPLES};
 pub struct IOWait<'obj, 'conn> {
     skel: IowaitSkel<'obj>,
     appender: Appender<'conn>,
+    machine_id: u32,
 }
 
 impl<'obj, 'conn> IOWait<'obj, 'conn> {
     pub fn new(
         open_object: &'obj mut MaybeUninit<OpenObject>,
         conn: &'conn Connection,
+        machine_id: u32,
     ) -> Result<Self> {
         Self::init_store(conn)?;
 
@@ -75,6 +77,7 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
         skel.attach()?;
         Ok(Self {
             skel,
+            machine_id,
             appender: conn.appender("iowait")?,
         })
     }
@@ -83,6 +86,7 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE iowait (
+                    machine_id UINTEGER,
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
@@ -118,7 +122,8 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
         for (granularity, stats) in records {
             let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
             self.appender.append_row([
-                &Duration::from_nanos(ts_s) as &dyn ToSql,
+                &self.machine_id as &dyn ToSql,
+                &Duration::from_nanos(ts_s),
                 &granularity.tgid,
                 &granularity.pid,
                 &granularity.part0,

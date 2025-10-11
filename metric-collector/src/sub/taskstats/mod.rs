@@ -67,10 +67,11 @@ pub struct TaskStatsIter<'conn> {
     taskstats_appender: Appender<'conn>,
     pid_map: MapHandle,
     pid_bus: Bus<u32>,
+    machine_id: u32,
 }
 
 impl<'conn> TaskStatsIter<'conn> {
-    pub fn new(pid_map: MapHandle, pid_rb: MapHandle, conn: &'conn Connection, pid_bus: Bus<u32>) -> Result<Self> {
+    pub fn new(pid_map: MapHandle, pid_rb: MapHandle, conn: &'conn Connection, pid_bus: Bus<u32>, machine_id: u32) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
         let init_pids: Vec<u32> = pid_map
             .keys()
@@ -109,6 +110,7 @@ impl<'conn> TaskStatsIter<'conn> {
         Ok(Self {
             pid_map,
             pid_bus,
+            machine_id,
             links: HashMap::new(),
             link_rx: rx,
             taskstats_appender: conn.appender("taskstats")?,
@@ -121,7 +123,8 @@ impl<'conn> TaskStatsIter<'conn> {
             let comm = unsafe { CStr::from_ptr(&record.comm as _).to_str()? };
             let ts = Duration::from_nanos(crate::extract::boot_to_epoch(record.ts));
             self.taskstats_appender.append_row([
-                &ts as &dyn ToSql,
+                &self.machine_id as &dyn ToSql,
+                &ts,
                 &record.pid,
                 &record.tid,
                 &comm,
@@ -197,6 +200,7 @@ impl<'obj> TaskStatsTrace<'obj> {
         conn: &'conn Connection,
         pid_map: BorrowedFd,
         pid_rb: MapHandle,
+        machine_id: u32,
     ) -> Result<Self>
     where
         'conn: 'obj,
@@ -210,7 +214,7 @@ impl<'obj> TaskStatsTrace<'obj> {
         let mut builder = RingBufferBuilder::new();
         builder.add(
             &skel.maps.taskstats_rb,
-            wrapped_callback(conn.appender("taskstats").unwrap()),
+            wrapped_callback(conn.appender("taskstats").unwrap(), machine_id),
         )?;
         let taskstats_rb = builder.build()?;
         skel.attach()?;
@@ -258,6 +262,7 @@ fn init_store(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r"
             CREATE TABLE IF NOT EXISTS taskstats (
+                machine_id      UINTEGER,
                 ts              TIMESTAMP,
                 pid             UINTEGER,
                 tid             UINTEGER,
@@ -280,6 +285,7 @@ fn init_store(conn: &Connection) -> Result<()> {
 
             CREATE OR REPLACE VIEW taskstats_view AS 
             SELECT 
+                machine_id,
                 ts, 
                 time_diff,
                 pid,
@@ -292,6 +298,7 @@ fn init_store(conn: &Connection) -> Result<()> {
                 greatest((time_diff - (run_time + rq_time + uninterruptible_time))/time_diff, 0) as interruptible_share
             FROM (
                 SELECT 
+                    machine_id,
                     ts, 
                     epoch_ns(ts - ts_last) as time_diff,
                     pid,
@@ -303,6 +310,7 @@ fn init_store(conn: &Connection) -> Result<()> {
                     blkio_time_curr - blkio_time_last AS blkio_time,
                 FROM (
                     SELECT 
+                        machine_id,
                         ts, 
                         lag(ts, 1) OVER (PARTITION BY tid ORDER BY ts) as ts_last,
                         pid,
@@ -328,6 +336,7 @@ fn init_store(conn: &Connection) -> Result<()> {
 
 fn wrapped_callback<'conn>(
     mut taskstats_appender: Appender<'conn>,
+    machine_id: u32,
 ) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
     move |data: &[u8]| {
         let data: &[u8; size_of::<task_delay_acct>()] =
@@ -336,7 +345,8 @@ fn wrapped_callback<'conn>(
         let comm = unsafe { CStr::from_ptr(&record.comm as _).to_str().unwrap() };
         let ts = Duration::from_nanos(crate::extract::boot_to_epoch(record.ts));
         taskstats_appender.append_row([
-            &ts as &dyn ToSql,
+            &machine_id as &dyn ToSql,
+            &ts,
             &record.pid,
             &record.tid,
             &comm,

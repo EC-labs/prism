@@ -122,6 +122,7 @@ pub struct Vfs<'obj, 'conn> {
     staging_appender: Appender<'conn>,
     conn: &'conn Connection,
     updated: HashMap<UpdatedKey, u64>,
+    machine_id: u32,
 }
 
 impl<'obj, 'conn> Vfs<'obj, 'conn> {
@@ -130,6 +131,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         conn: &'conn Connection,
         pid_map: BorrowedFd,
         pid_rb: BorrowedFd,
+        machine_id: u32,
     ) -> Result<Self> {
         let skel_builder = VfsSkelBuilder::default();
 
@@ -148,6 +150,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
             appender: conn.appender("vfs")?,
             staging_appender: conn.appender("vfs_staging")?,
             conn,
+            machine_id,
             updated: HashMap::new(),
         })
     }
@@ -156,6 +159,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE vfs (
+                    machine_id UINTEGER,
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
@@ -176,6 +180,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 );
 
                 CREATE OR REPLACE TEMP TABLE vfs_staging (
+                    machine_id UINTEGER,
                     ts_s TIMESTAMP,
                     pid UINTEGER,
                     tid UINTEGER,
@@ -203,7 +208,8 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         for (granularity, stats) in records {
             let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
             self.appender.append_row([
-                &Duration::from_nanos(ts_s) as &dyn ToSql,
+                &self.machine_id as &dyn ToSql,
+                &Duration::from_nanos(ts_s),
                 &granularity.tgid,
                 &granularity.pid,
                 &granularity.bri.fs_magic,
@@ -239,7 +245,8 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         for record in records {
             let ts_s = crate::extract::boot_to_epoch(record.ts_s * 1_000_000_000);
             self.staging_appender.append_row([
-                &Duration::from_nanos(ts_s) as &dyn ToSql,
+                &self.machine_id as &dyn ToSql,
+                &Duration::from_nanos(ts_s),
                 &record.pid,
                 &record.tid,
                 &record.bri.fs_magic,
@@ -271,7 +278,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                 AND v.inode_id = vs.inode_id
                 AND v.op = vs.op;
 
-            INSERT INTO vfs (ts_s, pid, tid, fs_magic, device_id, inode_id, op, total_time)
+            INSERT INTO vfs (machine_id, ts_s, pid, tid, fs_magic, device_id, inode_id, op, total_time)
                 SELECT 
                     vs.*
                 FROM vfs_staging as vs
