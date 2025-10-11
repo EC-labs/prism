@@ -18,6 +18,11 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, sizeof(u32) * MAX_ENTRIES);
+} pid_rb SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, sizeof(struct task_delay_acct) * MAX_ENTRIES);
 } taskstats_rb SEC(".maps");
 
@@ -54,7 +59,7 @@ __always_inline struct task_delay_acct get_taskstats(struct task_struct *task)
 	return stats;
 }
 
-__always_inline bool track(u64 tgid) {
+__always_inline bool track(u32 tgid) {
     bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
     if (!pidp) 
         return false;
@@ -80,12 +85,16 @@ SEC("tp_btf/sched_process_fork")
 int sched_process_fork(u64 *ctx)
 {
     // https://elixir.bootlin.com/linux/v5.13/source/include/trace/events/sched.h#L371
-    struct task_struct *child = (struct task_struct *) ctx[1];
-    u64 tgid = BPF_CORE_READ(child, tgid);
+    //
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    u32 tgid = get_tgid(tgid_pid);
     if (!track(tgid)) 
         return 0;
 
-    u64 pid = BPF_CORE_READ(child, pid);
+    struct task_struct *child = (struct task_struct *) ctx[1];
+    u32 child_tgid = BPF_CORE_READ(child, tgid);
+    if (child_tgid != tgid)
+        discover_tgid(&pids, &pid_rb, child_tgid);
     struct task_delay_acct stats = get_taskstats(child);
     bpf_ringbuf_output(&taskstats_rb, &stats, sizeof(stats), 0);
     return 0;

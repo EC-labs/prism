@@ -5,7 +5,7 @@ use std::{
     ffi::CStr,
     io::Read,
     mem::MaybeUninit,
-    os::fd::BorrowedFd,
+    os::fd::{BorrowedFd, AsFd},
     ptr::NonNull,
     sync::mpsc::{self, Receiver, Sender},
     time::Duration,
@@ -196,6 +196,7 @@ impl<'obj> TaskStatsTrace<'obj> {
         open_object: &'obj mut MaybeUninit<OpenObject>,
         conn: &'conn Connection,
         pid_map: BorrowedFd,
+        pid_rb: MapHandle,
     ) -> Result<Self>
     where
         'conn: 'obj,
@@ -204,6 +205,7 @@ impl<'obj> TaskStatsTrace<'obj> {
         let skel_builder = TaskstatsSkelBuilder::default();
         let mut open_skel = skel_builder.open(open_object)?;
         open_skel.maps.pids.reuse_fd(pid_map);
+        open_skel.maps.pid_rb.reuse_fd(pid_rb.as_fd());
         let mut skel = open_skel.load()?;
         let mut builder = RingBufferBuilder::new();
         builder.add(

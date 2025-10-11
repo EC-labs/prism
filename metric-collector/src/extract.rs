@@ -299,7 +299,7 @@ impl Extractor {
 
         let mut taskstats_open_object = MaybeUninit::uninit();
         let mut taskstats =
-            TaskStatsTrace::new(&mut taskstats_open_object, &conn, pid_map.as_fd())?;
+            TaskStatsTrace::new(&mut taskstats_open_object, &conn, pid_map.as_fd(), MapHandle::try_from(&pid_rb)?)?;
 
         TimeSensitive::init_thread(
             self.terminate_flag.clone(),
