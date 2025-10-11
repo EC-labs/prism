@@ -1,25 +1,23 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
-    libbpf_sys::{self, __u32, bpf_map_create},
     skel::{OpenSkel, Skel, SkelBuilder},
-    MapCore, MapFlags, MapHandle, OpenObject,
+    MapCore, OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
 use log::debug;
 use std::{
     collections::HashMap,
-    ffi::c_void,
     fmt::Debug,
     mem::MaybeUninit,
-    os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd},
     time::Duration,
 };
 use types::{inflight_key, inflight_value, to_update_key};
 
-use crate::sub::{read_batch, replace_samples, samples_init, BATCH_SIZE, MAX_ENTRIES, SAMPLES};
+use crate::sub::{read_batch, replace_samples, samples_init};
 
 mod vfs {
     include!(concat!(

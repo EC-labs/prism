@@ -3,13 +3,13 @@
 use anyhow::Result;
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
-    skel::{OpenSkel, Skel, SkelBuilder}, MapCore, MapHandle, OpenObject, RingBuffer, RingBufferBuilder, TcHook, TcHookBuilder, TC_EGRESS
+    skel::{OpenSkel, Skel, SkelBuilder}, MapCore, MapHandle, RingBufferBuilder, TcHook, TcHookBuilder, TC_EGRESS
 };
-use log::{debug, info};
+use log::debug;
 use std::{
-    fmt::Debug, mem::MaybeUninit, net::{IpAddr, Ipv4Addr, Ipv6Addr}, os::fd::{AsFd, BorrowedFd}, sync::mpsc::{Receiver, self}, thread, sync::mpsc::RecvTimeoutError, time::{Duration, SystemTime},
+    mem::MaybeUninit, os::fd::AsFd, sync::mpsc::{Receiver, self}, thread, sync::mpsc::RecvTimeoutError, time::{Duration, SystemTime},
 };
-use bus::{Bus, BusReader};
+use bus::BusReader;
 
 mod discovery {
     include!(concat!(
@@ -18,8 +18,7 @@ mod discovery {
     ));
 }
 use discovery::{
-    types::{tcp_discovery_event, tcphdr},
-    DiscoverySkel, DiscoverySkelBuilder,
+    types::tcp_discovery_event, DiscoverySkelBuilder,
 };
 
 struct TcHook_ {

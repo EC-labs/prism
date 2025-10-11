@@ -4,14 +4,13 @@ use ctrlc;
 use duckdb::{Connection, ToSql};
 use libbpf_rs::{libbpf_sys, set_print, MapCore, MapFlags, MapHandle, MapType, PrintLevel};
 use libc::{geteuid, seteuid};
-use log::{debug, error, info, trace, warn, Level, LevelFilter};
+use log::{debug, error, info, trace, warn, LevelFilter};
 use nix::time::{self, ClockId};
 use regex::Regex;
 use std::{
-    env, fs,
+    env,
     mem::MaybeUninit,
     os::fd::AsFd,
-    ptr::null,
     sync::{
         mpsc::{self, Receiver},
         Arc, Mutex, RwLock,

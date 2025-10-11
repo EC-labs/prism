@@ -3,7 +3,7 @@ use bus::BusReader;
 use duckdb::{Connection, Appender, ToSql};
 use log::{debug, warn, error};
 use tokio::{runtime::Runtime, sync::mpsc::{self, Receiver, Sender}};
-use std::{ffi::CStr, fs::{self, File}, io::{BufRead, BufReader, Read}, path::{Path, PathBuf}, sync::{mpsc::channel, Arc, Mutex}, thread, time::Duration};
+use std::{ffi::CStr, fs::{self, File}, io::{BufRead, BufReader, Read}, path::{Path, PathBuf}, sync::{Arc, Mutex}, thread, time::Duration};
 use lazy_static::lazy_static;
 use regex::Regex;
 use bollard::{query_parameters::InspectContainerOptions, Docker, API_DEFAULT_VERSION};

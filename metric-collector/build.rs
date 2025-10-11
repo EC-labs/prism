@@ -1,7 +1,6 @@
 use anyhow::Result;
 use std::ffi::OsStr;
-use std::fs::ReadDir;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use libbpf_cargo::SkeletonBuilder;
@@ -16,7 +15,7 @@ const SUBS: [&str; 7] = [
     "discovery",
 ];
 
-fn generate_linux_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
+fn generate_linux_header_bindings(cargo_manifest_dir: &Path) -> Result<()> {
     let dir = cargo_manifest_dir.join("src/sub/include/linux");
     let headers: Vec<_> = fs::read_dir(dir)?
         .map(|dentry| {
@@ -47,7 +46,7 @@ fn generate_linux_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn generate_consts_header_bindings(cargo_manifest_dir: &PathBuf, arch: &str) -> Result<()> {
+fn generate_consts_header_bindings(cargo_manifest_dir: &Path) -> Result<()> {
     let common = cargo_manifest_dir.join("src/sub/include/consts.h");
     let bindings = bindgen::Builder::default()
         .header(common.to_str().unwrap())
@@ -62,7 +61,7 @@ fn generate_consts_header_bindings(cargo_manifest_dir: &PathBuf, arch: &str) -> 
     Ok(())
 }
 
-fn generate_sub_header_bindings(cargo_manifest_dir: &PathBuf) -> Result<()> {
+fn generate_sub_header_bindings(cargo_manifest_dir: &Path) -> Result<()> {
     for bind in ["taskstats", "muxio"] {
         let bindings = bindgen::Builder::default()
             .header(
@@ -89,7 +88,7 @@ fn main() -> Result<()> {
     let include_common = cargo_manifest_dir.join("src/sub/include");
 
     generate_linux_header_bindings(&cargo_manifest_dir)?;
-    generate_consts_header_bindings(&cargo_manifest_dir, &arch)?;
+    generate_consts_header_bindings(&cargo_manifest_dir)?;
     generate_sub_header_bindings(&cargo_manifest_dir)?;
 
     println!(

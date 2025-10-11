@@ -1,6 +1,5 @@
 use chrono::prelude::*;
 use clap::ArgMatches;
-use eyre::eyre;
 
 pub struct Config {
     pub machine_id: u32,

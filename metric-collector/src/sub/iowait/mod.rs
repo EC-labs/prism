@@ -3,15 +3,13 @@
 use anyhow::{bail, Result};
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
-    libbpf_sys::{self, __u32, bpf_map_create},
+    libbpf_sys::{self, bpf_map_create},
     skel::{OpenSkel, Skel, SkelBuilder},
     OpenObject,
 };
 use log::debug;
 use std::{
-    ffi::c_void,
     mem::MaybeUninit,
-    os::fd::{AsFd, AsRawFd},
     time::Duration,
 };
 
@@ -26,12 +24,11 @@ use iowait::types::{granularity, stats};
 use iowait::*;
 use libbpf_rs::MapCore;
 use libbpf_rs::MapFlags;
-use libbpf_rs::MapHandle;
 use libc::clock_gettime;
 use libc::timespec;
 use libc::CLOCK_BOOTTIME;
 
-use crate::sub::{replace_samples, BATCH_SIZE, MAX_ENTRIES, SAMPLES};
+use crate::sub::{replace_samples, MAX_ENTRIES, SAMPLES};
 
 pub struct IOWait<'obj, 'conn> {
     skel: IowaitSkel<'obj>,
