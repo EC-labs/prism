@@ -48,6 +48,7 @@
                         hardeningDisable = [ "stackprotector" "zerocallusedregs" ];
 
                         nativeBuildInputs = [ 
+                            clippy
                             rustfmt
                             rust-analyzer
                             rustc
