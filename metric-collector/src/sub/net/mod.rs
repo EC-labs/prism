@@ -8,7 +8,7 @@ use libbpf_rs::{
 };
 use libc::{AF_INET, AF_INET6, AF_UNIX, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM};
 use log::debug;
-use net::{types::socket_context_value, NetSkel, NetSkelBuilder};
+use net_skel::{types::socket_context_value, NetSkel, NetSkelBuilder};
 use std::{
     fmt::Debug,
     mem::MaybeUninit,
@@ -16,7 +16,7 @@ use std::{
     os::fd::BorrowedFd,
 };
 
-mod net {
+mod net_skel {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/sub/net/bpf/net.skel.rs"
@@ -98,6 +98,7 @@ pub struct Net<'obj> {
 }
 
 impl<'obj> Net<'obj> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new<'conn>(
         open_object: &'obj mut MaybeUninit<OpenObject>,
         conn: &'conn Connection,
@@ -196,8 +197,12 @@ fn socket_socket_callback<'conn>(
         let data: &[u64; 2] = unsafe { std::mem::transmute::<_, _>(data) };
         let (sock1, sock2) = (data[0], data[1]);
         debug!("map {sock1} - {sock2}");
-        socket_socket_appender.append_row([&machine_id as &dyn ToSql, &sock1, &sock2]).unwrap();
-        socket_socket_appender.append_row([&machine_id as &dyn ToSql, &sock2, &sock1]).unwrap();
+        socket_socket_appender
+            .append_row([&machine_id as &dyn ToSql, &sock1, &sock2])
+            .unwrap();
+        socket_socket_appender
+            .append_row([&machine_id as &dyn ToSql, &sock2, &sock1])
+            .unwrap();
         0
     }
 }

@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 
-mod muxio {
+mod muxio_skel {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/sub/muxio/bpf/muxio.skel.rs"
@@ -32,9 +32,9 @@ mod bindings {
     #![allow(non_snake_case)]
     #![allow(non_camel_case_types)]
     #![allow(non_upper_case_globals)]
-    #![allow(clippy::const_static_lifetime)]
+    #![allow(clippy::redundant_static_lifetimes)]
     #![allow(clippy::unreadable_literal)]
-    #![allow(clippy::cyclomatic_complexity)]
+    #![allow(clippy::cognitive_complexity)]
     #![allow(clippy::useless_transmute)]
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -43,7 +43,7 @@ mod bindings {
 }
 
 use bindings::*;
-use muxio::*;
+use muxio_skel::*;
 
 pub struct Muxio<'conn> {
     rx: Receiver<i64>,
@@ -453,7 +453,7 @@ impl PollState {
                 let poll_key = PollKey::Poll(tgid_pid);
                 self.poll_files
                     .entry(poll_key)
-                    .or_insert_with(|| HashMap::new())
+                    .or_default()
                     .insert(bri, ts);
             }
             PollEnd { ts, tgid_pid } => {
@@ -508,7 +508,7 @@ impl PollState {
                 let poll_key = PollKey::Epoll(ep_address);
                 self.poll_files
                     .entry(poll_key)
-                    .or_insert_with(|| HashMap::new())
+                    .or_default()
                     .entry(bri)
                     .or_insert(ts);
             }
@@ -650,7 +650,7 @@ impl PollState {
             }
         }
 
-        std::mem::replace(&mut self.stats, HashMap::new())
+        std::mem::take(&mut self.stats)
     }
 }
 
@@ -719,17 +719,17 @@ fn rb_callback<'conn>(
         let shard = (ts / 1_000_000_000) as i64;
         let mut shard_events = sharded_events
             ._entry(shard)
-            .or_insert_with(|| BTreeMap::new());
+            .or_insert_with(BTreeMap::new);
         shard_events
             .entry(ts)
-            .or_insert_with(|| Vec::new())
+            .or_insert_with(Vec::new)
             .push(event);
         let mut v = last_snapshot.borrow_mut();
         match *v {
             None => {
                 let snapshot = shard - 2;
                 *v = Some(snapshot);
-                if let Err(_) = tx.send(snapshot) {
+                if tx.send(snapshot).is_err() {
                     return 1;
                 }
             }
@@ -737,7 +737,7 @@ fn rb_callback<'conn>(
                 if last < shard - 2 {
                     let snapshot = last + 1;
                     *v = Some(snapshot);
-                    if let Err(_) = tx.send(snapshot) {
+                    if tx.send(snapshot).is_err() {
                         return 1;
                     }
                 }

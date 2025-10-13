@@ -19,14 +19,14 @@ use types::{granularity, inflight_key, inflight_value, stats, to_update_key};
 
 use crate::sub::{read_batch, replace_samples, samples_init};
 
-mod futex {
+mod futex_skel {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/sub/futex/bpf/futex.skel.rs"
     ));
 }
 
-use futex::*;
+use futex_skel::*;
 
 trait UpdateEnd<T> {
     fn update_end(curr: u64, pending: T) -> u64;
@@ -135,7 +135,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
         open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
 
         let mut skel = open_skel.load()?;
-        samples_init::<granularity, stats>(&skel.maps.samples);
+        samples_init::<granularity, stats>(&skel.maps.samples)?;
         skel.attach()?;
 
         Self::init_store(conn)?;
@@ -317,7 +317,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
         Ok(())
     }
 
-    fn create_pending_records<'a, K, V, I>(
+    fn create_pending_records<K, V, I>(
         &mut self,
         pending: I,
         now: &timespec,
@@ -372,7 +372,9 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
 
             self.updated.remove(&update_key);
             let key = to_update_key::from(update_key);
-            let key = unsafe { std::mem::transmute::<_, [u8; size_of::<to_update_key>()]>(key) };
+            let key = unsafe {
+                std::mem::transmute::<to_update_key, [u8; size_of::<to_update_key>()]>(key)
+            };
             self.skel.maps.to_update.delete(&key)?
         }
         Ok(())
@@ -394,9 +396,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
             &mut pending_values,
         );
         self.create_pending_records(
-            pending_keys
-                .iter()
-                .zip(pending_values.iter()),
+            pending_keys.iter().zip(pending_values.iter()),
             &ts,
             &mut pending_records,
         );

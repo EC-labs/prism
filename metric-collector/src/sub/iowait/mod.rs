@@ -8,20 +8,17 @@ use libbpf_rs::{
     OpenObject,
 };
 use log::debug;
-use std::{
-    mem::MaybeUninit,
-    time::Duration,
-};
+use std::{mem::MaybeUninit, time::Duration};
 
-mod iowait {
+mod iowait_skel {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/sub/iowait/bpf/iowait.skel.rs"
     ));
 }
 
-use iowait::types::{granularity, stats};
-use iowait::*;
+use iowait_skel::types::{granularity, stats};
+use iowait_skel::*;
 use libbpf_rs::MapCore;
 use libbpf_rs::MapFlags;
 use libc::clock_gettime;
@@ -63,11 +60,9 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
                 bail!("Failed to create map for {i}: {mapfd}")
             }
 
-            skel.maps.samples.update(
-                &(i as u64).to_ne_bytes(),
-                &mapfd.to_ne_bytes(),
-                MapFlags::ANY,
-            )?;
+            skel.maps
+                .samples
+                .update(&i.to_ne_bytes(), &mapfd.to_ne_bytes(), MapFlags::ANY)?;
             unsafe { libc::close(mapfd) };
         }
 

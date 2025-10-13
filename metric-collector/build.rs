@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
+use bindgen::Formatter;
 
 use libbpf_cargo::SkeletonBuilder;
 
@@ -32,7 +33,7 @@ fn generate_linux_header_bindings(cargo_manifest_dir: &Path) -> Result<()> {
 
     let bindings = bindgen::Builder::default()
         .headers(headers)
-        .rustfmt_bindings(true)
+        .formatter(Formatter::Rustfmt)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .clang_arg(format!("--target={}", env::var("HOST").unwrap()))
         .generate()
@@ -50,7 +51,7 @@ fn generate_consts_header_bindings(cargo_manifest_dir: &Path) -> Result<()> {
     let common = cargo_manifest_dir.join("src/sub/include/consts.h");
     let bindings = bindgen::Builder::default()
         .header(common.to_str().unwrap())
-        .rustfmt_bindings(true)
+        .formatter(Formatter::Rustfmt)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .clang_arg(format!("--target={}", env::var("HOST").unwrap()))
         .clang_args(["-I", "src/vmlinux"])
@@ -70,7 +71,7 @@ fn generate_sub_header_bindings(cargo_manifest_dir: &Path) -> Result<()> {
                     .to_str()
                     .unwrap(),
             )
-            .rustfmt_bindings(true)
+            .formatter(Formatter::Rustfmt)
             .clang_arg(format!("--target={}", env::var("HOST").unwrap()))
             .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
             .generate()?;

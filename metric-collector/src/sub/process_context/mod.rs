@@ -1,14 +1,28 @@
 use anyhow::{Context, Result};
-use bus::BusReader;
-use duckdb::{Connection, Appender, ToSql};
-use log::{debug, warn, error};
-use tokio::{runtime::Runtime, sync::mpsc::{self, Receiver, Sender}};
-use std::{ffi::CStr, fs::{self, File}, io::{BufRead, BufReader, Read}, path::{Path, PathBuf}, sync::{Arc, Mutex}, thread, time::Duration};
-use lazy_static::lazy_static;
-use regex::Regex;
 use bollard::{query_parameters::InspectContainerOptions, Docker, API_DEFAULT_VERSION};
+use bus::BusReader;
 use containerd_client::{
-    connect, services::v1::{containers_client::ContainersClient, GetContainerRequest}, tonic::transport::Channel, with_namespace
+    connect,
+    services::v1::{containers_client::ContainersClient, GetContainerRequest},
+    tonic::transport::Channel,
+    with_namespace,
+};
+use duckdb::{Appender, Connection, ToSql};
+use lazy_static::lazy_static;
+use log::{debug, error, warn};
+use regex::Regex;
+use std::{
+    ffi::CStr,
+    fs::{self, File},
+    io::{BufRead, BufReader, Read},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
+use tokio::{
+    runtime::Runtime,
+    sync::mpsc::{self, Receiver, Sender},
 };
 use tonic::Request;
 
@@ -26,9 +40,22 @@ struct ContainerAppenders<'a> {
 
 #[derive(Debug)]
 enum Container {
-    Docker { cgroup: String, id: String, name: Option<String>, image_name: Option<String>, image_hash: Option<String> },
-    K8s { cgroup: String, id: String, namespace: Option<String>, pod_name: Option<String>, container_name: Option<String>, image_name: String },
-    Unknown
+    Docker {
+        cgroup: String,
+        id: String,
+        name: Option<String>,
+        image_name: Option<String>,
+        image_hash: Option<String>,
+    },
+    K8s {
+        cgroup: String,
+        id: String,
+        namespace: Option<String>,
+        pod_name: Option<String>,
+        container_name: Option<String>,
+        image_name: String,
+    },
+    Unknown,
 }
 
 impl Container {
@@ -59,11 +86,39 @@ impl Container {
 
     fn append_row(self, appenders: &mut ContainerAppenders, machine_id: u32) -> Result<()> {
         match self {
-            Container::Docker { cgroup, id, name, image_name, image_hash } => {
-                appenders.docker.append_row([&machine_id as &dyn ToSql, &cgroup, &id, &name, &image_name, &image_hash]);
+            Container::Docker {
+                cgroup,
+                id,
+                name,
+                image_name,
+                image_hash,
+            } => {
+                appenders.docker.append_row([
+                    &machine_id as &dyn ToSql,
+                    &cgroup,
+                    &id,
+                    &name,
+                    &image_name,
+                    &image_hash,
+                ])?;
             }
-            Container::K8s { cgroup, id, namespace, pod_name, container_name, image_name } => {
-                appenders.k8s.append_row([&machine_id as &dyn ToSql, &cgroup, &id, &namespace, &pod_name, &container_name, &image_name]);
+            Container::K8s {
+                cgroup,
+                id,
+                namespace,
+                pod_name,
+                container_name,
+                image_name,
+            } => {
+                appenders.k8s.append_row([
+                    &machine_id as &dyn ToSql,
+                    &cgroup,
+                    &id,
+                    &namespace,
+                    &pod_name,
+                    &container_name,
+                    &image_name,
+                ])?;
             }
             _ => {}
         }
@@ -77,14 +132,28 @@ struct ContainerRuntimes {
 }
 
 impl ContainerRuntimes {
-    fn init_async_runtime(mut cgroup_rx: Receiver<Cgroup>, conn: &Connection, store_object_tx: Sender<ProcessObject>) -> Result<Runtime> {
+    fn init_async_runtime(
+        mut cgroup_rx: Receiver<Cgroup>,
+        conn: &Connection,
+        store_object_tx: Sender<ProcessObject>,
+    ) -> Result<Runtime> {
         let mut runtimes = ContainerRuntimes::new(conn)?;
         let async_rt = Runtime::new()?;
         async_rt.spawn(async move {
             loop {
-                let Some(cgroup) = cgroup_rx.recv().await else { break };
-                let Ok(container) = runtimes.get_container_metadata(cgroup).await else { continue };
-                store_object_tx.send(ProcessObject::Container(container)).await;
+                let Some(cgroup) = cgroup_rx.recv().await else {
+                    break;
+                };
+                let Ok(container) = runtimes.get_container_metadata(cgroup).await else {
+                    continue;
+                };
+                if let Err(e) = store_object_tx
+                    .send(ProcessObject::Container(container))
+                    .await
+                {
+                    error!("failed to send process object");
+                    panic!("{e}");
+                }
             }
             Ok(()) as Result<()>
         });
@@ -94,8 +163,11 @@ impl ContainerRuntimes {
     fn new(conn: &Connection) -> Result<Self> {
         let docker_client = Docker::connect_with_socket_defaults().ok();
         let containerd_client = None;
-        Container::init_store(conn);
-        Ok(Self { docker_client, containerd_client })
+        Container::init_store(conn)?;
+        Ok(Self {
+            docker_client,
+            containerd_client,
+        })
     }
 
     async fn connect_containerd(&mut self) {
@@ -106,38 +178,50 @@ impl ContainerRuntimes {
             "/proc/1/root/run/k3s/containerd/containerd.sock",
         ];
         for sock in socks {
-            match connect(sock).await {
-                Ok(channel) => {
-                    self.containerd_client = Some(ContainersClient::new(channel));
-                    break;
-                }, 
-                _ => {}
+            if let Ok(channel) = connect(sock).await {
+                self.containerd_client = Some(ContainersClient::new(channel));
+                break;
             }
         }
     }
 
     fn connect_docker(&mut self) {
-        self.docker_client = Docker::connect_with_socket("unix:///proc/1/root/var/run/docker.sock", 120, API_DEFAULT_VERSION).ok();
+        self.docker_client = Docker::connect_with_socket(
+            "unix:///proc/1/root/var/run/docker.sock",
+            120,
+            API_DEFAULT_VERSION,
+        )
+        .ok();
     }
 
     async fn get_container_metadata(&mut self, cgroup: Cgroup) -> Result<Container> {
-        let cgroup_str = cgroup.0.to_str().context("cgroup failed to convert to str")?;
+        let cgroup_str = cgroup
+            .0
+            .to_str()
+            .context("cgroup failed to convert to str")?;
         if let Some(captures) = RE_DOCKER.captures(cgroup_str) {
-            let container_id = captures.iter().last().context("missing captures")?.unwrap().as_str();
+            let container_id = captures
+                .iter()
+                .last()
+                .context("missing captures")?
+                .unwrap()
+                .as_str();
             if self.docker_client.is_none() {
                 self.connect_docker();
             }
 
-            let Some(docker_client) = &self.docker_client else { return Ok(Container::Unknown) };
-            let options = Some(InspectContainerOptions{
-                size: false,
-            });
-            let md = docker_client.inspect_container(container_id, options).await?;
+            let Some(docker_client) = &self.docker_client else {
+                return Ok(Container::Unknown);
+            };
+            let options = Some(InspectContainerOptions { size: false });
+            let md = docker_client
+                .inspect_container(container_id, options)
+                .await?;
 
-            let container = Container::Docker { 
-                cgroup: String::from(cgroup_str), 
-                id: String::from(container_id), 
-                name: md.name, 
+            let container = Container::Docker {
+                cgroup: String::from(cgroup_str),
+                id: String::from(container_id),
+                name: md.name,
                 image_hash: md.image,
                 image_name: md.config.map(|v| v.image).unwrap_or(None),
             };
@@ -145,24 +229,37 @@ impl ContainerRuntimes {
             debug!("{:?}", container);
             Ok(container)
         } else if let Some(captures) = RE_CONTAINERD.captures(cgroup_str) {
-            let container_id = captures.iter().last().context("missing captures")?.unwrap().as_str();
+            let container_id = captures
+                .iter()
+                .last()
+                .context("missing captures")?
+                .unwrap()
+                .as_str();
             if self.containerd_client.is_none() {
                 self.connect_containerd().await;
             }
 
-            let Some(containerd_client) = &mut self.containerd_client else { return Ok(Container::Unknown) };
-            let req = GetContainerRequest { id: container_id.into() };
+            let Some(containerd_client) = &mut self.containerd_client else {
+                return Ok(Container::Unknown);
+            };
+            let req = GetContainerRequest {
+                id: container_id.into(),
+            };
             let req = with_namespace!(req, "k8s.io");
-            let Ok(resp) = containerd_client.get(req).await else { return Ok(Container::Unknown) };
-            let Some(mut container) = resp.into_inner().container else { return Ok(Container::Unknown) };
+            let Ok(resp) = containerd_client.get(req).await else {
+                return Ok(Container::Unknown);
+            };
+            let Some(mut container) = resp.into_inner().container else {
+                return Ok(Container::Unknown);
+            };
 
-            let container = Container::K8s { 
-                cgroup: String::from(cgroup_str), 
-                id: String::from(container_id), 
+            let container = Container::K8s {
+                cgroup: String::from(cgroup_str),
+                id: String::from(container_id),
                 namespace: container.labels.remove("io.kubernetes.pod.namespace"),
-                pod_name: container.labels.remove("io.kubernetes.pod.name"), 
+                pod_name: container.labels.remove("io.kubernetes.pod.name"),
                 container_name: container.labels.remove("io.kubernetes.container.name"),
-                image_name: container.image.into(),
+                image_name: container.image,
             };
 
             debug!("{:?}", container);
@@ -177,13 +274,12 @@ impl ContainerRuntimes {
 #[derive(Debug, Clone)]
 struct Cgroup(PathBuf);
 
-struct MachineId(u32);
 struct Pid(u32);
 
 #[derive(Debug)]
 pub struct ProcessContext {
     pid: u32,
-    cgroup: Cgroup, 
+    cgroup: Cgroup,
     argv: Vec<String>,
     exe: PathBuf,
 }
@@ -205,7 +301,13 @@ impl ProcessContext {
     }
 
     fn append_row(self, appender: &mut Appender, machine_id: u32) -> Result<()> {
-        appender.append_row([&machine_id as &dyn ToSql, &self.pid, &self.cgroup.0.to_str(), &self.argv.join(" "), &self.exe.to_str()]);
+        appender.append_row([
+            &machine_id as &dyn ToSql,
+            &self.pid,
+            &self.cgroup.0.to_str(),
+            &self.argv.join(" "),
+            &self.exe.to_str(),
+        ])?;
         Ok(())
     }
 }
@@ -220,32 +322,40 @@ impl TryFrom<Pid> for ProcessContext {
         let pid_cgroup_path = pid_proc_path.join("cgroup");
         let pid_cgroup_file = File::open(pid_cgroup_path)?;
         let mut cgroup_first_line = String::new();
-        BufReader::new(pid_cgroup_file).read_line(&mut cgroup_first_line);
-        let cgroup_path = cgroup_first_line.split(":").nth(2).context("cgroup should have 3 parts")?;
+        BufReader::new(pid_cgroup_file).read_line(&mut cgroup_first_line)?;
+        let cgroup_path = cgroup_first_line
+            .split(":")
+            .nth(2)
+            .context("cgroup should have 3 parts")?;
         let cgroup = Cgroup(PathBuf::from(cgroup_path.trim()));
-        
+
         let cmdline_path = pid_proc_path.join("cmdline");
         let mut cmdline_file = File::open(cmdline_path)?;
         let mut cmdline_content = Vec::new();
-        cmdline_file.read_to_end(&mut cmdline_content);
-        let cmdline_null_bytes = cmdline_content.iter().enumerate().fold(Vec::new(), |mut acc, (pos, x)| {
-            if pos == 0 {
-                acc.push(pos);
-            }
+        cmdline_file.read_to_end(&mut cmdline_content)?;
+        let cmdline_null_bytes =
+            cmdline_content
+                .iter()
+                .enumerate()
+                .fold(Vec::new(), |mut acc, (pos, x)| {
+                    if pos == 0 {
+                        acc.push(pos);
+                    }
 
-            if *x == 0 {
-                acc.push(pos + 1);
-            }
-            acc
-        });
+                    if *x == 0 {
+                        acc.push(pos + 1);
+                    }
+                    acc
+                });
 
         let mut argv = Vec::new();
         for pair in cmdline_null_bytes.windows(2) {
             match CStr::from_bytes_with_nul(&cmdline_content[pair[0]..pair[1]])?.to_str() {
-                Ok(arg) => { 
+                Ok(arg) => {
                     argv.push(String::from(arg));
                 }
                 Err(e) => {
+                    warn!("error converting process cmdline to String: {}", e);
                     argv.push(String::from("InvalidUtf8"))
                 }
             }
@@ -254,39 +364,57 @@ impl TryFrom<Pid> for ProcessContext {
         let exe_file = pid_proc_path.join("exe");
         let exe = fs::read_link(exe_file)?;
 
-        Ok(Self { cgroup, argv, exe, pid: pid.0 })
+        Ok(Self {
+            cgroup,
+            argv,
+            exe,
+            pid: pid.0,
+        })
     }
 }
 
-fn process_context_thread(terminate_flag: Arc<Mutex<bool>>, conn: Connection, mut pid_rx: BusReader<u32>, machine_id: u32) -> Result<()> {
+fn process_context_thread(
+    terminate_flag: Arc<Mutex<bool>>,
+    conn: Connection,
+    mut pid_rx: BusReader<u32>,
+    machine_id: u32,
+) -> Result<()> {
     let (tx, rx) = mpsc::channel(1000);
     let (store_object_tx, store_object_rx) = mpsc::channel(1000);
-    ProcessContext::init_store(&conn);
-    let async_rt = ContainerRuntimes::init_async_runtime(rx, &conn, store_object_tx.clone());
+    ProcessContext::init_store(&conn)?;
+    let _async_rt = ContainerRuntimes::init_async_runtime(rx, &conn, store_object_tx.clone());
 
     thread::spawn(move || start_appender_thread(conn, store_object_rx, machine_id));
 
     loop {
-        let Ok(terminate) = terminate_flag.lock() else { break };
-        if *terminate == true {
+        let Ok(terminate) = terminate_flag.lock() else {
+            break;
+        };
+        if *terminate {
             break;
         }
         drop(terminate);
 
         let pid = match pid_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(pid) => Pid(pid),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => { continue }
-            Err(e) => { break }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(_e) => break,
         };
-        let Ok(context) = ProcessContext::try_from(pid) else { continue };
+        let Ok(context) = ProcessContext::try_from(pid) else {
+            continue;
+        };
         let cgroup = context.cgroup.clone();
         debug!("process context {:?}", context);
-        store_object_tx.blocking_send(ProcessObject::ProcessContext(context));
+        if let Err(e) = store_object_tx.blocking_send(ProcessObject::ProcessContext(context)) {
+            error!("failed to send process object");
+            panic!("{e}")
+        };
 
         match tx.blocking_send(cgroup) {
             Ok(_) => {}
             Err(e) => {
                 error!("failed to send cgroup event");
+                panic!("{e}")
             }
         }
     }
@@ -300,7 +428,11 @@ enum ProcessObject {
     Container(Container),
 }
 
-fn start_appender_thread(conn: Connection, mut rx: Receiver<ProcessObject>, machine_id: u32) -> Result<()> {
+fn start_appender_thread(
+    conn: Connection,
+    mut rx: Receiver<ProcessObject>,
+    machine_id: u32,
+) -> Result<()> {
     let mut pc_appender = conn.appender("process_context")?;
     let mut container_appenders = ContainerAppenders {
         docker: conn.appender("docker")?,
@@ -309,17 +441,22 @@ fn start_appender_thread(conn: Connection, mut rx: Receiver<ProcessObject>, mach
     while let Some(o) = rx.blocking_recv() {
         match o {
             ProcessObject::ProcessContext(pc) => {
-                pc.append_row(&mut pc_appender, machine_id);
-            },
+                pc.append_row(&mut pc_appender, machine_id)?;
+            }
             ProcessObject::Container(c) => {
-                c.append_row(&mut container_appenders, machine_id);
-            },
+                c.append_row(&mut container_appenders, machine_id)?;
+            }
         }
     }
     Ok(()) as Result<()>
 }
 
-pub fn init_thread(terminate_flag: Arc<Mutex<bool>>, conn: &Connection, pid_rx: BusReader<u32>, machine_id: u32) -> Result<()> {
+pub fn init_thread(
+    terminate_flag: Arc<Mutex<bool>>,
+    conn: &Connection,
+    pid_rx: BusReader<u32>,
+    machine_id: u32,
+) -> Result<()> {
     let conn = conn.try_clone()?;
     thread::spawn(move || process_context_thread(terminate_flag, conn, pid_rx, machine_id));
     Ok(())

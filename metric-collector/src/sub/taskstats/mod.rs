@@ -1,11 +1,11 @@
 use bus::Bus;
-use log::info;
+use log::{error, info};
 use std::{
     collections::HashMap,
     ffi::CStr,
     io::Read,
     mem::MaybeUninit,
-    os::fd::{BorrowedFd, AsFd},
+    os::fd::{AsFd, BorrowedFd},
     ptr::NonNull,
     sync::mpsc::{self, Receiver, Sender},
     time::Duration,
@@ -21,7 +21,7 @@ use libbpf_rs::{
 };
 use log::debug;
 
-mod taskstats {
+mod taskstats_skel {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/sub/taskstats/bpf/taskstats.skel.rs"
@@ -33,9 +33,9 @@ mod bindings {
     #![allow(non_snake_case)]
     #![allow(non_camel_case_types)]
     #![allow(non_upper_case_globals)]
-    #![allow(clippy::const_static_lifetime)]
+    #![allow(clippy::redundant_static_lifetimes)]
     #![allow(clippy::unreadable_literal)]
-    #![allow(clippy::cyclomatic_complexity)]
+    #![allow(clippy::cognitive_complexity)]
     #![allow(clippy::useless_transmute)]
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -44,9 +44,12 @@ mod bindings {
 }
 
 use bindings::task_delay_acct;
-use taskstats::{TaskstatsSkel, TaskstatsSkelBuilder};
+use taskstats_skel::{TaskstatsSkel, TaskstatsSkelBuilder};
 
-pub fn validate_bpf_ret<T>(ptr: *mut T) -> libbpf_rs::Result<NonNull<T>> {
+/// Check the returned pointer of a `libbpf` call, extracting any
+/// reported errors and converting them.
+/// https://github.com/libbpf/libbpf-rs/blob/068db5c5a194bd32596e67f42c4c8111dab7bf58/libbpf-rs/src/util.rs#L73C1-L88C2
+fn validate_bpf_ret<T>(ptr: *mut T) -> libbpf_rs::Result<NonNull<T>> {
     // SAFETY: `libbpf_get_error` is always safe to call.
     match unsafe { libbpf_sys::libbpf_get_error(ptr as *const _) } {
         0 => {
@@ -71,7 +74,13 @@ pub struct TaskStatsIter<'conn> {
 }
 
 impl<'conn> TaskStatsIter<'conn> {
-    pub fn new(pid_map: MapHandle, pid_rb: MapHandle, conn: &'conn Connection, pid_bus: Bus<u32>, machine_id: u32) -> Result<Self> {
+    pub fn new(
+        pid_map: MapHandle,
+        pid_rb: MapHandle,
+        conn: &'conn Connection,
+        pid_bus: Bus<u32>,
+        machine_id: u32,
+    ) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
         let init_pids: Vec<u32> = pid_map
             .keys()
@@ -172,7 +181,7 @@ impl<'conn> TaskStatsIter<'conn> {
             info!("remove {pid}");
         }
 
-        if buf.len() == 0 {
+        if buf.is_empty() {
             return Ok(());
         }
 
@@ -208,8 +217,8 @@ impl<'obj> TaskStatsTrace<'obj> {
         init_store(conn)?;
         let skel_builder = TaskstatsSkelBuilder::default();
         let mut open_skel = skel_builder.open(open_object)?;
-        open_skel.maps.pids.reuse_fd(pid_map);
-        open_skel.maps.pid_rb.reuse_fd(pid_rb.as_fd());
+        open_skel.maps.pids.reuse_fd(pid_map)?;
+        open_skel.maps.pid_rb.reuse_fd(pid_rb.as_fd())?;
         let mut skel = open_skel.load()?;
         let mut builder = RingBufferBuilder::new();
         builder.add(
@@ -219,10 +228,10 @@ impl<'obj> TaskStatsTrace<'obj> {
         let taskstats_rb = builder.build()?;
         skel.attach()?;
 
-        return Ok(Self {
+        Ok(Self {
             _skel: skel,
             taskstats_rb,
-        });
+        })
     }
 
     pub fn sample(&mut self) -> Result<()> {
@@ -243,7 +252,7 @@ fn create_link_for_pid(pid: u32, get_tasks: &ProgramMut) -> Result<Link> {
     Ok(unsafe { Link::from_ptr(ptr) })
 }
 
-fn rb_callback<'conn>(
+fn rb_callback(
     tx: Sender<(u32, Link)>,
     get_tasks: ProgramMut,
 ) -> impl FnMut(&[u8]) -> i32 + use<'_> {
@@ -344,7 +353,7 @@ fn wrapped_callback<'conn>(
         let record: &task_delay_acct = unsafe { std::mem::transmute(data) };
         let comm = unsafe { CStr::from_ptr(&record.comm as _).to_str().unwrap() };
         let ts = Duration::from_nanos(crate::extract::boot_to_epoch(record.ts));
-        taskstats_appender.append_row([
+        if let Err(e) = taskstats_appender.append_row([
             &machine_id as &dyn ToSql,
             &ts,
             &record.pid,
@@ -364,7 +373,10 @@ fn wrapped_callback<'conn>(
             &record.thrashing_count,
             &record.swapin_delay_total,
             &record.swapin_count,
-        ]);
+        ]) {
+            error!("failed to append row");
+            panic!("{e}");
+        };
         0
     }
 }

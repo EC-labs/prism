@@ -19,15 +19,15 @@ use types::{inflight_key, inflight_value, to_update_key};
 
 use crate::sub::{read_batch, replace_samples, samples_init};
 
-mod vfs {
+mod vfs_skel {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/sub/vfs/bpf/vfs.skel.rs"
     ));
 }
 
-use vfs::types::{granularity, stats};
-use vfs::*;
+use vfs_skel::types::{granularity, stats};
+use vfs_skel::*;
 
 trait UpdateEnd<T> {
     fn update_end(curr: u64, pending: T) -> u64;
@@ -138,7 +138,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
 
         let mut skel = open_skel.load()?;
-        samples_init::<granularity, stats>(&skel.maps.samples);
+        samples_init::<granularity, stats>(&skel.maps.samples)?;
 
         skel.attach()?;
 
@@ -291,7 +291,7 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         Ok(())
     }
 
-    fn create_pending_records<'a, K, V, I>(
+    fn create_pending_records<K, V, I>(
         &mut self,
         pending: I,
         now: &timespec,
@@ -347,7 +347,9 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
 
             self.updated.remove(&update_key);
             let key = to_update_key::from(update_key);
-            let key = unsafe { std::mem::transmute::<_, [u8; size_of::<to_update_key>()]>(key) };
+            let key = unsafe {
+                std::mem::transmute::<to_update_key, [u8; size_of::<to_update_key>()]>(key)
+            };
             self.skel.maps.to_update.delete(&key)?
         }
         Ok(())

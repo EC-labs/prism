@@ -24,9 +24,9 @@ mod consts {
     #![allow(non_snake_case)]
     #![allow(non_camel_case_types)]
     #![allow(non_upper_case_globals)]
-    #![allow(clippy::const_static_lifetime)]
+    #![allow(clippy::redundant_static_lifetimes)]
     #![allow(clippy::unreadable_literal)]
-    #![allow(clippy::cyclomatic_complexity)]
+    #![allow(clippy::cognitive_complexity)]
     #![allow(clippy::useless_transmute)]
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -68,7 +68,7 @@ pub fn samples_init<K, V>(samples: &MapMut) -> Result<()> {
         }
 
         samples.update(
-            &(i as u64).to_ne_bytes(),
+            &i.to_ne_bytes(),
             &mapfd.to_ne_bytes(),
             MapFlags::ANY,
         )?;
@@ -84,7 +84,7 @@ pub fn replace_samples<K, V>(samples: &MapMut, ts: &timespec) -> (Vec<K>, Vec<V>
     for ts in (curr - (SAMPLES - 1))..curr {
         let outer = ts % SAMPLES;
 
-        let inner_id = samples.lookup(&(outer as u64).to_ne_bytes(), MapFlags::ANY);
+        let inner_id = samples.lookup(&outer.to_ne_bytes(), MapFlags::ANY);
 
         let inner_id = match inner_id {
             Ok(Some(inner_vec)) => {
@@ -119,7 +119,7 @@ pub fn replace_samples<K, V>(samples: &MapMut, ts: &timespec) -> (Vec<K>, Vec<V>
         }
 
         let res = samples.update(
-            &(outer as u64).to_ne_bytes(),
+            &outer.to_ne_bytes(),
             &mapfd.to_ne_bytes(),
             MapFlags::ANY,
         );
@@ -134,7 +134,7 @@ pub fn replace_samples<K, V>(samples: &MapMut, ts: &timespec) -> (Vec<K>, Vec<V>
     (keys, values)
 }
 
-fn read_batch<'a, K, V>(map_fd: RawFd, keys: &mut Vec<K>, values: &mut Vec<V>) -> usize {
+fn read_batch<K, V>(map_fd: RawFd, keys: &mut Vec<K>, values: &mut Vec<V>) -> usize {
     let mut total = 0;
     let mut in_batch: u64 = unsafe { MaybeUninit::zeroed().assume_init() };
     let mut out_batch: u64 = unsafe { MaybeUninit::zeroed().assume_init() };
@@ -154,10 +154,10 @@ fn read_batch<'a, K, V>(map_fd: RawFd, keys: &mut Vec<K>, values: &mut Vec<V>) -
         unsafe {
             libbpf_sys::bpf_map_lookup_batch(
                 map_fd,
-                std::mem::transmute::<&mut u64, *mut c_void>(&mut in_batch),
-                std::mem::transmute::<&mut u64, *mut c_void>(&mut out_batch),
-                std::mem::transmute::<_, *mut c_void>(keys[batch_start..].as_mut_ptr()),
-                std::mem::transmute::<_, *mut c_void>(values[batch_start..].as_mut_ptr()),
+                &mut in_batch as *mut u64 as *mut libc::c_void,
+                &mut out_batch as *mut u64 as *mut libc::c_void,
+                std::mem::transmute::<*mut K, *mut c_void>(keys[batch_start..].as_mut_ptr()),
+                std::mem::transmute::<*mut V, *mut c_void>(values[batch_start..].as_mut_ptr()),
                 &mut count as *mut __u32,
                 std::ptr::null(),
             );

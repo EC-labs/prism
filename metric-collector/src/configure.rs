@@ -22,9 +22,7 @@ impl TryFrom<ArgMatches> for Config {
 
         let period: u64 = matches
             .remove_one::<u64>("period")
-            .expect("Missing period")
-            .try_into()
-            .expect("Convert usize to u64");
+            .expect("Missing period");
 
         let utc: DateTime<Utc> = Utc::now();
         let mut prism_store = matches
