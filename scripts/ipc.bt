@@ -281,6 +281,7 @@ kretfunc:vmlinux:__sys_connect_file
         printf("%-15s\t%-15s\t%lld\t%s\t%d\t%lld\t%s\t%s\t%d\t%s\t%d\t%lld\t%lld\n", 
                "ConnectEnd", comm, tid, $fs_id, $s_dev, $i_id, "AF_INET6", $saddr, $lport, $daddr, $dport, $nsecs, $diff);
     } else if ($inet_family == AF_UNIX) {
+        // container_of workaround
         $unix_sock = (struct unix_sock *) $sk - offsetof(struct unix_sock, sk);
         $peer = $unix_sock->peer;
 
