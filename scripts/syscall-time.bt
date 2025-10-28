@@ -1,0 +1,37 @@
+BEGIN {
+    printf("This program with automatically terminate after 30s\n");
+    printf("Monitoring thread group %lld\n", $1);
+    @start_time = nsecs;
+}
+
+tracepoint:raw_syscalls:sys_enter
+/ pid == $1 /
+{
+    @pending[tid, args->id] = nsecs;
+}
+
+tracepoint:raw_syscalls:sys_exit
+/ pid == $1 /
+{
+    if (!@pending[tid, args->id]) {
+        return;
+    }
+    
+    $duration = nsecs - @pending[tid, args->id];
+    @[tid, args->id] = @[tid, args->id] + $duration;
+}
+
+END {
+    @total_time = nsecs - @start_time;
+    print(@total_time);
+    print(@);
+
+    clear(@pending);
+    clear(@start_time);
+    clear(@total_time);
+    clear(@);
+}
+
+interval:s:30 {
+    exit();
+}

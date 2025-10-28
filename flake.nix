@@ -74,6 +74,15 @@
 
                         LIBCLANG_PATH = "${libclang.lib}/lib";
                     };
+                    scripts = pkgs.mkShell {
+                        packages = with pkgs; [
+                            bpftrace
+                            linuxHeaders
+                            duckdb
+                        ] ++ [
+                            (pkgs.python3.withPackages (python-pkgs: with python-pkgs; [ ]))
+                        ];
+                    };
                     notebooks = pkgs.mkShell {
                         packages = [
                             (pkgs.python3.withPackages (python-pkgs: with python-pkgs; [
@@ -81,6 +90,7 @@
                               pandas
                               matplotlib
                               notebook
+                              duckdb
                             ]))
                         ];
                     };

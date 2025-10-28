@@ -5,3 +5,4 @@ notebooks/prelimenary
 bpftrace-hdrs/
 result
 .direnv/
+__pycache__/
