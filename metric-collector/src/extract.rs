@@ -28,6 +28,7 @@ use crate::{
         discovery::Discovery,
         futex::Futex,
         iowait::IOWait,
+        mux::Muxio,
         net::Net,
         process_context,
         taskstats::{TaskStatsIter, TaskStatsTrace},
@@ -285,6 +286,15 @@ impl Extractor {
         )
         .unwrap();
 
+        let mut muxio_open_object = MaybeUninit::uninit();
+        let mut muxio = Muxio::new(
+            &mut muxio_open_object,
+            pid_map.as_fd(),
+            conn,
+            self.config.machine_id,
+        )
+        .unwrap();
+
         let mut net_open_object = MaybeUninit::uninit();
         let mut net = Net::new(
             &mut net_open_object,
@@ -353,9 +363,12 @@ impl Extractor {
             futex.sample()?;
             let futex_elapsed = start.elapsed().as_nanos();
             let futex_acct = futex_elapsed - vfs_elapsed;
+            muxio.sample()?;
+            let muxio_elapsed = start.elapsed().as_nanos();
+            let muxio_acct = muxio_elapsed - futex_elapsed;
             net.sample()?;
             let net_elapsed = start.elapsed().as_nanos();
-            let net_acct = net_elapsed - futex_elapsed;
+            let net_acct = net_elapsed - muxio_elapsed;
             discovery.sample()?;
             let discovery_elapsed = start.elapsed().as_nanos();
             let discovery_acct = discovery_elapsed - net_elapsed;
@@ -365,22 +378,24 @@ impl Extractor {
 
             if taskstats_elapsed > 1_000_000_000 {
                 warn!(
-                    "sample loop exceeded 1s: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%]",
+                    "sample loop exceeded 1s: {}ms io[{}%] vfs[{}%] futex[{}%] muxio[{}%] net[{}%] discovery[{}%] taskstats[{}%]",
                     taskstats_elapsed / 1_000_000,
                     iowait_elapsed * 100 / taskstats_elapsed,
                     vfs_acct * 100 / taskstats_elapsed,
                     futex_acct * 100 / taskstats_elapsed,
+                    muxio_acct * 100 / taskstats_elapsed,
                     net_acct * 100 / taskstats_elapsed,
                     discovery_acct * 100 / taskstats_elapsed,
                     taskstats_acct * 100 / taskstats_elapsed,
                 );
             } else if taskstats_elapsed > 10_000_000_000 {
                 error!(
-                    "sample loop exceeded 10s: {}ms io[{}%] vfs[{}%] futex[{}%] net[{}%] discovery[{}%] taskstats[{}%]",
+                    "sample loop exceeded 10s: {}ms io[{}%] vfs[{}%] futex[{}%] muxio[{}%] net[{}%] discovery[{}%] taskstats[{}%]",
                     taskstats_elapsed / 1_000_000,
                     iowait_elapsed * 100 / taskstats_elapsed,
                     vfs_acct * 100 / taskstats_elapsed,
                     futex_acct * 100 / taskstats_elapsed,
+                    muxio_acct * 100 / taskstats_elapsed,
                     net_acct * 100 / taskstats_elapsed,
                     discovery_acct * 100 / taskstats_elapsed,
                     taskstats_acct * 100 / taskstats_elapsed,

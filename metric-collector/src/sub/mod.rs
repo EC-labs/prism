@@ -13,11 +13,12 @@ use std::{
 pub mod discovery;
 pub mod futex;
 pub mod iowait;
+pub mod mux;
 pub mod muxio;
 pub mod net;
+pub mod process_context;
 pub mod taskstats;
 pub mod vfs;
-pub mod process_context;
 
 mod consts {
     #![allow(dead_code)]
@@ -67,11 +68,7 @@ pub fn samples_init<K, V>(samples: &MapMut) -> Result<()> {
             bail!("Failed to create map for {i}: {mapfd}")
         }
 
-        samples.update(
-            &i.to_ne_bytes(),
-            &mapfd.to_ne_bytes(),
-            MapFlags::ANY,
-        )?;
+        samples.update(&i.to_ne_bytes(), &mapfd.to_ne_bytes(), MapFlags::ANY)?;
         unsafe { libc::close(mapfd) };
     }
     Ok(())
@@ -118,11 +115,7 @@ pub fn replace_samples<K, V>(samples: &MapMut, ts: &timespec) -> (Vec<K>, Vec<V>
             continue;
         }
 
-        let res = samples.update(
-            &outer.to_ne_bytes(),
-            &mapfd.to_ne_bytes(),
-            MapFlags::ANY,
-        );
+        let res = samples.update(&outer.to_ne_bytes(), &mapfd.to_ne_bytes(), MapFlags::ANY);
         match res {
             Ok(()) => {}
             Err(e) => {

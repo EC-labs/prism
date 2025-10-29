@@ -1,8 +1,8 @@
 use anyhow::Result;
+use bindgen::Formatter;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
-use bindgen::Formatter;
 
 use libbpf_cargo::SkeletonBuilder;
 
@@ -11,7 +11,8 @@ const SUBS: [&str; 7] = [
     "vfs",
     "futex",
     "net",
-    "muxio",
+    // "muxio",
+    "mux",
     "taskstats",
     "discovery",
 ];

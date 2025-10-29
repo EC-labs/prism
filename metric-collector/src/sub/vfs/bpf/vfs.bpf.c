@@ -70,7 +70,7 @@ __always_inline bool track(struct bri *file, u32 tgid) {
 
     if (!pidp) {
         discover_tgid(&pids, &pid_rb, tgid);
-        bpf_printk("[vfs] discovered tgid: %u %s %u %llu", tgid, file->fs_magic, file->i_rdev, file->i_ino);
+        bpf_printk("[vfs] discovered tgid: %u %x %u %llu", tgid, file->fs_magic, file->i_rdev, file->i_ino);
     }
     return true;
 }
