@@ -169,3 +169,64 @@ int BPF_PROG(fexit__epoll_wait, int epfd)
 
     return 0;
 }
+
+SEC("fentry/do_sys_poll")
+int BPF_PROG(do_sys_poll) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    u32 tgid = get_tgid(tgid_pid);
+
+    if (!track(tgid))
+        return 0;
+
+    struct eventpoll *ep = NULL;
+    mux_acct_start(&pending, tgid_pid, ep);
+    bpf_printk("[do_sys_poll] enter %u", get_pid(tgid_pid));
+    return 0;
+}
+
+
+SEC("fexit/do_sys_poll")
+int BPF_PROG(do_sys_poll_exit) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    u32 tgid = get_tgid(tgid_pid);
+
+    if (!track(tgid))
+        return 0;
+
+    mux_acct_end(&pending, &samples, &to_update);
+    bpf_printk("[do_sys_poll] exit %u", get_pid(tgid_pid));
+
+    return 0;
+}
+
+SEC("fentry/core_sys_select")
+int BPF_PROG(core_sys_select) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    u32 tgid = get_tgid(tgid_pid);
+
+    if (!track(tgid))
+        return 0;
+
+    struct eventpoll *ep = NULL;
+    mux_acct_start(&pending, tgid_pid, ep);
+    bpf_printk("[core_sys_select] enter %u", get_pid(tgid_pid));
+    return 0;
+}
+
+SEC("fexit/core_sys_select")
+int BPF_PROG(core_sys_select_exit) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    u32 tgid = get_tgid(tgid_pid);
+
+    if (!track(tgid))
+        return 0;
+
+    mux_acct_end(&pending, &samples, &to_update);
+    bpf_printk("[core_sys_select] exit %u", get_pid(tgid_pid));
+
+    return 0;
+}
