@@ -166,3 +166,7 @@ fn read_batch<K, V>(map_fd: RawFd, keys: &mut Vec<K>, values: &mut Vec<V>) -> us
     }
     total as usize
 }
+
+trait UpdateEnd<T> {
+    fn update_end(curr: u64, pending: T) -> u64;
+}
