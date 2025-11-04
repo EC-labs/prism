@@ -150,7 +150,6 @@ int BPF_PROG(fentry__epoll_wait, int epfd)
 
     struct eventpoll *ep = (struct eventpoll *) BPF_CORE_READ(f, private_data);
     mux_acct_start(&pending, tgid_pid, ep);
-    bpf_printk("[epoll_wait] enter %d %p", epfd, ep);
 
     return 0;
 }
@@ -165,7 +164,6 @@ int BPF_PROG(fexit__epoll_wait, int epfd)
         return 0;
 
     mux_acct_end(&pending, &samples, &to_update);
-    bpf_printk("[epoll_wait] exit %d", epfd);
 
     return 0;
 }
@@ -181,7 +179,6 @@ int BPF_PROG(do_sys_poll)
 
     struct eventpoll *ep = NULL;
     mux_acct_start(&pending, tgid_pid, ep);
-    bpf_printk("[do_sys_poll] enter %u", get_pid(tgid_pid));
     return 0;
 }
 
@@ -196,7 +193,6 @@ int BPF_PROG(do_sys_poll_exit)
         return 0;
 
     mux_acct_end(&pending, &samples, &to_update);
-    bpf_printk("[do_sys_poll] exit %u", get_pid(tgid_pid));
 
     return 0;
 }
@@ -212,7 +208,6 @@ int BPF_PROG(core_sys_select)
 
     struct eventpoll *ep = NULL;
     mux_acct_start(&pending, tgid_pid, ep);
-    bpf_printk("[core_sys_select] enter %u", get_pid(tgid_pid));
     return 0;
 }
 
@@ -226,7 +221,6 @@ int BPF_PROG(core_sys_select_exit)
         return 0;
 
     mux_acct_end(&pending, &samples, &to_update);
-    bpf_printk("[core_sys_select] exit %u", get_pid(tgid_pid));
 
     return 0;
 }
