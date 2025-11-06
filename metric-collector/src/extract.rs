@@ -135,6 +135,13 @@ impl Extractor {
         let conn = Connection::open(&*config.prism_store)?;
         unsafe { seteuid(euid) };
 
+        if Err(e) = std::fs::write("/proc/sys/kernel/sched_schedstats", b"1") {
+            warn!("Could not enable sched_schedstats");
+        }
+        if Err(e) = std::fs::write("/proc/sys/kernel/task_delayacct", b"1") {
+            warn!("Could not enable task_delayacct");
+        }
+
         Self::insert_linux_consts(&conn)?;
         Ok(Self {
             conn,
