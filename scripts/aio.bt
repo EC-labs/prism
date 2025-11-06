@@ -1,0 +1,40 @@
+
+tracepoint:syscalls:sys_enter_io_submit
+/ pid == $1 /
+{
+    @in_submit[tid] = 1
+}
+
+tracepoint:syscalls:sys_exit_io_submit
+/ pid == $1 /
+{
+    delete(@in_submit[tid])
+}
+
+fexit:vmlinux:lookup_ioctx
+/ pid == $1 /
+{
+    if (!@in_submit[tid]) {
+        return;
+    }
+
+    printf("submit: %d %-15s %p\n", tid, comm, retval);
+}
+
+fentry:vmlinux:read_events
+/ pid == $1 /
+{
+    @pending[tid] = nsecs;
+}
+
+fexit:vmlinux:read_events
+/ pid == $1 /
+{
+    if (!@pending[tid]) {
+        return;
+    }
+
+    $diff = nsecs - @pending[tid];
+    printf("getevt: %d %-15s %p %lld\n", tid, comm, args->ctx, $diff);
+    delete(@pending[tid])
+}
