@@ -20,6 +20,7 @@ struct granularity {
 	__u32 tgid;
     __u32 pid;
 	void *aioctx;
+    __u8 op;
 };
 
 struct stats {

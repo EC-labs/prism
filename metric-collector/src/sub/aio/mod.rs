@@ -1,11 +1,11 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     MapCore, OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
-use log::debug;
+use log::{debug, error};
 use std::{
     collections::HashMap,
     ffi::c_void,
@@ -100,8 +100,9 @@ impl UpdateEnd<&to_update_value> for &to_update_value {
 pub struct Aio<'conn, 'obj> {
     skel: AioSkel<'obj>,
     machine_id: u32,
-    aio_getevts_appender: Appender<'conn>,
+    aio_getevents_appender: Appender<'conn>,
     aio_staging_appender: Appender<'conn>,
+    aio_submit_appender: Appender<'conn>,
     conn: &'conn Connection,
     updated: HashMap<UpdatedKey, u64>,
 }
@@ -123,13 +124,15 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
         skel.attach()?;
 
         Self::init_store(conn)?;
-        let aio_getevts_appender = conn.appender("aio_getevts")?;
+        let aio_getevents_appender = conn.appender("aio_getevents")?;
         let aio_staging_appender = conn.appender("aio_staging")?;
+        let aio_submit_appender = conn.appender("aio_submit")?;
         Ok(Aio {
             machine_id,
             skel,
-            aio_getevts_appender,
+            aio_getevents_appender,
             aio_staging_appender,
+            aio_submit_appender,
             conn,
             updated: HashMap::new(),
         })
@@ -138,7 +141,7 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
     fn init_store(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             r"
-                CREATE OR REPLACE TABLE aio_getevts (
+                CREATE OR REPLACE TABLE aio_getevents (
                     machine_id UINTEGER,
                     ts_s TIMESTAMP,
                     pid UINTEGER,
@@ -155,6 +158,15 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
                     tid UINTEGER,
                     aioctx UBIGINT,
                     additional_time UBIGINT,
+                );
+
+                CREATE OR REPLACE TABLE aio_submit (
+                    machine_id UINTEGER,
+                    ts_s TIMESTAMP,
+                    pid UINTEGER,
+                    tid UINTEGER,
+                    aioctx UBIGINT,
+                    total_requests UBIGINT,
                 );
             ",
         )?;
@@ -173,15 +185,29 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
         debug!("Store {} records", records.len());
         for (granularity, stats) in records {
             let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
-            self.aio_getevts_appender.append_row([
-                &self.machine_id as &dyn ToSql,
-                &Duration::from_nanos(ts_s),
-                &granularity.tgid,
-                &granularity.pid,
-                &(granularity.aioctx as u64),
-                &stats.total_time,
-                &stats.total_requests,
-            ])?;
+            match granularity.op as u32 {
+                super::consts::AIO_GETEVENTS => self.aio_getevents_appender.append_row([
+                    &self.machine_id as &dyn ToSql,
+                    &Duration::from_nanos(ts_s),
+                    &granularity.tgid,
+                    &granularity.pid,
+                    &(granularity.aioctx as u64),
+                    &stats.total_time,
+                    &stats.total_requests,
+                ])?,
+                super::consts::AIO_SUBMIT => self.aio_submit_appender.append_row([
+                    &self.machine_id as &dyn ToSql,
+                    &Duration::from_nanos(ts_s),
+                    &granularity.tgid,
+                    &granularity.pid,
+                    &(granularity.aioctx as u64),
+                    &stats.total_requests,
+                ])?,
+                op => {
+                    error!("unknown aio op code: `{}`", op);
+                    bail!("unknown aio op code `{}`", op);
+                }
+            }
         }
 
         Ok(())
@@ -279,7 +305,7 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
         self.conn.execute_batch(
             r"
             UPDATE 
-                aio_getevts as t
+                aio_getevents as t
             SET 
                 total_time = total_time + additional_time
             FROM 
@@ -291,11 +317,11 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
                 AND t.tid = s.tid
                 AND t.aioctx = s.aioctx;
 
-            INSERT INTO aio_getevts (machine_id, ts_s, pid, tid, aioctx, total_time)
+            INSERT INTO aio_getevents (machine_id, ts_s, pid, tid, aioctx, total_time)
                 SELECT 
                     s.*
                 FROM aio_staging as s
-                LEFT JOIN aio_getevts as t
+                LEFT JOIN aio_getevents as t
                     USING (machine_id, ts_s, pid, tid, aioctx)
                 WHERE 
                     t.ts_s IS NULL;
@@ -311,7 +337,7 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
         unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts as *mut timespec) };
         let (keys, values) = super::replace_samples(&self.skel.maps.samples, &ts);
         self.store_samples(keys.iter().zip(values.iter()))?;
-        self.aio_getevts_appender.flush();
+        self.aio_getevents_appender.flush();
 
         let mut pending_records = Vec::new();
         let (mut pending_keys, mut pending_values) = (Vec::new(), Vec::new());
