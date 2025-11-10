@@ -6,7 +6,7 @@ use std::{env, fs};
 
 use libbpf_cargo::SkeletonBuilder;
 
-const SUBS: [&str; 7] = [
+const SUBS: [&str; 8] = [
     "iowait",
     "vfs",
     "futex",
@@ -15,6 +15,7 @@ const SUBS: [&str; 7] = [
     "mux",
     "taskstats",
     "discovery",
+    "aio",
 ];
 
 fn generate_linux_header_bindings(cargo_manifest_dir: &Path) -> Result<()> {
