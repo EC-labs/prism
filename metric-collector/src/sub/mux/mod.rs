@@ -24,7 +24,8 @@ mod mux_skel {
     ));
 }
 use mux_skel::types::{
-    granularity, inflight_key, inflight_value, stats, to_update_key, to_update_value,
+    file_granularity, file_stats, granularity, inflight_key, inflight_value, stats, to_update_key,
+    to_update_value,
 };
 use mux_skel::*;
 
@@ -120,6 +121,7 @@ pub struct Muxio<'obj, 'conn> {
     conn: &'conn Connection,
     muxio_appender: Appender<'conn>,
     muxio_staging_appender: Appender<'conn>,
+    muxio_file_appender: Appender<'conn>,
     updated: HashMap<UpdatedKey, u64>,
     machine_id: u32,
 }
@@ -128,6 +130,7 @@ impl<'obj, 'conn> Muxio<'obj, 'conn> {
     pub fn new(
         open_object: &'obj mut MaybeUninit<OpenObject>,
         pid_map: BorrowedFd,
+        pid_rb: BorrowedFd,
         conn: &'conn Connection,
         machine_id: u32,
     ) -> Result<Self> {
@@ -135,19 +138,23 @@ impl<'obj, 'conn> Muxio<'obj, 'conn> {
 
         let mut open_skel = skel_builder.open(open_object)?;
         open_skel.maps.pids.reuse_fd(pid_map)?;
+        open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
 
         let mut skel = open_skel.load()?;
         super::samples_init::<granularity, stats>(&skel.maps.samples)?;
+        super::samples_init::<file_granularity, file_stats>(&skel.maps.file_samples)?;
         skel.attach()?;
 
         Self::init_store(conn)?;
         let muxio_appender = conn.appender("muxio_wait")?;
         let muxio_staging_appender = conn.appender("muxio_staging")?;
+        let muxio_file_appender = conn.appender("muxio_file")?;
         Ok(Self {
             skel,
             conn,
             muxio_appender,
             muxio_staging_appender,
+            muxio_file_appender,
             machine_id,
             updated: HashMap::new(),
         })
@@ -175,6 +182,24 @@ impl<'obj, 'conn> Muxio<'obj, 'conn> {
                     is_epoll BOOLEAN,
                     poll_id UBIGINT,
                     additional_time UBIGINT,
+                );
+
+                CREATE OR REPLACE TABLE muxio_file (
+                    machine_id UINTEGER,
+                    ts_s TIMESTAMP,
+                    poll_id UBIGINT,
+                    fs_magic UINTEGER,
+                    device_id UINTEGER,
+                    inode_id UBIGINT,
+                    mode UTINYINT,
+                    hist0 UINTEGER,
+                    hist1 UINTEGER,
+                    hist2 UINTEGER,
+                    hist3 UINTEGER,
+                    hist4 UINTEGER,
+                    hist5 UINTEGER,
+                    hist6 UINTEGER,
+                    hist7 UINTEGER,
                 );
             ",
         )?;
@@ -336,9 +361,48 @@ impl<'obj, 'conn> Muxio<'obj, 'conn> {
         Ok(())
     }
 
+    fn store_file_samples<
+        'a,
+        I: ExactSizeIterator<Item = (&'a file_granularity, &'a file_stats)>,
+    >(
+        &mut self,
+        records: I,
+    ) -> Result<()> {
+        let nrecords = records.len();
+        if nrecords == 0 {
+            return Ok(());
+        }
+
+        debug!("Store {} records", records.len());
+        for (granularity, stats) in records {
+            let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
+            self.muxio_file_appender.append_row([
+                &self.machine_id as &dyn ToSql,
+                &Duration::from_nanos(ts_s),
+                &granularity.id,
+                &granularity.bri.fs_magic,
+                &granularity.bri.i_rdev,
+                &granularity.bri.i_ino,
+                &granularity.mode,
+                &stats.hist[0],
+                &stats.hist[1],
+                &stats.hist[2],
+                &stats.hist[3],
+                &stats.hist[4],
+                &stats.hist[5],
+                &stats.hist[6],
+                &stats.hist[7],
+            ])?;
+        }
+
+        Ok(())
+    }
+
     pub fn sample(&mut self) -> Result<()> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts as *mut timespec) };
+
+        // thread mux samples
         let (keys, values) = super::replace_samples(&self.skel.maps.samples, &ts);
         self.store_samples(keys.iter().zip(values.iter()))?;
         self.muxio_appender.flush();
@@ -374,6 +438,11 @@ impl<'obj, 'conn> Muxio<'obj, 'conn> {
 
         self.upsert_pending()?;
         self.remove_updated_entries(to_update_keys.iter().zip(to_update_values.iter()))?;
+
+        // thread mux samples
+        let (keys, values) = super::replace_samples(&self.skel.maps.file_samples, &ts);
+        self.store_file_samples(keys.iter().zip(values.iter()))?;
+        self.muxio_file_appender.flush();
 
         Ok(())
     }

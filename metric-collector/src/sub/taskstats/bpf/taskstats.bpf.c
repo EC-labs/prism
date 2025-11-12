@@ -85,7 +85,6 @@ SEC("tp_btf/sched_process_fork")
 int sched_process_fork(u64 *ctx)
 {
     // https://elixir.bootlin.com/linux/v5.13/source/include/trace/events/sched.h#L371
-    //
     u64 tgid_pid = bpf_get_current_pid_tgid();
     u32 tgid = get_tgid(tgid_pid);
     if (!track(tgid)) 
@@ -93,8 +92,9 @@ int sched_process_fork(u64 *ctx)
 
     struct task_struct *child = (struct task_struct *) ctx[1];
     u32 child_tgid = BPF_CORE_READ(child, tgid);
-    if (child_tgid != tgid)
-        discover_tgid(&pids, &pid_rb, child_tgid);
+    if ((child_tgid != tgid) && (!discover_tgid(&pids, &pid_rb, child_tgid))) {
+        bpf_printk("[fork] discovered tgid: %u parent %u", child_tgid, tgid);
+    }
     struct task_delay_acct stats = get_taskstats(child);
     bpf_ringbuf_output(&taskstats_rb, &stats, sizeof(stats), 0);
     return 0;

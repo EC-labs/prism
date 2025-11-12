@@ -6,6 +6,28 @@ struct to_update_key;
 struct granularity;
 struct stats;
 
+struct vfs_bri {
+	__u32 fs_magic;
+	__u32 i_rdev;
+	__u64 i_ino;
+};
+
+struct file_wake_ts_key {
+    struct vfs_bri  bri;
+    __u64           id;
+    __u8            mode;
+};
+
+struct file_granularity {
+    struct vfs_bri  bri;
+    __u64           id;
+    __u8            mode;
+};
+
+struct file_stats {
+	__u64 ts_s;
+	__u32 hist[8];
+};
 
 struct inflight_key {
 	__u64 tgid_pid;

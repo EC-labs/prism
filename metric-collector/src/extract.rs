@@ -298,6 +298,7 @@ impl Extractor {
         let mut muxio = Muxio::new(
             &mut muxio_open_object,
             pid_map.as_fd(),
+            pid_rb.as_fd(),
             conn,
             self.config.machine_id,
         )

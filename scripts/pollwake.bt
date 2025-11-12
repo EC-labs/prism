@@ -1,0 +1,45 @@
+fentry:vmlinux:pollwake
+/ pid == $1 /
+{
+    
+    printf("[%-30s] %-15s %d\n", probe, comm, tid);
+}
+
+fentry:vmlinux:__pollwait
+/ pid == $1 /
+{
+    $inode = args->filp->f_inode;
+    $i_id = $inode->i_ino;
+    $s_dev = $inode->i_sb->s_dev;
+    $fs_id = $inode->i_sb->s_id;
+    @[$fs_id, $s_dev, $i_id] = 1;
+
+    // printf("[%-30s] %-15s %d %p\n", probe, comm, tid, args->p->_qproc);
+}
+
+fentry:vmlinux:pipe_poll
+/ pid == $1 /
+{
+    printf("[%-30s] %-15s %d %p\n", probe, comm, tid, args->wait->_qproc);
+    print(kstack)
+}
+
+fexit:vmlinux:pipe_poll
+/ pid == $1 /
+{
+    printf("[%-30s] %-15s %d %d\n", probe, comm, tid, retval);
+}
+
+fentry:vmlinux:poll_initwait
+// fentry:vmlinux:poll_freewait
+/ pid == $1 /
+{
+    printf("[%-30s] %-15s %d %p\n", probe, comm, tid, args->pwq->pt._qproc);
+    print(kstack);
+}
+
+fentry:vmlinux:do_sys_poll
+/ pid == $1 /
+{
+    printf("[%-30s] %-15s %d\n", probe, comm, tid);
+}

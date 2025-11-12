@@ -72,7 +72,7 @@ main(int argc, char *argv[])
             pollFd[j].events = POLLIN;
         }
 
-        ready = poll(pollFd, numPipes, 0);
+        ready = poll(pollFd, numPipes, 10);
         if (ready == -1)
             errExit("poll");
 
