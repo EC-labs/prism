@@ -25,7 +25,8 @@ mod aio_skel {
 }
 
 use aio_skel::types::{
-    granularity, inflight_key, inflight_value, stats, to_update_key, to_update_value,
+    file_granularity, file_stats, granularity, inflight_key, inflight_value, stats, to_update_key,
+    to_update_value,
 };
 use aio_skel::*;
 
@@ -103,6 +104,7 @@ pub struct Aio<'conn, 'obj> {
     aio_getevents_appender: Appender<'conn>,
     aio_staging_appender: Appender<'conn>,
     aio_submit_appender: Appender<'conn>,
+    aio_file_appender: Appender<'conn>,
     conn: &'conn Connection,
     updated: HashMap<UpdatedKey, u64>,
 }
@@ -121,18 +123,21 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
 
         let mut skel = open_skel.load()?;
         super::samples_init::<granularity, stats>(&skel.maps.samples)?;
+        super::samples_init::<file_granularity, file_stats>(&skel.maps.file_samples)?;
         skel.attach()?;
 
         Self::init_store(conn)?;
         let aio_getevents_appender = conn.appender("aio_getevents")?;
         let aio_staging_appender = conn.appender("aio_staging")?;
         let aio_submit_appender = conn.appender("aio_submit")?;
+        let aio_file_appender = conn.appender("aio_file")?;
         Ok(Aio {
             machine_id,
             skel,
             aio_getevents_appender,
             aio_staging_appender,
             aio_submit_appender,
+            aio_file_appender,
             conn,
             updated: HashMap::new(),
         })
@@ -167,6 +172,27 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
                     tid UINTEGER,
                     aioctx UBIGINT,
                     total_requests UBIGINT,
+                );
+
+                CREATE OR REPLACE TABLE aio_file (
+                    machine_id UINTEGER,
+                    ts_s TIMESTAMP,
+                    aioctx UBIGINT,
+                    isreg UTINYINT,
+                    fs_magic UINTEGER,
+                    device_id UINTEGER,
+                    inode_id UBIGINT,
+                    part0 UBIGINT,
+                    bdev UBIGINT,
+                    mode UTINYINT,
+                    hist0 UINTEGER,
+                    hist1 UINTEGER,
+                    hist2 UINTEGER,
+                    hist3 UINTEGER,
+                    hist4 UINTEGER,
+                    hist5 UINTEGER,
+                    hist6 UINTEGER,
+                    hist7 UINTEGER,
                 );
             ",
         )?;
@@ -332,6 +358,76 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
         Ok(())
     }
 
+    fn store_file_samples<
+        'a,
+        I: ExactSizeIterator<Item = (&'a file_granularity, &'a file_stats)>,
+    >(
+        &mut self,
+        records: I,
+    ) -> Result<()> {
+        let nrecords = records.len();
+        if nrecords == 0 {
+            return Ok(());
+        }
+
+        debug!("Store {} file samples", records.len());
+        for (granularity, stats) in records {
+            let ts_s = crate::extract::boot_to_epoch(stats.ts_s * 1_000_000_000);
+            match granularity.isreg as u32 {
+                0 => unsafe {
+                    self.aio_file_appender.append_row([
+                        &self.machine_id as &dyn ToSql,
+                        &Duration::from_nanos(ts_s),
+                        &granularity.aioctx,
+                        &(0 as u8),
+                        &granularity.__anon_34.bri.fs_magic,
+                        &granularity.__anon_34.bri.i_rdev,
+                        &granularity.__anon_34.bri.i_ino,
+                        &None::<u64>,
+                        &None::<u64>,
+                        &granularity.mode,
+                        &stats.hist[0],
+                        &stats.hist[1],
+                        &stats.hist[2],
+                        &stats.hist[3],
+                        &stats.hist[4],
+                        &stats.hist[5],
+                        &stats.hist[6],
+                        &stats.hist[7],
+                    ])?
+                },
+                1 => unsafe {
+                    self.aio_file_appender.append_row([
+                        &self.machine_id as &dyn ToSql,
+                        &Duration::from_nanos(ts_s),
+                        &granularity.aioctx,
+                        &(1 as u8),
+                        &None::<u32>,
+                        &None::<u32>,
+                        &None::<u64>,
+                        &granularity.__anon_34.bdev.part0,
+                        &granularity.__anon_34.bdev.dev,
+                        &granularity.mode,
+                        &stats.hist[0],
+                        &stats.hist[1],
+                        &stats.hist[2],
+                        &stats.hist[3],
+                        &stats.hist[4],
+                        &stats.hist[5],
+                        &stats.hist[6],
+                        &stats.hist[7],
+                    ])?
+                },
+                op => {
+                    error!("unknown aio_file op code: `{}`", op);
+                    bail!("unknown aio_file op code `{}`", op);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn sample(&mut self) -> Result<()> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts as *mut timespec) };
@@ -384,6 +480,10 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
 
         self.upsert_pending()?;
         self.remove_updated_entries(to_update_keys.iter().zip(to_update_values.iter()))?;
+
+        let (keys, values) = super::replace_samples(&self.skel.maps.file_samples, &ts);
+        self.store_file_samples(keys.iter().zip(values.iter()))?;
+        self.aio_file_appender.flush();
 
         Ok(())
     }

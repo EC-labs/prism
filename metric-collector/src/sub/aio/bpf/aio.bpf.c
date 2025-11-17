@@ -35,6 +35,31 @@ struct {
     __type(value, bool);
 } pids SEC(".maps");
 
+// File aio accounting
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, PENDING_MAX_ENTRIES);
+    __type(key, struct kiocb *); // req
+    __type(value, struct file_prep_value);          // ts
+} file_prep_ts SEC(".maps");
+
+struct file_inner {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, SAMPLE_MAX_ENTRIES);
+    __type(key, struct file_granularity);
+    __type(value, struct file_stats);
+} file_completed SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
+    __uint(max_entries, SAMPLES);
+    __uint(key_size, sizeof(u64));
+    __array(values, struct file_inner);
+} file_samples SEC(".maps");
+
+// Thread aio accounting
+
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, PENDING_MAX_ENTRIES);
@@ -75,6 +100,15 @@ __always_inline bool track(u32 tgid)
 {
     bool *pidp = bpf_map_lookup_elem(&pids, &tgid);
     return pidp ? true : false;
+}
+
+__always_inline static struct vfs_bri inode_to_vfs_bri(struct inode *f_inode) 
+{
+    struct vfs_bri file = {0};
+    file.i_ino = BPF_CORE_READ(f_inode, i_ino);
+    file.i_rdev = BPF_CORE_READ(f_inode, i_rdev);
+    file.fs_magic = BPF_CORE_READ(f_inode, i_sb, s_magic);
+    return file;
 }
 
 __always_inline static void aio_acct_start(void *pending_map, u64 tgid_pid, struct kioctx *aioctx) 
@@ -141,6 +175,49 @@ __always_inline static int aio_acct_end(void *pending_map, void *samples, void *
     to_update_acct(to_update_map, value->ts, ts, gran);
     
     bpf_map_delete_elem(pending_map, &tgid_pid);
+    return 0;
+}
+
+__always_inline static int file_acct(void *file_samples_map, struct inode *f_inode, struct file_prep_value *prep_value, u64 aioctx) 
+{
+    u64 ts = bpf_ktime_get_boot_ns();
+
+    u64 sample = (ts / 1000000000) % SAMPLES;
+    void *inner = bpf_map_lookup_elem(file_samples_map, &sample);
+    if (!inner)
+        return 0;
+
+    struct file_granularity gran = {0};
+    gran.aioctx = aioctx;
+    gran.mode   = prep_value->mode;
+
+    umode_t i_mode = BPF_CORE_READ(f_inode, i_mode);
+    if (((i_mode & S_IFMT) == S_IFREG) || ((i_mode & S_IFMT) == S_IFBLK)) {
+        gran.isreg = 1;
+        gran.bdev.part0 = BPF_CORE_READ(f_inode, i_sb, s_bdev, bd_disk, part0, bd_dev);
+        gran.bdev.dev = BPF_CORE_READ(f_inode, i_sb, s_bdev, bd_dev);
+    } else {
+        struct vfs_bri bri = inode_to_vfs_bri(f_inode);
+        gran.isreg = 0;
+        gran.bri = bri;
+    }
+
+
+    struct file_stats *stat = bpf_map_lookup_elem(inner, &gran);
+    if (!stat) {
+        struct file_stats init = {0};
+        init.ts_s = ts / 1000000000;
+        bpf_map_update_elem(inner, &gran, &init, BPF_ANY);
+
+        stat = bpf_map_lookup_elem(inner, &gran);
+        if (!stat) {
+            return 0;
+        }
+    }
+
+    __u64 ns_latency = ts - prep_value->ts;
+    __u32 bucket = log_base10_bucket(ns_latency);
+    __sync_fetch_and_add(stat->hist + bucket, 1);
     return 0;
 }
 
@@ -244,5 +321,36 @@ int BPF_PROG(fexit__lookup_ioctx, aio_context_t ctx_id, struct kioctx *aioctx)
 
     __sync_fetch_and_add(&stat->total_requests, 1);
 
+    return 0;
+}
+
+// AIO file stats tracepoints
+
+SEC("fentry/aio_prep_rw")
+int BPF_PROG(fentry__aio_prep_rw, struct kiocb *req, void *iocb, int rw_type) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    if (!track(get_tgid(tgid_pid)))
+        return 0;
+
+    struct file_prep_value v = {0};
+    v.ts = bpf_ktime_get_boot_ns();
+    v.mode = (u8) rw_type;
+    bpf_map_update_elem(&file_prep_ts, &req, &v, BPF_NOEXIST);
+    return 0;
+}
+
+SEC("fexit/aio_complete_rw")
+int BPF_PROG(fexit__aio_complete_rw, struct kiocb *req) 
+{
+    struct file_prep_value *prep_value = bpf_map_lookup_elem(&file_prep_ts, &req);
+    if (!prep_value)
+        return 0;
+
+    struct aio_kiocb *aio_req = container_of(req, struct aio_kiocb, rw);
+    struct inode *f_inode = BPF_CORE_READ(req, ki_filp, f_inode);
+    u64 aioctx = (u64) BPF_CORE_READ(aio_req, ki_ctx);
+    file_acct(&file_samples, f_inode, prep_value, aioctx);
+    bpf_map_delete_elem(&file_prep_ts, &req);
     return 0;
 }

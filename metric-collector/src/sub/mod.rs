@@ -15,7 +15,7 @@ pub mod discovery;
 pub mod futex;
 pub mod iowait;
 pub mod mux;
-pub mod muxio;
+// pub mod muxio;
 pub mod net;
 pub mod process_context;
 pub mod taskstats;
