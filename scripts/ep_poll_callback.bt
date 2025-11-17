@@ -1,0 +1,40 @@
+fentry:vmlinux:ep_poll_callback
+{
+    @depth[tid] = @depth[tid] + 1;
+    if (@depth[tid] > 1) {
+        printf("%u %u\n", pid, tid);
+        print(kstack);
+    }
+}
+
+fexit:vmlinux:ep_poll_callback
+{
+    // This condition can only be true if when initializing 
+    // we don't capture fentry ep_poll_callback, but capture the fexit
+    if (!@depth[tid]) {
+        return;
+    }
+
+    if (@track[tid]) {
+        printf("%u-%u wakes %u; depth: %u\n", pid, tid, $1, @depth[tid]);
+    }
+
+    @depth[tid] = @depth[tid] - 1;
+    if (@depth[tid]) {
+        return;
+    }
+
+    delete(@depth, tid);
+    if (@track[tid]) {
+        delete(@track, tid);
+    }
+}
+
+fentry:vmlinux:ep_autoremove_wake_function
+{
+    $polling_task = (struct task_struct *) args->wq_entry->private;
+    $tgid = (uint64) $polling_task->tgid;
+    if ($tgid == $1) {
+        @track[tid] = 1;
+    }
+}

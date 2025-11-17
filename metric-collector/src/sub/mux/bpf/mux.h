@@ -58,4 +58,11 @@ struct to_update_key {
 struct to_update_value {
     __u64 additional_time;
 };
+
+struct ep_callback_depth_value {
+    __u32 depth;
+    __u8  track;
+};
+
+
 #endif /* _MUX_H */

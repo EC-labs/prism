@@ -23,6 +23,14 @@ struct {
 	__uint(max_entries, sizeof(u32) * MAX_ENTRIES);
 } pid_rb SEC(".maps");
 
+// ep_poll_callback file accounting
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, PENDING_MAX_ENTRIES);
+    __type(key, u64); // tid
+    __type(value, struct ep_callback_depth_value);
+} ep_callback_depth SEC(".maps");
+
 // File muxio accounting
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
@@ -297,7 +305,7 @@ __always_inline static struct vfs_bri inode_to_vfs_bri(struct inode *f_inode)
 }
 
 SEC("fentry/pollwake")
-int BPF_PROG(fentry__pollwake, wait_queue_entry_t *wait, unsigned mode) 
+int BPF_PROG(fentry__pollwake, wait_queue_entry_t *wait, unsigned mode, void *pollkey) 
 {
     struct poll_wqueues *pwq = (struct poll_wqueues *) BPF_CORE_READ(wait, private);
     struct task_struct *polling_task = BPF_CORE_READ(pwq, polling_task);
@@ -322,8 +330,13 @@ int BPF_PROG(fentry__pollwake, wait_queue_entry_t *wait, unsigned mode)
     }
 
     struct file_wake_ts_key key = {0};
+    u64 pollflags = (u64) pollkey;
+    u64 mask = pollflags & BPF_CORE_READ(entry, key);
+    if (!mask)
+        return 0;
+
     key.bri = bri;
-    key.mode = mode & POLLIN_SET ? 0 : 1;
+    key.mode = (mask & POLLIN_SET) ? 0 : 1;
     key.id = ((u64) BPF_CORE_READ(polling_task, tgid)) << 32 | BPF_CORE_READ(polling_task, pid);
 
     u64 ts = bpf_ktime_get_boot_ns();
@@ -332,3 +345,109 @@ int BPF_PROG(fentry__pollwake, wait_queue_entry_t *wait, unsigned mode)
 
     return 0;
 }
+
+// EPOLL FILE TRACKING
+//
+// The following probes track an epoll's file stats. For each file awaited for
+// by an event poll backing resource identifier, we measure the time difference 
+// since the last time it awakened a target thread waiting for an event poll
+// resource.
+//
+// With this in mind, ep_poll_callback alone informs us on the file and the 
+// events awakening an event poll resource. However, to avoid adding another map
+// that serves as a boolean tracker (whether to track an event poll resource), we
+// also trace the `ep_autoremove_wake_function`. This is the method that in the 
+// end will wake the target process, and therefore has information on the pid of
+// the process sleeping on an event poll BRI, which we can use to determine 
+// whether its tgid is to be tracked or not from our target process list.
+
+SEC("fentry/ep_poll_callback")
+int BPF_PROG(fentry__ep_poll_callback) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    struct ep_callback_depth_value *v = bpf_map_lookup_elem(&ep_callback_depth, &tgid_pid);
+    if (!v) {
+        struct ep_callback_depth_value init = {0};
+        bpf_map_update_elem(&ep_callback_depth, &tgid_pid, &init, BPF_NOEXIST);
+        v = bpf_map_lookup_elem(&ep_callback_depth, &tgid_pid);
+        if (!v) {
+            bpf_printk("error initializing ep_callback_depth for %u", get_pid(tgid_pid));
+            return 0;
+        }
+    }
+    v->depth += 1;
+}
+
+SEC("fexit/ep_poll_callback")
+int BPF_PROG(fexit__ep_poll_callback, wait_queue_entry_t *wait, unsigned mode, void *pollkey) 
+{
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    struct ep_callback_depth_value *v = bpf_map_lookup_elem(&ep_callback_depth, &tgid_pid);
+
+    // This should only be able to happen in the initialisation if the 
+    // ep_poll_callback entry probe was not triggered, but the exit probe was
+    if (!v) 
+        return 0;
+
+    u8 collect = v->track;
+    if ((v->depth--) == 0) 
+        bpf_map_delete_elem(&ep_callback_depth, &tgid_pid);
+
+    struct epitem *epi = BPF_CORE_READ(container_of(wait, struct eppoll_entry, wait), base);
+    u64 events = BPF_CORE_READ(epi, event.events);
+    u64 pollflags = (u64) pollkey;
+    u64 mask = pollflags & events;
+    if (!collect || !mask)
+        return 0;
+
+    struct inode *f_inode = BPF_CORE_READ(epi, ffd.file, f_inode);
+    struct vfs_bri bri = inode_to_vfs_bri(f_inode);
+    struct file_wake_ts_key key = {0};
+    key.bri = bri;
+    key.mode = (mask & POLLIN_SET) ? 0 : 1;
+    key.id = (u64) BPF_CORE_READ(epi, ep);
+
+    u64 ts = bpf_ktime_get_boot_ns();
+    file_acct(&file_samples, &file_wake_ts, &key, ts);
+    bpf_map_update_elem(&file_wake_ts, &key, &ts, BPF_ANY);
+
+    return 0;
+}
+
+SEC("fentry/ep_autoremove_wake_function")
+int BPF_PROG(fentry__ep_autoremove_wake_function, wait_queue_entry_t *wq_entry) 
+{
+    struct task_struct *polling_task = BPF_CORE_READ(wq_entry, private);
+    if (!polling_task) {
+        return 0;
+    }
+
+    u32 polling_tgid = BPF_CORE_READ(polling_task, tgid);
+    void *p = bpf_map_lookup_elem(&pids, &polling_tgid);
+    if (!p) 
+        return 0;
+
+    u64 tgid_pid = bpf_get_current_pid_tgid();
+    struct ep_callback_depth_value *v = bpf_map_lookup_elem(&ep_callback_depth, &tgid_pid);
+    if (!v)
+        return 0;
+
+    v->track = 1;
+    u32 tgid = get_tgid(tgid_pid);
+    if (!discover_tgid(&pids, &pid_rb, tgid)) {
+        bpf_printk("[mux] epoll discovered tgid: %u", tgid);
+    }
+    return 0;
+}
+
+
+// SEC("fentry/do_epoll_ctl")
+// int BPF_PROG(fentry__do_epoll_ctl, int epfd, int op, int fd, struct epoll_event *epds) 
+// {
+//     u64 tgid_pid = bpf_get_current_pid_tgid();
+//     u64 events = BPF_CORE_READ(epds, events);
+//     if ((events & POLLIN_SET) == 0) {
+//         bpf_printk("POLLOUT_SET %u", get_tgid(tgid_pid));
+//     }
+//     return 0;
+// }
