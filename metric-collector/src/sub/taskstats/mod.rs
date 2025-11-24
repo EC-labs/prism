@@ -158,6 +158,12 @@ impl<'conn> TaskStatsIter<'conn> {
 
     pub fn sample(&mut self) -> Result<()> {
         while let Ok((pid, link)) = self.link_rx.try_recv() {
+            // We need to exclude pid 0 from our links map since its Link essentially traverses
+            // all tasks in the system
+            if pid == 0 {
+                continue;
+            }
+
             self.links.entry(pid).or_insert_with(|| {
                 info!("discovered {pid}");
                 self.pid_bus.broadcast(pid);
