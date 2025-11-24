@@ -45,33 +45,29 @@ if st.session_state.query_result is not None:
     with st.container():
         config_col1, config_col2 = st.columns(2)
         with config_col1:
-            x_axis_line = st.selectbox(
+            x_axis = st.selectbox(
                 "X axis",
-                ["x1", "x2"],
+                st.session_state.query_result.columns,
                 index=None,
                 key="line_x_axis",
             )
         with config_col2:
-            y_axis_line = st.selectbox(
+            y_axis = st.selectbox(
                 "Y axis",
-                ["y1", "y2"],
+                st.session_state.query_result.columns,
                 index=None,
                 key="line_y_axis",
             )
 
-    if st.button("Create Line Graphs", type="primary"):
-        st.session_state.show_line_chart = True
-        print("show line chart", st.session_state.show_line_chart)
+        if st.button("Create Line Graphs", type="primary"):
+            st.session_state.show_line_chart = True
+            print("show line chart", st.session_state.show_line_chart)
+            st.session_state.line_chart_axis = {"x_axis": x_axis, "y_axis": y_axis}
 
 if st.session_state.show_line_chart == True:
-    df = pd.DataFrame(
-        {
-            "col1": list(range(20)) * 3,
-            "col2": rng(0).standard_normal(60),
-            "col3": ["a"] * 20 + ["b"] * 20 + ["c"] * 20,
-        }
-    )
-    st.line_chart(df, x="col1", y="col2", color="col3")
+    if st.session_state.line_chart_axis is not None:
+        st.line_chart(st.session_state.query_result, x=st.session_state.line_chart_axis["x_axis"], 
+                      y=st.session_state.line_chart_axis["y_axis"])
 
 
 # content = st_monaco(value="# Hello world", height="600px", language="markdown")
