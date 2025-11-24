@@ -8,8 +8,8 @@ members = [
 
 exclude = [
     "misc", 
-    "benchmarks/kafka/scrape-experiment-producer", 
-    "benchmarks/dependencies/goose", 
-    "benchmarks/dependencies/solr-benchmark", 
-    "benchmarks/kafka/scrape-cc2023-producer"
+    "artifacts/paper-1/benchmarks/kafka/scrape-experiment-producer", 
+    "artifcats/paper-1/benchmarks/dependencies/goose", 
+    "artifcats/paper-1/benchmarks/dependencies/solr-benchmark", 
+    "artifcats/paper-1/benchmarks/kafka/scrape-cc2023-producer"
 ]
