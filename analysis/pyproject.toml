@@ -5,6 +5,7 @@ description = "Prism Performance Analysis Dashboard"
 requires-python = ">=3.12"
 dependencies = [
     "duckdb>=1.4.2",
+    "matplotlib>=3.10.7",
     "streamlit>=1.51.0",
     "streamlit-monaco>=0.1.3",
 ]
