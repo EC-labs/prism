@@ -1,0 +1,114 @@
+WITH 
+  pid_sock AS (
+    SELECT DISTINCT machine_id, pid, inode_id
+    FROM vfs 
+    LEFT JOIN linux_consts lc ON vfs.fs_magic = lc.value and lc.const_type = 'fs_magic'
+    WHERE lc.const_name = 'SOCKFS_MAGIC'
+  ),
+  unix_sock_map AS (
+    SELECT DISTINCT 
+        machine_id,
+        LEAST(sock1_inode_id, sock2_inode_id) sock1, 
+        GREATEST(sock1_inode_id, sock2_inode_id) sock2
+    FROM socket_map
+  ),
+  -- enhance socket map data with information on the pids interacting with the socket
+  unix_sock_pids AS (
+    SELECT DISTINCT
+      us.machine_id lmachine,
+      lusp.pid lpid,
+      us.sock1 lsock,
+      us.machine_id rmachine,
+      rusp.pid rpid,
+      us.sock2 rsock
+    FROM unix_sock_map us
+    LEFT JOIN pid_sock lusp -- left unix socket pid
+      ON us.machine_id = lusp.machine_id AND us.sock1 = lusp.inode_id
+    LEFT JOIN pid_sock rusp -- right unix socket pid
+      ON us.machine_id = rusp.machine_id AND us.sock2 = rusp.inode_id
+    WHERE lpid IS NOT NULL AND rpid IS NOT NULL
+  ),
+  -- get the number of unix connections between 2 pids
+  pid_map_unix_connections AS (
+    SELECT
+        CASE WHEN (lmachine, lpid) <= (rmachine, rpid) THEN lmachine ELSE rmachine END AS machine1,
+        CASE WHEN (lmachine, lpid) <= (rmachine, rpid) THEN lpid     ELSE rpid     END AS pid1,
+        CASE WHEN (lmachine, lpid) >  (rmachine, rpid) THEN lmachine ELSE rmachine END AS machine2,
+        CASE WHEN (lmachine, lpid) >  (rmachine, rpid) THEN lpid     ELSE rpid     END AS pid2,
+        COUNT(*) connections
+    FROM unix_sock_pids
+    GROUP BY 1,2,3,4
+  ),
+
+  tcp_sock_map AS (
+      SELECT DISTINCT
+        CASE WHEN (local_machine_id, local_inode_id) <= (remote_machine_id, remote_inode_id) THEN local_machine_id ELSE remote_machine_id END AS machine1,
+        CASE WHEN (local_machine_id, local_inode_id) <= (remote_machine_id, remote_inode_id) THEN local_inode_id   ELSE remote_inode_id   END AS sock1,
+        CASE WHEN (local_machine_id, local_inode_id) > (remote_machine_id, remote_inode_id)  THEN local_machine_id ELSE remote_machine_id END AS machine2,
+        CASE WHEN (local_machine_id, local_inode_id) > (remote_machine_id, remote_inode_id)  THEN local_inode_id   ELSE remote_inode_id   END AS sock2,
+      FROM tcp_discovery
+      WHERE remote_machine_id <> 0
+  ),
+  -- enhance tcp socket map data with information on the pids interacting with the socket
+  tcp_sock_pids AS (
+    SELECT 
+      ts.machine1 lmachine, pid1.pid lpid, ts.sock1, 
+      ts.machine2 rmachine, pid2.pid rpid, ts.sock2 
+    FROM tcp_sock_map ts
+    LEFT JOIN pid_sock pid1 ON ts.machine1 = pid1.machine_id and ts.sock1 = pid1.inode_id
+    LEFT JOIN pid_sock pid2 ON ts.machine2 = pid2.machine_id and ts.sock2 = pid2.inode_id
+  ),
+  -- get the number of tcp connections between 2 pids
+  pid_map_tcp_connections AS (
+    SELECT
+        CASE WHEN (lmachine, lpid) <= (rmachine, rpid) THEN lmachine ELSE rmachine END AS machine1,
+        CASE WHEN (lmachine, lpid) <= (rmachine, rpid) THEN lpid     ELSE rpid     END AS pid1,
+        CASE WHEN (lmachine, lpid) >  (rmachine, rpid) THEN lmachine ELSE rmachine END AS machine2,
+        CASE WHEN (lmachine, lpid) >  (rmachine, rpid) THEN lpid     ELSE rpid     END AS pid2,
+        COUNT(*) connections
+    FROM tcp_sock_pids
+    GROUP BY 1,2,3,4
+  ),
+  pid_connections AS (
+    SELECT *, 'tcp' as connection_type FROM pid_map_tcp_connections
+    UNION 
+    SELECT *, 'unix' as connection_type FROM pid_map_unix_connections
+  ),
+  service_context AS (
+    SELECT DISTINCT
+        COALESCE(k.pod_name, d.name, tv.comm) AS service_name,
+        pc.machine_id,
+        pc.pid, 
+        pc.exe
+    FROM process_context pc
+    LEFT JOIN docker d USING (machine_id, cgroup)
+    LEFT JOIN k8s k USING(machine_id, cgroup)
+    LEFT JOIN 
+        (SELECT DISTINCT machine_id, pid, tid, comm from taskstats_view where pid = tid) tv 
+        ON (pc.pid = tv.pid) and (pc.pid = tv.tid) and (pc.machine_id = tv.machine_id)
+  ),
+  -- pids that do not have any connections to other processes
+  unconnected_pids AS (
+    SELECT machine_id machine1, pid, NULL machine2, NULL pid2, NULL connections, NULL connection_type
+    FROM service_context sc
+    LEFT JOIN pid_connections pc ON (sc.machine_id = pc.machine1 AND sc.pid = pc.pid1) OR (sc.machine_id = pc.machine2 and sc.pid = pc.pid2)
+    WHERE pc.connections IS NULL
+  ),
+  -- tcp connections without successful discovery
+  missing_discovery AS (
+    SELECT 
+      ps.machine_id, 
+      ps.pid, 
+      ps.inode_id, 
+      si.dst_address, 
+      si.dst_port
+    FROM pid_sock ps
+    LEFT JOIN socket_context sc ON sc.machine_id = ps.machine_id and sc.inode_id = ps.inode_id
+    LEFT JOIN linux_consts proto -- socket protocol context
+      ON sc.protocol = proto.value AND proto.const_type = 'family_protocol'
+    LEFT JOIN tcp_sock_map tsm ON (ps.machine_id = tsm.machine1 AND ps.inode_id = tsm.sock1) OR (ps.machine_id = tsm.machine2 AND ps.inode_id = tsm.sock2)
+    LEFT JOIN socket_inet si ON si.machine_id = ps.machine_id and si.inode_id = ps.inode_id
+    WHERE 
+      proto.const_name = 'IPPROTO_TCP' AND tsm.machine1 IS NULL AND (si.dst_port <> 0)
+  )
+SELECT * FROM missing_discovery

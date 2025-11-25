@@ -20,11 +20,12 @@ if "init" not in st.session_state:
     st.session_state.query_result = None
     st.session_state.line_chart_axis = None
     st.session_state.show_line_chart = False
+    st.session_state.query = None
 
 st.session_state.init = True
 
-content = monaco_sql_editor(
-    value="SELECT ts, pid, tid, run_share FROM taskstats_view ORDER BY ts LIMIT 100;",
+st.session_state.query = monaco_sql_editor(
+    value=st.session_state.query if st.session_state.query is not None else "SELECT ts, pid, tid, run_share FROM taskstats_view ORDER BY ts LIMIT 100;",
     # schema=schema,
     height="150px",
     theme="vs-dark",
@@ -32,8 +33,7 @@ content = monaco_sql_editor(
 )
 
 if st.button("Run Query"):
-    print(content)
-    st.session_state.query_result = db.custom_query(content)
+    st.session_state.query_result = db.custom_query(st.session_state.query)
     st.session_state.show_line_chart = False
 
 if st.session_state.query_result is not None:

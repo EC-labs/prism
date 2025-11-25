@@ -14,7 +14,7 @@ class DatabaseClient:
         """Initialize the debugging database client."""
         self.conn = duckdb.connect(database=uri)
 
-    def custom_query(self, query):
+    def custom_query(self, query: str):
         """
         Execute a custom SQL query and return results as a DataFrame.
 
