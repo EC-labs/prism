@@ -69,10 +69,30 @@ WITH
     FROM tcp_sock_pids
     GROUP BY 1,2,3,4
   ),
+
+  pid_pipe AS (
+    SELECT DISTINCT vfs.machine_id, vfs.pid, vfs.inode_id, lcf.const_name as fs_magic_desc 
+    FROM vfs
+    LEFT JOIN linux_consts lcf ON lcf.const_type = 'fs_magic' AND lcf.value = vfs.fs_magic
+    WHERE fs_magic_desc = 'PIPEFS_MAGIC'
+    ORDER BY vfs.inode_id
+  ),
+  -- get the pids interacting via the same pipe
+  pid_map_pipe_connections AS (
+    SELECT lpp.machine_id machine1, lpp.pid pid1, rpp.machine_id machine2, rpp.pid pid2, COUNT(*) connections
+    FROM pid_pipe lpp
+    LEFT JOIN pid_pipe rpp 
+      ON lpp.machine_id = rpp.machine_id AND lpp.inode_id = rpp.inode_id AND lpp.pid <> rpp.pid
+    WHERE rpp.pid IS NOT NULL
+    GROUP BY 1, 2, 3, 4
+  ),
+
   pid_connections AS (
     SELECT *, 'tcp' as connection_type FROM pid_map_tcp_connections
     UNION 
     SELECT *, 'unix' as connection_type FROM pid_map_unix_connections
+    UNION
+    SELECT *, 'pipe' as connection_type FROM pid_map_pipe_connections
   ),
   service_context AS (
     SELECT DISTINCT
@@ -111,4 +131,5 @@ WITH
     WHERE 
       proto.const_name = 'IPPROTO_TCP' AND tsm.machine1 IS NULL AND (si.dst_port <> 0)
   )
+
 SELECT * FROM unconnected_pids
