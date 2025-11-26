@@ -23,7 +23,7 @@ def normalise_angle_degrees(degrees: float) -> float:
 def add_disconnected(graph: nx.Graph, disconnected: pd.DataFrame, pid: int):
     for _, row in disconnected.loc[disconnected["pid"] == pid, :].iterrows():
         machine, pid, service = row["machine_id"], row["pid"], row["service_name"]
-        graph.add_node(f"{service}\n({machine}:{pid})", machine=machine)
+        graph.add_node(f"{service}\n({machine}:{pid})", machine=machine, pid=pid, service=service)
 
 def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame):
     nodes_to_add, edges_to_add = [], []
@@ -33,7 +33,7 @@ def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame):
         for _, edge in missing_edges.iterrows():
             dst = edge["dst_address"]
             connections = edge["connections"]
-            nodes_to_add.append((dst, dict(machine=-1)))
+            nodes_to_add.append((dst, dict(machine=-1, pid=-1, service=-1)))
             edges_to_add.append((node, dst, dict(connections=connections)))
     graph.add_nodes_from(nodes_to_add)
     graph.add_edges_from(edges_to_add)
@@ -68,7 +68,7 @@ def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[i
                 queue.append((machine2, pid2))
     return graph
 
-def draw_network(graph: nx.Graph):
+def draw_network(graph: nx.Graph, bootstrap: int):
     machine_map = {}
     for node, attr in graph.nodes.data():
         machine_map[node] = attr["machine"]
@@ -149,8 +149,11 @@ def draw_network(graph: nx.Graph):
                 fontsize=10, fontweight='bold',
                 ha='center', va='center', color='white', bbox=dict(boxstyle=f"square", fc=(0, 0, 0, 0.5), linewidth=0))
     nx.draw_networkx_edges(G, pos, edgelist=G.edges, ax=ax, width=1.5, style="solid", edge_color="black",)
-    nx.draw_networkx_nodes(G, pos, margins=0, ax=ax, nodelist=G.nodes,
-                           node_size=70, node_color="white", edgecolors="black", linewidths=1.2)
+    nx.draw_networkx_nodes(
+        G, pos, margins=0, ax=ax, nodelist=G.nodes,
+        node_size=70, node_color=["white" if attr["pid"] != bootstrap else "#90ee90" for node, attr in G.nodes.data()], 
+        edgecolors="black", linewidths=1.2
+    )
 
     # Radial labels outside nodes
     for node, (x, y) in pos.items():
@@ -179,7 +182,9 @@ def draw_network(graph: nx.Graph):
 st.set_page_config(page_title="Ripple", layout="wide")
 st.title("Ripple")
 st.markdown("""
-    Application Service Dependency Graph
+    ## Application Service Dependency Graph
+
+    If two processes interact with each other via tcp sockets, unix sockets, or pipes, their dependency will appear in the following graph
 """)
 
 if "ripple_init" not in st.session_state:
@@ -209,4 +214,4 @@ if st.session_state.bootstrap is not None:
     graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]))
     add_missing_discovery(graph, missing_discovery)
     add_disconnected(graph, unconnected_pids, bootstrap["pid"])
-    draw_network(graph)
+    draw_network(graph, bootstrap["pid"])
