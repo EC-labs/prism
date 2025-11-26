@@ -17,6 +17,9 @@ from database import DatabaseClient
 
 db = DatabaseClient("../data/prism-2025-11-24T13:39:54.191391355+00:00.db3")
 
+def normalise_angle_degrees(degrees: float) -> float:
+    return degrees if degrees <= 180 else degrees - 360
+
 def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[int, int]) -> nx.Graph:
     machine, pid = bootstrap
     graph = nx.Graph()
@@ -37,9 +40,9 @@ def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[i
             if pid1 == pid2: 
                 continue
 
-            graph.add_node(f"{machine1}-{pid1}-{service1}", machine=machine1, pid=pid1, service=service1)
-            graph.add_node(f"{machine2}-{pid2}-{service2}", machine=machine2, pid=pid2, service=service2)
-            graph.add_edge(f"{machine1}-{pid1}-{service1}", f"{machine2}-{pid2}-{service2}", weight=connections)
+            graph.add_node(f"{service1}\n({machine1}:{pid1})", machine=machine1, pid=pid1, service=service1)
+            graph.add_node(f"{service2}\n({machine2}:{pid2})", machine=machine2, pid=pid2, service=service2)
+            graph.add_edge(f"{service1}\n({machine1}:{pid1})", f"{service2}\n({machine2}:{pid2})", weight=connections)
 
             if (machine1, pid1) not in visited:
                 queue.append((machine1, pid1))
@@ -48,12 +51,6 @@ def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[i
     return graph
 
 def draw_network(graph: nx.Graph):
-    # Map services to machines
-    # 
-    # machine_map = {}
-    # for _, row in edges_df.iterrows():
-    #     machine_map[row['src']] = row['src_machine']
-    #     machine_map[row['dst']] = row['dst_machine']
     machine_map = {}
     for node, attr in graph.nodes.data():
         machine_map[node] = attr["machine"]
@@ -75,11 +72,7 @@ def draw_network(graph: nx.Graph):
         r = int(r * 255)
         g = int(g * 255)
         b = int(b * 255)
-        a = 1.0
-        # machine_color[m] = f"rgba({r},{g},{b},{a})"
         machine_color[m] = f"#{r:02x}{g:02x}{b:02x}"
-
-    print(machine_color)
 
     # Flatten services in order by machine
     clustered_services = []
@@ -99,26 +92,24 @@ def draw_network(graph: nx.Graph):
         angle = angles[i]
         pos[service] = (np.cos(angle), np.sin(angle))
 
-    # Build graph
-    # G = nx.Graph()
-    # edges = list(zip(edges_df['src'], edges_df['dst']))
-    # G.add_edges_from(edges)
     G = graph
 
     # Plot setup
     fig, ax = plt.subplots(figsize=(6, 6))
 
-    # Parameters for node radius and slice padding
-    node_radius = 0.08  # approximate node circle radius (half sqrt of node size)
     slice_outer_radius = 1.07  # slightly larger than node radius 1
     slice_inner_radius = 0  # small hole in the center
 
     # Draw filled pie slices for each machine
     for machine, (start_idx, end_idx) in machine_angle_ranges.items():
-        theta_start = np.degrees(angles[start_idx]) - 6  # small padding on each side
-        theta_end = np.degrees(angles[end_idx]) + 6
-        # Handle wrap-around if needed
-        if theta_end < theta_start:
+        first_service_angle = normalise_angle_degrees(np.degrees(angles[start_idx].item()))
+        previous_service_angle = normalise_angle_degrees(np.degrees(angles[(start_idx-1)%len(angles)].item()))
+        last_service_angle = normalise_angle_degrees(np.degrees(angles[end_idx].item()))
+        next_service_angle = normalise_angle_degrees(np.degrees(angles[(end_idx+1)%len(angles)].item()))
+
+        theta_start = first_service_angle - (first_service_angle - previous_service_angle) / 2
+        theta_end = last_service_angle + (next_service_angle - last_service_angle) / 2
+        if theta_end <= theta_start:
             theta_end += 360
 
         # Draw the wedge (filled arc)
@@ -129,52 +120,22 @@ def draw_network(graph: nx.Graph):
                       width=slice_outer_radius - slice_inner_radius,
                       facecolor=machine_color[machine],
                       alpha=0.3,
-                      edgecolor='gray',
+                      # edgecolor='',
                       linestyle="solid" if machine != -1 else "dashed",
-                      linewidth=1.5)
+                      linewidth=0.5)
         ax.add_patch(wedge)
 
         # Label in the middle of the arc, closer to the center
-        mid_angle = (angles[start_idx] + angles[end_idx]) / 2
+        mid_angle = (np.radians(theta_start) + np.radians(theta_end)) / 2
         label_radius = slice_inner_radius + (slice_outer_radius - slice_inner_radius) / 2
         label_x = label_radius * np.cos(mid_angle)
         label_y = label_radius * np.sin(mid_angle)
         ax.text(label_x, label_y, machine if machine != -1 else "?",
-                fontsize=20, fontweight='bold',
+                fontsize=10, fontweight='bold',
                 ha='center', va='center', color='gray')
-
-    # Draw edges and nodes on top of slices
-    # Separate edges by machine status
-    intra_edges = []
-    cross_or_unknown_edges = []
-
-    for src, dst, attr in graph.edges.data():
-        intra_edges.append((src, dst))
-
-    # Draw intra-machine edges (solid)
-    nx.draw_networkx_edges(G, pos, edgelist=intra_edges, ax=ax, width=1.5, style="solid", edge_color="black")
-
-    # Draw cross-machine or unknown-machine edges (dashed)
-    nx.draw_networkx_edges(G, pos, edgelist=cross_or_unknown_edges, ax=ax, width=1.5, style="dashed", edge_color="gray")
-
-    # Split nodes by machine == -1
-    nodes_unknown = [node for node in G.nodes if machine_map.get(node, -1) == -1]
-    nodes_known = [node for node in G.nodes if machine_map.get(node, -1) != -1]
-
-    # Draw known machine nodes (solid border)
-    nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=nodes_known,
+    nx.draw_networkx_edges(G, pos, edgelist=G.edges, ax=ax, width=1.5, style="solid", edge_color="black",)
+    nx.draw_networkx_nodes(G, pos, margins=0, ax=ax, nodelist=G.nodes,
                            node_size=70, node_color="white", edgecolors="black", linewidths=1.2)
-
-    # Manually draw nodes with machine == -1 using dashed edge
-    for node in nodes_unknown:
-        x, y = pos[node]
-        circle = plt.Circle((x, y), radius=0.04,  # adjust radius as needed
-                            facecolor='white',
-                            edgecolor='black',
-                            linewidth=1.2,
-                            linestyle='dashed',
-                            zorder=3)
-        ax.add_patch(circle)
 
     # Radial labels outside nodes
     for node, (x, y) in pos.items():
