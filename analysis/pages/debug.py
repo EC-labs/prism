@@ -5,8 +5,6 @@ import matplotlib.pyplot as plt
 from components.monaco_sql_editor import monaco_sql_editor
 from database import DatabaseClient
 
-matplotlib.style.use("dark_background")
-
 db = DatabaseClient("../data/prism-2025-11-24T13:39:54.191391355+00:00.db3")
 
 st.set_page_config(page_title="Debug", layout="wide")
