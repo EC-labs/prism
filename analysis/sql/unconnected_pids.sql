@@ -89,7 +89,7 @@ WITH
   ),
   -- pids that do not have any connections to other processes
   unconnected_pids AS (
-    SELECT machine_id machine1, pid, NULL machine2, NULL pid2, NULL connections, NULL connection_type
+    SELECT machine_id, pid, sc.service_name
     FROM service_context sc
     LEFT JOIN pid_connections pc ON (sc.machine_id = pc.machine1 AND sc.pid = pc.pid1) OR (sc.machine_id = pc.machine2 and sc.pid = pc.pid2)
     WHERE pc.connections IS NULL

@@ -20,6 +20,11 @@ db = DatabaseClient("../data/prism-2025-11-24T13:39:54.191391355+00:00.db3")
 def normalise_angle_degrees(degrees: float) -> float:
     return degrees if degrees <= 180 else degrees - 360
 
+def add_disconnected(graph: nx.Graph, disconnected: pd.DataFrame, pid: int):
+    for _, row in disconnected.loc[disconnected["pid"] == pid, :].iterrows():
+        machine, pid, service = row["machine_id"], row["pid"], row["service_name"]
+        graph.add_node(f"{service}\n({machine}:{pid})", machine=machine)
+
 def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame):
     nodes_to_add, edges_to_add = [], []
     for node, attr in graph.nodes.data():
@@ -203,4 +208,5 @@ if st.session_state.bootstrap is not None:
     unconnected_pids = db.custom_query(Path("./sql/unconnected_pids.sql").read_text())
     graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]))
     add_missing_discovery(graph, missing_discovery)
+    add_disconnected(graph, unconnected_pids, bootstrap["pid"])
     draw_network(graph)
