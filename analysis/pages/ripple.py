@@ -147,7 +147,7 @@ def draw_network(graph: nx.Graph):
         label_y = label_radius * np.sin(mid_angle)
         ax.text(label_x, label_y, machine if machine != -1 else "?",
                 fontsize=10, fontweight='bold',
-                ha='center', va='center', color='gray')
+                ha='center', va='center', color='white', bbox=dict(boxstyle=f"square", fc=(0, 0, 0, 0.5), linewidth=0))
     nx.draw_networkx_edges(G, pos, edgelist=G.edges, ax=ax, width=1.5, style="solid", edge_color="black",)
     nx.draw_networkx_nodes(G, pos, margins=0, ax=ax, nodelist=G.nodes,
                            node_size=70, node_color="white", edgecolors="black", linewidths=1.2)
