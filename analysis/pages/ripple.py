@@ -20,6 +20,19 @@ db = DatabaseClient("../data/prism-2025-11-24T13:39:54.191391355+00:00.db3")
 def normalise_angle_degrees(degrees: float) -> float:
     return degrees if degrees <= 180 else degrees - 360
 
+def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame):
+    nodes_to_add, edges_to_add = [], []
+    for node, attr in graph.nodes.data():
+        pid = attr["pid"]
+        missing_edges = missing_discovery.loc[missing_discovery["pid"] == pid]
+        for _, edge in missing_edges.iterrows():
+            dst = edge["dst_address"]
+            connections = edge["connections"]
+            nodes_to_add.append((dst, dict(machine=-1)))
+            edges_to_add.append((node, dst, dict(connections=connections)))
+    graph.add_nodes_from(nodes_to_add)
+    graph.add_edges_from(edges_to_add)
+
 def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[int, int]) -> nx.Graph:
     machine, pid = bootstrap
     graph = nx.Graph()
@@ -42,7 +55,7 @@ def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[i
 
             graph.add_node(f"{service1}\n({machine1}:{pid1})", machine=machine1, pid=pid1, service=service1)
             graph.add_node(f"{service2}\n({machine2}:{pid2})", machine=machine2, pid=pid2, service=service2)
-            graph.add_edge(f"{service1}\n({machine1}:{pid1})", f"{service2}\n({machine2}:{pid2})", weight=connections)
+            graph.add_edge(f"{service1}\n({machine1}:{pid1})", f"{service2}\n({machine2}:{pid2})", connections=connections)
 
             if (machine1, pid1) not in visited:
                 queue.append((machine1, pid1))
@@ -64,15 +77,12 @@ def draw_network(graph: nx.Graph):
     # Generate machine colours
     machine_color = {}
     for i, m in enumerate(machine_to_services.keys()):
-        h = (i * (360/len(machine_to_services))) % 360
+        h = i / len(machine_to_services)
         s = 0.70
         l = 0.60
 
         r, g, b = colorsys.hls_to_rgb(h, l, s)
-        r = int(r * 255)
-        g = int(g * 255)
-        b = int(b * 255)
-        machine_color[m] = f"#{r:02x}{g:02x}{b:02x}"
+        machine_color[m] = (r, g, b, 0.3)
 
     # Flatten services in order by machine
     clustered_services = []
@@ -112,6 +122,7 @@ def draw_network(graph: nx.Graph):
         if theta_end <= theta_start:
             theta_end += 360
 
+
         # Draw the wedge (filled arc)
         wedge = Wedge(center=(0, 0),
                       r=slice_outer_radius,
@@ -119,8 +130,7 @@ def draw_network(graph: nx.Graph):
                       theta2=theta_end,
                       width=slice_outer_radius - slice_inner_radius,
                       facecolor=machine_color[machine],
-                      alpha=0.3,
-                      # edgecolor='',
+                      edgecolor="black",
                       linestyle="solid" if machine != -1 else "dashed",
                       linewidth=0.5)
         ax.add_patch(wedge)
@@ -188,11 +198,9 @@ if st.session_state.service_list is not None:
 
 if st.session_state.bootstrap is not None:
     bootstrap = st.session_state.bootstrap
-    st.write(bootstrap["machine_id"], bootstrap["pid"])
     pid_connections = db.custom_query(Path("./sql/pid_connections.sql").read_text())
     missing_discovery = db.custom_query(Path("./sql/missing_discovery.sql").read_text())
     unconnected_pids = db.custom_query(Path("./sql/unconnected_pids.sql").read_text())
     graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]))
+    add_missing_discovery(graph, missing_discovery)
     draw_network(graph)
-    print(graph.edges.data())
-    st.write(pid_connections)

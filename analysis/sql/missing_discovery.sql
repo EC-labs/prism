@@ -111,4 +111,8 @@ WITH
     WHERE 
       proto.const_name = 'IPPROTO_TCP' AND tsm.machine1 IS NULL AND (si.dst_port <> 0)
   )
-SELECT * FROM missing_discovery
+SELECT 
+    machine_id, pid, dst_address, COUNT(*) connections,
+FROM missing_discovery
+GROUP BY
+    1, 2, 3 
