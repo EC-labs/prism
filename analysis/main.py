@@ -1,9 +1,9 @@
 import streamlit as st
 
-st.title('Uber pickups in NYC')
+st.title('Prism Performance Analysis')
 
 def main():
-    st.page_link("pages/debug.py", label="debug")
+    pass
 
 
 if __name__ == "__main__":

@@ -179,7 +179,7 @@ def draw_network(graph: nx.Graph, bootstrap: int):
 
 
 
-st.set_page_config(page_title="Ripple", layout="wide")
+st.set_page_config(page_title="Ripple", layout="centered")
 st.title("Ripple")
 st.markdown("""
     ## Application Service Dependency Graph
@@ -194,7 +194,7 @@ if "ripple_init" not in st.session_state:
 
 st.session_state.ripple_init = True
 
-left, _ = st.columns([0.30, 0.7])
+left, _ = st.columns([0.6, 0.4])
 if st.session_state.service_list is not None:
     service_list = st.session_state.service_list
     options = service_list.index.astype(str) + " - " + service_list["service_name"] + " (" + service_list["machine_id"].astype(str) + " : " + service_list["pid"].astype(str) + ")"

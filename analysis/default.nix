@@ -28,10 +28,6 @@ pkgs.mkShell {
     };
     shellHook = ''
       unset PYTHONPATH
-
-      cd "$(git rev-parse --show-toplevel)/analysis"
-      uv sync
-      source .venv/bin/activate
-      cd -
+      source "${virtualenv}/bin/activate"
     '';
 }
