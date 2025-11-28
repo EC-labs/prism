@@ -7,6 +7,9 @@ import plotly.express as px
 from BTrees.OOBTree import OOBTree
 
 
+def generate_edited_key() -> str:
+    return f"edited_rows{random.randint(0, int(1e6))}"
+
 def predecessor(t: OOBTree, x):
     try:
         return t.maxKey(x)  # keys < x
@@ -63,6 +66,7 @@ if 'compare_init' not in st.session_state:
     st.session_state.reset_plot = False
     st.session_state.tree = OOBTree()
     st.session_state.compare_chart_axis = None
+    st.session_state.edited_rows_key = generate_edited_key()
 
 st.session_state.compare_init = True
 
@@ -74,18 +78,23 @@ if target_file:
 if st.session_state.target_data is not None:
     with st.container():
         config_col1, config_col2, _ = st.columns([0.3, 0.3, 0.4])
+        target_columns = st.session_state.target_data.columns
         with config_col1:
+            x_index = (None if not st.session_state.compare_chart_axis 
+                       else target_columns.get_loc(st.session_state.compare_chart_axis["x_axis"]))
             x_axis = st.selectbox(
                 "Time",
-                st.session_state.target_data.columns,
-                index=None,
+                target_columns,
+                index=x_index,
                 key="target_x",
             )
         with config_col2:
+            y_index = (None if not st.session_state.compare_chart_axis 
+                       else target_columns.get_loc(st.session_state.compare_chart_axis["y_axis"]))
             y_axis = st.selectbox(
                 "Target Metric",
-                st.session_state.target_data.columns,
-                index=None,
+                target_columns,
+                index=y_index,
                 key="target_y",
             )
 
@@ -97,79 +106,83 @@ if st.session_state.reset_plot:
     st.session_state.plot_key = "line_chart" + f"{random.randint(0, int(1e6))}"
     st.session_state.reset_plot = False
 
-with st.container(border=True):
-    if st.session_state.target_data is not None and st.session_state.compare_chart_axis:
-        col1, col2, _ = st.columns([0.25, 0.25, 0.5])
-        with col1:
-            if st.button("compare selection", type="primary"):
-                st.session_state.reset_plot = True
-                if st.session_state.selection is not None: 
-                    entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "compare")
-                    add_entry(st.session_state.tree, entry)
-            
-        with col2:
-            if st.button("baseline selection"):
-                st.session_state.reset_plot = True
-                if st.session_state.selection is not None: 
-                    entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "baseline")
-                    add_entry(st.session_state.tree, entry)
+def main():
+    if (st.session_state.target_data is None) or (not st.session_state.compare_chart_axis):
+        return
 
-        fig = px.line(st.session_state.target_data, x=st.session_state.compare_chart_axis["x_axis"], y=st.session_state.compare_chart_axis["y_axis"], markers=True)
+    with st.container(border=True):
+            col1, col2, _ = st.columns([0.25, 0.25, 0.5])
+            with col1:
+                if st.button("compare selection", type="primary"):
+                    st.session_state.reset_plot = True
+                    if st.session_state.selection is not None: 
+                        entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "compare")
+                        add_entry(st.session_state.tree, entry)
+                
+            with col2:
+                if st.button("baseline selection"):
+                    st.session_state.reset_plot = True
+                    if st.session_state.selection is not None: 
+                        entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "baseline")
+                        add_entry(st.session_state.tree, entry)
+
+            fig = px.line(st.session_state.target_data, x=st.session_state.compare_chart_axis["x_axis"], y=st.session_state.compare_chart_axis["y_axis"], markers=True)
+            tree = st.session_state.tree
+            for elem in tree:
+                fig.add_vrect(x0=elem, x1=tree[elem][0], line_width=0, fillcolor="green" if tree[elem][1] == "baseline" else "red", opacity=0.2)
+
+            fig.update_layout(dragmode='select', selectdirection="h")
+
+            events = st.plotly_chart(
+                fig,
+                on_select='rerun',
+                key=st.session_state.plot_key,
+            )
+            if events and 'selection' in events:
+                selection = events["selection"]
+                box = selection.get("box")
+                if box: 
+                    x = box[0]["x"]
+                    x0, x1 = x[0], x[1]
+                    x0, x1 = (x0, x1) if x0 <= x1 else (x1, x0)
+                    st.session_state.selection = {"x0": x0, "x1": x1}
+
+    if len(st.session_state.tree): 
         tree = st.session_state.tree
+        range_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
         for elem in tree:
-            fig.add_vrect(x0=elem, x1=tree[elem][0], line_width=0, fillcolor="green" if tree[elem][1] == "baseline" else "red", opacity=0.2)
+            start, end, range_type = elem, tree[elem][0], tree[elem][1]
+            row = pd.DataFrame([[start, end, range_type]], columns=range_entries.columns)
+            range_entries = pd.concat([range_entries, row], ignore_index=True)
 
-        fig.update_layout(dragmode='select', selectdirection="h")
-
-        events = st.plotly_chart(
-            fig,
-            on_select='rerun',
-            key=st.session_state.plot_key,
-        )
-        if events and 'selection' in events:
-            selection = events["selection"]
-            box = selection.get("box")
-            if box: 
-                x = box[0]["x"]
-                x0, x1 = x[0], x[1]
-                x0, x1 = (x0, x1) if x0 <= x1 else (x1, x0)
-                st.session_state.selection = {"x0": x0, "x1": x1}
-
-if len(st.session_state.tree): 
-    tree = st.session_state.tree
-    range_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
-    for elem in tree:
-        start, end, range_type = elem, tree[elem][0], tree[elem][1]
-        row = pd.DataFrame([[start, end, range_type]], columns=range_entries.columns)
-        range_entries = pd.concat([range_entries, row], ignore_index=True)
-
-    st.data_editor(range_entries, key="edited_rows", num_rows="dynamic")
-    if st.session_state.edited_rows["deleted_rows"]:
-        for idx in st.session_state.edited_rows["deleted_rows"]:
-            start = range_entries.loc[idx]["start"]
-            del tree[start]
-        st.session_state.edited_rows["deleted_rows"] = []
-        st.rerun()
-
-    if st.session_state.edited_rows["edited_rows"]:
-        for rowidx, changes in st.session_state.edited_rows["edited_rows"].items():
-            row = range_entries.loc[rowidx, :].copy()
-            del tree[row["start"]]
-            for column, value in changes.items():
-                row[column] = value
-            add_entry(tree, (pd.to_datetime(row["start"]), pd.to_datetime(row["end"]), row["range_type"]))
-        st.session_state.edited_rows["edited_rows"] = {}
-        st.rerun()
-
-    if st.session_state.edited_rows["added_rows"]:
-        delete_rows = []
-        for idx, row in enumerate(st.session_state.edited_rows["added_rows"]):
-            if all(column in row for column in ["start", "end", "range_type"]):
-                add_entry(tree, (pd.to_datetime(row["start"]), pd.to_datetime(row["end"]), row["range_type"]))
-                delete_rows.append(idx)
-
-        if delete_rows:
-            for idx in delete_rows:
-                st.session_state.edited_rows["added_rows"].pop(idx)
+        st.data_editor(range_entries, key=st.session_state.edited_rows_key, num_rows="dynamic")
+        edited_rows = st.session_state[st.session_state.edited_rows_key]
+        if edited_rows["deleted_rows"]:
+            for idx in edited_rows["deleted_rows"]:
+                start = range_entries.loc[idx]["start"]
+                del tree[start]
+            st.session_state.edited_rows_key = generate_edited_key()
             st.rerun()
 
+        if edited_rows["edited_rows"]:
+            for rowidx, changes in edited_rows["edited_rows"].items():
+                row = range_entries.loc[rowidx, :].copy()
+                del tree[row["start"]]
+                for column, value in changes.items():
+                    row[column] = value
+                add_entry(tree, (pd.to_datetime(row["start"]), pd.to_datetime(row["end"]), row["range_type"]))
+            st.session_state.edited_rows_key = generate_edited_key()
+            st.rerun()
+
+        if edited_rows["added_rows"]:
+            delete_rows = []
+            for idx, row in enumerate(edited_rows["added_rows"]):
+                if all(column in row for column in ["start", "end", "range_type"]):
+                    add_entry(tree, (pd.to_datetime(row["start"]), pd.to_datetime(row["end"]), row["range_type"]))
+                    delete_rows.append(idx)
+
+            if delete_rows:
+                st.session_state.edited_rows_key = generate_edited_key()
+                st.rerun()
+
+main()

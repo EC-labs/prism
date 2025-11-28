@@ -2,9 +2,6 @@ import streamlit as st
 import matplotlib.pyplot as plt
 
 from components.monaco_sql_editor import monaco_sql_editor
-from database import DatabaseClient
-
-db = DatabaseClient("../data/prism-2025-11-24T13:39:54.191391355+00:00.db3")
 
 st.set_page_config(page_title="Debug", layout="wide")
 st.title("Debug")
@@ -21,55 +18,80 @@ if "init" not in st.session_state:
 
 st.session_state.init = True
 
-st.session_state.query = monaco_sql_editor(
-    value=st.session_state.query if st.session_state.query is not None else "SELECT ts, pid, tid, run_share FROM taskstats_view ORDER BY ts LIMIT 100;",
-    # schema=schema,
-    height="150px",
-    theme="vs-dark",
-    key="sql_editor",
-)
+def main():
+    if ('db' not in st.session_state) or (st.session_state.db is None):
+        st.markdown(
+            """
+            <div style="
+                padding: 1rem;
+                border-radius: 0.5rem;
+                background-color: rgba(0, 123, 255, 0.1);
+                border-left: 0.25rem solid #0d6efd;
+                color: inherit;
+                ">
+                You’re almost ready — connect to a Prism database 
+                <a href="/" target="_self" style="color: #0d6efd; text-decoration: underline;">
+                    here
+                </a>.
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        return 
 
-if st.button("Run Query"):
-    st.session_state.query_result = db.custom_query(st.session_state.query)
-    st.session_state.show_line_chart = False
+    db = st.session_state.db
 
-if st.session_state.query_result is not None:
-    st.write(st.session_state.query_result)
+    st.session_state.query = monaco_sql_editor(
+        value=st.session_state.query if st.session_state.query is not None else "SELECT ts, pid, tid, run_share FROM taskstats_view ORDER BY ts LIMIT 100;",
+        # schema=schema,
+        height="150px",
+        theme="vs-dark",
+        key="sql_editor",
+    )
 
-    with st.container():
-        config_col1, config_col2, _ = st.columns([0.15, 0.15, 0.7])
-        with config_col1:
-            x_axis = st.selectbox(
-                "X axis",
-                st.session_state.query_result.columns,
-                index=None,
-                key="line_x_axis",
-            )
-        with config_col2:
-            y_axis = st.selectbox(
-                "Y axis",
-                st.session_state.query_result.columns,
-                index=None,
-                key="line_y_axis",
-            )
+    if st.button("Run Query"):
+        st.session_state.query_result = db.custom_query(st.session_state.query)
+        st.session_state.show_line_chart = False
 
-        if st.button("Create Line Graphs", type="primary") and x_axis and y_axis:
-            st.session_state.show_line_chart = True
-            st.session_state.line_chart_axis = {"x_axis": x_axis, "y_axis": y_axis}
+    if st.session_state.query_result is not None:
+        st.write(st.session_state.query_result)
 
-if st.session_state.show_line_chart and st.session_state.query_result is not None:
-    if st.session_state.line_chart_axis is not None:
-        df = st.session_state.query_result.copy()
-        x_axis = st.session_state.line_chart_axis["x_axis"]
-        y_axis = st.session_state.line_chart_axis["y_axis"]
+        with st.container():
+            config_col1, config_col2, _ = st.columns([0.15, 0.15, 0.7])
+            with config_col1:
+                x_axis = st.selectbox(
+                    "X axis",
+                    st.session_state.query_result.columns,
+                    index=None,
+                    key="line_x_axis",
+                )
+            with config_col2:
+                y_axis = st.selectbox(
+                    "Y axis",
+                    st.session_state.query_result.columns,
+                    index=None,
+                    key="line_y_axis",
+                )
 
-        fig = plt.figure(figsize=(12, 8))
+            if st.button("Create Line Graphs", type="primary") and x_axis and y_axis:
+                st.session_state.show_line_chart = True
+                st.session_state.line_chart_axis = {"x_axis": x_axis, "y_axis": y_axis}
 
-        label_columns = df.columns.difference([x_axis, y_axis])
-        for _, label in df.loc[:, label_columns].drop_duplicates().iterrows():
-            filtered = df
-            for col, val in zip(label_columns, label):
-                filtered = filtered.loc[filtered[col] == val]
-            plt.plot(filtered[x_axis], filtered[y_axis])
-        st.pyplot(fig, width=800)
-        plt.close()
+    if st.session_state.show_line_chart and st.session_state.query_result is not None:
+        if st.session_state.line_chart_axis is not None:
+            df = st.session_state.query_result.copy()
+            x_axis = st.session_state.line_chart_axis["x_axis"]
+            y_axis = st.session_state.line_chart_axis["y_axis"]
+
+            fig = plt.figure(figsize=(12, 8))
+
+            label_columns = df.columns.difference([x_axis, y_axis])
+            for _, label in df.loc[:, label_columns].drop_duplicates().iterrows():
+                filtered = df
+                for col, val in zip(label_columns, label):
+                    filtered = filtered.loc[filtered[col] == val]
+                plt.plot(filtered[x_axis], filtered[y_axis])
+            st.pyplot(fig, width=800)
+            plt.close()
+
+main()

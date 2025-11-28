@@ -15,7 +15,6 @@ import re
 
 from database import DatabaseClient
 
-db = DatabaseClient("../data/prism-2025-11-24T13:39:54.191391355+00:00.db3")
 
 def normalise_angle_degrees(degrees: float) -> float:
     return degrees if degrees <= 180 else degrees - 360
@@ -178,40 +177,64 @@ def draw_network(graph: nx.Graph, bootstrap: int):
     plt.close()
 
 
+def main():
+    st.set_page_config(page_title="Ripple", layout="centered")
+    st.title("Ripple")
+    st.markdown("""
+        ## Application Service Dependency Graph
 
-st.set_page_config(page_title="Ripple", layout="centered")
-st.title("Ripple")
-st.markdown("""
-    ## Application Service Dependency Graph
+        If two processes interact with each other via tcp sockets, unix sockets, or pipes, their dependency will appear in the following graph
+    """)
 
-    If two processes interact with each other via tcp sockets, unix sockets, or pipes, their dependency will appear in the following graph
-""")
+    if ('db' not in st.session_state) or (st.session_state.db is None):
+        st.markdown(
+            """
+            <div style="
+                padding: 1rem;
+                border-radius: 0.5rem;
+                background-color: rgba(0, 123, 255, 0.1);
+                border-left: 0.25rem solid #0d6efd;
+                color: inherit;
+                ">
+                You’re almost ready — connect to a Prism database 
+                <a href="/" target="_self" style="color: #0d6efd; text-decoration: underline;">
+                    here
+                </a>.
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        return 
 
-if "ripple_init" not in st.session_state:
-    query = Path("./sql/service_list.sql").read_text()
-    st.session_state.service_list = db.custom_query(query)
-    st.session_state.bootstrap = None
+    db = st.session_state.db
 
-st.session_state.ripple_init = True
+    if "ripple_init" not in st.session_state:
+        query = Path("./sql/service_list.sql").read_text()
+        st.session_state.service_list = db.custom_query(query)
+        st.session_state.bootstrap = None
 
-left, _ = st.columns([0.6, 0.4])
-if st.session_state.service_list is not None:
-    service_list = st.session_state.service_list
-    options = service_list.index.astype(str) + " - " + service_list["service_name"] + " (" + service_list["machine_id"].astype(str) + " : " + service_list["pid"].astype(str) + ")"
-    selection = st.session_state.bootstrap = left.selectbox("What service would you like to start from?", options, placeholder="[index] - [service_name] ([machine_id] : [pid])", index=None)
-    if selection is not None:
-        match = re.search(r"\d+", selection)
-        if match is not None:
-            index = int(match.group())
-            st.session_state.bootstrap = service_list.iloc[index, :]
+    st.session_state.ripple_init = True
+
+    left, _ = st.columns([0.6, 0.4])
+    if st.session_state.service_list is not None:
+        service_list = st.session_state.service_list
+        options = service_list.index.astype(str) + " - " + service_list["service_name"] + " (" + service_list["machine_id"].astype(str) + " : " + service_list["pid"].astype(str) + ")"
+        selection = st.session_state.bootstrap = left.selectbox("What service would you like to start from?", options, placeholder="[index] - [service_name] ([machine_id] : [pid])", index=None)
+        if selection is not None:
+            match = re.search(r"\d+", selection)
+            if match is not None:
+                index = int(match.group())
+                st.session_state.bootstrap = service_list.iloc[index, :]
 
 
-if st.session_state.bootstrap is not None:
-    bootstrap = st.session_state.bootstrap
-    pid_connections = db.custom_query(Path("./sql/pid_connections.sql").read_text())
-    missing_discovery = db.custom_query(Path("./sql/missing_discovery.sql").read_text())
-    unconnected_pids = db.custom_query(Path("./sql/unconnected_pids.sql").read_text())
-    graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]))
-    add_missing_discovery(graph, missing_discovery)
-    add_disconnected(graph, unconnected_pids, bootstrap["pid"])
-    draw_network(graph, bootstrap["pid"])
+    if st.session_state.bootstrap is not None:
+        bootstrap = st.session_state.bootstrap
+        pid_connections = db.custom_query(Path("./sql/pid_connections.sql").read_text())
+        missing_discovery = db.custom_query(Path("./sql/missing_discovery.sql").read_text())
+        unconnected_pids = db.custom_query(Path("./sql/unconnected_pids.sql").read_text())
+        graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]))
+        add_missing_discovery(graph, missing_discovery)
+        add_disconnected(graph, unconnected_pids, bootstrap["pid"])
+        draw_network(graph, bootstrap["pid"])
+
+main()
