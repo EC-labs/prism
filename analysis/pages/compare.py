@@ -18,7 +18,7 @@ def successor(t: OOBTree, x):
     except ValueError:
         return None
 
-def add_entry(tree: OOBTree, entry: Tuple[int, int, str]):
+def add_entry(tree: OOBTree, entry: Tuple[pd.Timestamp, pd.Timestamp, str]):
     left = predecessor(tree, entry[0])
     left = (left, tree[left][0]) if left else None
     right = successor(tree, entry[0])
@@ -29,7 +29,7 @@ def add_entry(tree: OOBTree, entry: Tuple[int, int, str]):
         right = successor(tree, entry[0])
         right = (right, tree[right][0]) if right else None
 
-    if (entry[0] - entry[1]) > -0.0001:
+    if (entry[0] - entry[1]) >= pd.Timedelta(-0.0001):
         return
 
     if right and right[0] < entry[1]:
@@ -37,7 +37,7 @@ def add_entry(tree: OOBTree, entry: Tuple[int, int, str]):
         entry = (entry[0], right[0], entry[2])
         add_entry(tree, next)
 
-    if (entry[0] - entry[1]) > -0.0001:
+    if (entry[0] - entry[1]) >= pd.Timedelta(-0.0001):
         return
 
     tree[entry[0]] = (entry[1], entry[2])
@@ -56,7 +56,9 @@ st.markdown("""
 """)
 
 if 'compare_init' not in st.session_state:
-    st.session_state.data = px.data.gapminder().query("continent=='Oceania'")
+    data = px.data.gapminder().query("continent=='Oceania'").loc[:, ["year", "lifeExp"]]
+    data["year"] = pd.to_datetime(data["year"].astype(str), format="%Y")
+    st.session_state.data = data
     st.session_state.plot_key = "line_chart" + f"{random.randint(0, int(1e6))}"
     st.session_state.selection = None
     st.session_state.reset_plot = False
@@ -69,15 +71,14 @@ with col1:
     if st.button("compare selection", type="primary"):
         st.session_state.reset_plot = True
         if st.session_state.selection is not None: 
-            entry = (st.session_state.selection["x0"], st.session_state.selection["x1"], "compare")
+            entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "compare")
             add_entry(st.session_state.tree, entry)
-            # st.session_state.compare.append(st.session_state.selection)
     
 with col2:
     if st.button("baseline selection"):
         st.session_state.reset_plot = True
         if st.session_state.selection is not None: 
-            entry = (st.session_state.selection["x0"], st.session_state.selection["x1"], "baseline")
+            entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "baseline")
             add_entry(st.session_state.tree, entry)
 
 if st.session_state.reset_plot:
@@ -108,7 +109,7 @@ if st.session_state.data is not None:
 
 if st.session_state.tree is not None: 
     tree = st.session_state.tree
-    range_entries = pd.DataFrame({'start': pd.Series(dtype='int'), 'end': pd.Series(dtype='int'), 'range_type': pd.Series(dtype='str')})
+    range_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
     for elem in tree:
         start, end, range_type = elem, tree[elem][0], tree[elem][1]
         row = pd.DataFrame([[start, end, range_type]], columns=range_entries.columns)
@@ -128,7 +129,7 @@ if st.session_state.tree is not None:
             del tree[row["start"]]
             for column, value in changes.items():
                 row[column] = value
-            add_entry(tree, (row["start"], row["end"], row["range_type"]))
+            add_entry(tree, (pd.to_datetime(row["start"]), pd.to_datetime(row["end"]), row["range_type"]))
         st.session_state.edited_rows["edited_rows"] = {}
         st.rerun()
 
@@ -136,7 +137,7 @@ if st.session_state.tree is not None:
         delete_rows = []
         for idx, row in enumerate(st.session_state.edited_rows["added_rows"]):
             if all(column in row for column in ["start", "end", "range_type"]):
-                add_entry(tree, (row["start"], row["end"], row["range_type"]))
+                add_entry(tree, (pd.to_datetime(row["start"]), pd.to_datetime(row["end"]), row["range_type"]))
                 delete_rows.append(idx)
 
         if delete_rows:
