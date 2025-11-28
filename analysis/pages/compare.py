@@ -108,7 +108,7 @@ if st.session_state.data is not None:
 
 if st.session_state.tree is not None: 
     tree = st.session_state.tree
-    range_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
+    range_entries = pd.DataFrame({'start': pd.Series(dtype='int'), 'end': pd.Series(dtype='int'), 'range_type': pd.Series(dtype='str')})
     for elem in tree:
         start, end, range_type = elem, tree[elem][0], tree[elem][1]
         row = pd.DataFrame([[start, end, range_type]], columns=range_entries.columns)
@@ -124,10 +124,22 @@ if st.session_state.tree is not None:
 
     if st.session_state.edited_rows["edited_rows"]:
         for rowidx, changes in st.session_state.edited_rows["edited_rows"].items():
-            row = range_entries.loc[rowidx, :]
+            row = range_entries.loc[rowidx, :].copy()
             del tree[row["start"]]
             for column, value in changes.items():
                 row[column] = value
-            tree[row["start"]] = (row["end"], row["range_type"])
+            add_entry(tree, (row["start"], row["end"], row["range_type"]))
         st.session_state.edited_rows["edited_rows"] = {}
         st.rerun()
+
+    if st.session_state.edited_rows["added_rows"]:
+        delete_rows = []
+        for idx, row in enumerate(st.session_state.edited_rows["added_rows"]):
+            if all(column in row for column in ["start", "end", "range_type"]):
+                add_entry(tree, (row["start"], row["end"], row["range_type"]))
+                delete_rows.append(idx)
+
+        if delete_rows:
+            for idx in delete_rows:
+                st.session_state.edited_rows["added_rows"].pop(idx)
+            st.rerun()
