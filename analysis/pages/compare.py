@@ -115,10 +115,19 @@ if st.session_state.tree is not None:
         range_entries = pd.concat([range_entries, row], ignore_index=True)
 
     st.data_editor(range_entries, key="edited_rows", num_rows="dynamic")
-    st.write(st.session_state.edited_rows)
     if st.session_state.edited_rows["deleted_rows"]:
         for idx in st.session_state.edited_rows["deleted_rows"]:
             start = range_entries.loc[idx]["start"]
             del tree[start]
         st.session_state.edited_rows["deleted_rows"] = []
+        st.rerun()
+
+    if st.session_state.edited_rows["edited_rows"]:
+        for rowidx, changes in st.session_state.edited_rows["edited_rows"].items():
+            row = range_entries.loc[rowidx, :]
+            del tree[row["start"]]
+            for column, value in changes.items():
+                row[column] = value
+            tree[row["start"]] = (row["end"], row["range_type"])
+        st.session_state.edited_rows["edited_rows"] = {}
         st.rerun()
