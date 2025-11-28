@@ -1,5 +1,4 @@
 import streamlit as st
-import matplotlib
 import matplotlib.pyplot as plt
 
 from components.monaco_sql_editor import monaco_sql_editor
@@ -54,7 +53,7 @@ if st.session_state.query_result is not None:
                 key="line_y_axis",
             )
 
-        if st.button("Create Line Graphs", type="primary"):
+        if st.button("Create Line Graphs", type="primary") and x_axis and y_axis:
             st.session_state.show_line_chart = True
             st.session_state.line_chart_axis = {"x_axis": x_axis, "y_axis": y_axis}
 

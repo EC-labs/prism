@@ -1,3 +1,4 @@
+from pathlib import Path
 import random
 from typing import Tuple
 import pandas as pd
@@ -56,58 +57,85 @@ st.markdown("""
 """)
 
 if 'compare_init' not in st.session_state:
-    data = px.data.gapminder().query("continent=='Oceania'").loc[:, ["year", "lifeExp"]]
-    data["year"] = pd.to_datetime(data["year"].astype(str), format="%Y")
-    st.session_state.data = data
+    st.session_state.target_data = None
     st.session_state.plot_key = "line_chart" + f"{random.randint(0, int(1e6))}"
     st.session_state.selection = None
     st.session_state.reset_plot = False
     st.session_state.tree = OOBTree()
+    st.session_state.compare_chart_axis = None
 
 st.session_state.compare_init = True
 
-col1, col2, _ = st.columns([0.23, 0.23, 0.54])
-with col1:
-    if st.button("compare selection", type="primary"):
-        st.session_state.reset_plot = True
-        if st.session_state.selection is not None: 
-            entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "compare")
-            add_entry(st.session_state.tree, entry)
-    
-with col2:
-    if st.button("baseline selection"):
-        st.session_state.reset_plot = True
-        if st.session_state.selection is not None: 
-            entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "baseline")
-            add_entry(st.session_state.tree, entry)
+target_file = st.file_uploader("Upload Target Metric", type=["csv", "xlsx"])
+if target_file:
+    path = Path(target_file.name)
+    st.session_state.target_data = pd.read_excel(target_file) if path.suffix == ".xlsx" else pd.read_csv(target_file)
+
+if st.session_state.target_data is not None:
+    with st.container():
+        config_col1, config_col2, _ = st.columns([0.3, 0.3, 0.4])
+        with config_col1:
+            x_axis = st.selectbox(
+                "Time",
+                st.session_state.target_data.columns,
+                index=None,
+                key="target_x",
+            )
+        with config_col2:
+            y_axis = st.selectbox(
+                "Target Metric",
+                st.session_state.target_data.columns,
+                index=None,
+                key="target_y",
+            )
+
+        if x_axis and y_axis:
+            st.session_state.compare_chart_axis = {"x_axis": x_axis, "y_axis": y_axis}
+
 
 if st.session_state.reset_plot:
     st.session_state.plot_key = "line_chart" + f"{random.randint(0, int(1e6))}"
     st.session_state.reset_plot = False
 
-if st.session_state.data is not None:
-    fig = px.line(st.session_state.data, x="year", y="lifeExp", markers=True)
-    tree = st.session_state.tree
-    for elem in tree:
-        fig.add_vrect(x0=elem, x1=tree[elem][0], line_width=0, fillcolor="green" if tree[elem][1] == "baseline" else "red", opacity=0.2)
+with st.container(border=True):
+    if st.session_state.target_data is not None and st.session_state.compare_chart_axis:
+        col1, col2, _ = st.columns([0.25, 0.25, 0.5])
+        with col1:
+            if st.button("compare selection", type="primary"):
+                st.session_state.reset_plot = True
+                if st.session_state.selection is not None: 
+                    entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "compare")
+                    add_entry(st.session_state.tree, entry)
+            
+        with col2:
+            if st.button("baseline selection"):
+                st.session_state.reset_plot = True
+                if st.session_state.selection is not None: 
+                    entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "baseline")
+                    add_entry(st.session_state.tree, entry)
 
-    fig.update_layout(dragmode='select', selectdirection="h")
+        fig = px.line(st.session_state.target_data, x=st.session_state.compare_chart_axis["x_axis"], y=st.session_state.compare_chart_axis["y_axis"], markers=True)
+        tree = st.session_state.tree
+        for elem in tree:
+            fig.add_vrect(x0=elem, x1=tree[elem][0], line_width=0, fillcolor="green" if tree[elem][1] == "baseline" else "red", opacity=0.2)
 
-    events = st.plotly_chart(
-        fig,
-        on_select='rerun',
-        key=st.session_state.plot_key,
-    )
-    if events and 'selection' in events:
-        selection = events["selection"]
-        box = selection.get("box")
-        if box: 
-            x = box[0]["x"]
-            x0, x1 = x[0], x[1]
-            x0, x1 = (x0, x1) if x0 <= x1 else (x1, x0)
-            st.session_state.selection = {"x0": x0, "x1": x1}
+        fig.update_layout(dragmode='select', selectdirection="h")
 
-if st.session_state.tree is not None: 
+        events = st.plotly_chart(
+            fig,
+            on_select='rerun',
+            key=st.session_state.plot_key,
+        )
+        if events and 'selection' in events:
+            selection = events["selection"]
+            box = selection.get("box")
+            if box: 
+                x = box[0]["x"]
+                x0, x1 = x[0], x[1]
+                x0, x1 = (x0, x1) if x0 <= x1 else (x1, x0)
+                st.session_state.selection = {"x0": x0, "x1": x1}
+
+if len(st.session_state.tree): 
     tree = st.session_state.tree
     range_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
     for elem in tree:
@@ -144,3 +172,4 @@ if st.session_state.tree is not None:
             for idx in delete_rows:
                 st.session_state.edited_rows["added_rows"].pop(idx)
             st.rerun()
+
