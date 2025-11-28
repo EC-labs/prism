@@ -1,8 +1,10 @@
 import random
 from typing import Tuple
+import pandas as pd
 import streamlit as st
 import plotly.express as px
 from BTrees.OOBTree import OOBTree
+
 
 def predecessor(t: OOBTree, x):
     try:
@@ -56,8 +58,6 @@ st.markdown("""
 if 'compare_init' not in st.session_state:
     st.session_state.data = px.data.gapminder().query("continent=='Oceania'")
     st.session_state.plot_key = "line_chart" + f"{random.randint(0, int(1e6))}"
-    st.session_state.baseline = []
-    st.session_state.compare = []
     st.session_state.selection = None
     st.session_state.reset_plot = False
     st.session_state.tree = OOBTree()
@@ -105,3 +105,20 @@ if st.session_state.data is not None:
             x0, x1 = x[0], x[1]
             x0, x1 = (x0, x1) if x0 <= x1 else (x1, x0)
             st.session_state.selection = {"x0": x0, "x1": x1}
+
+if st.session_state.tree is not None: 
+    tree = st.session_state.tree
+    range_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
+    for elem in tree:
+        start, end, range_type = elem, tree[elem][0], tree[elem][1]
+        row = pd.DataFrame([[start, end, range_type]], columns=range_entries.columns)
+        range_entries = pd.concat([range_entries, row], ignore_index=True)
+
+    st.data_editor(range_entries, key="edited_rows", num_rows="dynamic")
+    st.write(st.session_state.edited_rows)
+    if st.session_state.edited_rows["deleted_rows"]:
+        for idx in st.session_state.edited_rows["deleted_rows"]:
+            start = range_entries.loc[idx]["start"]
+            del tree[start]
+        st.session_state.edited_rows["deleted_rows"] = []
+        st.rerun()
