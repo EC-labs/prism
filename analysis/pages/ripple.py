@@ -2,6 +2,7 @@ from typing import Tuple
 from pathlib import Path
 from collections import deque, defaultdict
 from matplotlib.patches import Wedge
+from jinja2 import Template
 
 import colorsys
 import matplotlib
@@ -32,7 +33,7 @@ def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame, max_
         for _, edge in missing_edges.iterrows():
             dst = edge["dst_address"]
             connections = edge["connections"]
-            
+
             if len(graph) <= max_nodes:
                 nodes_to_add.append((dst, dict(machine=-1, pid=-1, service=-1)))
                 edges_to_add.append((node, dst, dict(connections=connections)))
@@ -56,7 +57,7 @@ def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[i
             machine1, pid1, service1 = edge["machine1"], edge["pid1"], edge["service1"]
             machine2, pid2, service2 = edge["machine2"], edge["pid2"], edge["service2"]
             connections = edge["connections"]
-            if pid1 == pid2: 
+            if pid1 == pid2:
                 continue
 
             s1_nid, s2_nid = f"{service1}\n({machine1}:{pid1})", f"{service2}\n({machine2}:{pid2})"
@@ -158,7 +159,7 @@ def draw_network(graph: nx.Graph, bootstrap: int):
     nx.draw_networkx_edges(G, pos, edgelist=G.edges, ax=ax, width=1.5, style="solid", edge_color="black",)
     nx.draw_networkx_nodes(
         G, pos, margins=0, ax=ax, nodelist=G.nodes,
-        node_size=70, node_color=["white" if attr["pid"] != bootstrap else "#90ee90" for node, attr in G.nodes.data()], 
+        node_size=70, node_color=["white" if attr["pid"] != bootstrap else "#90ee90" for node, attr in G.nodes.data()],
         edgecolors="black", linewidths=1.2
     )
 
@@ -204,7 +205,7 @@ def main():
                 border-left: 0.25rem solid #0d6efd;
                 color: inherit;
                 ">
-                You’re almost ready — connect to a Prism database 
+                You’re almost ready — connect to a Prism database
                 <a href="/" target="_self" style="color: #0d6efd; text-decoration: underline;">
                     here
                 </a>.
@@ -212,7 +213,7 @@ def main():
             """,
             unsafe_allow_html=True
         )
-        return 
+        return
 
     db = st.session_state.db
 
@@ -221,27 +222,57 @@ def main():
         st.session_state.service_list = db.custom_query(query)
         st.session_state.bootstrap = None
         st.session_state.ripple_max_nodes = 20
+        st.session_state.ripple_use_compare = False
+        st.session_state.compare_entries = None
 
     st.session_state.ripple_init = True
 
-    left, right = st.columns([0.6, 0.4])
+    left, middle, right = st.columns([0.6, 0.2, 0.2], vertical_alignment="bottom")
     if st.session_state.service_list is not None:
         service_list = st.session_state.service_list
         options = service_list.index.astype(str) + " - " + service_list["service_name"] + " (" + service_list["machine_id"].astype(str) + " : " + service_list["pid"].astype(str) + ")"
-        selection = left.selectbox("What service would you like to start from?", options, placeholder="[index] - [service_name] ([machine_id] : [pid])", index=None)
-        st.session_state.ripple_max_nodes = right.number_input("Max nodes", value=20)
+
+        index = (None
+            if st.session_state.bootstrap is None
+            else int(service_list.index[
+                 (service_list["machine_id"] == st.session_state.bootstrap["machine_id"]) &
+                 (service_list["pid"] == st.session_state.bootstrap["pid"])
+        ][0]))
+        selection = left.selectbox("What service would you like to start from?", options, placeholder="[index] - [service_name] ([machine_id] : [pid])", index=index)
         if selection is not None:
             match = re.search(r"\d+", selection)
             if match is not None:
                 index = int(match.group())
                 st.session_state.bootstrap = service_list.iloc[index, :]
 
+        st.session_state.ripple_max_nodes = middle.number_input("Max nodes", value=20)
+
+        tree = st.session_state.get("tree")
+        compare_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
+        if tree is not None:
+            for elem in tree:
+                start, end, range_type = elem, tree[elem][0], tree[elem][1]
+                if range_type != "compare":
+                    continue
+                row = pd.DataFrame([[start, end, range_type]], columns=compare_entries.columns)
+                compare_entries = pd.concat([compare_entries, row], ignore_index=True)
+        st.session_state.ripple_use_compare = right.toggle("Use compare", disabled=compare_entries.shape[0] == 0)
+        st.session_state.compare_entries = compare_entries
 
     if st.session_state.bootstrap is not None:
-        bootstrap = st.session_state.bootstrap
-        pid_connections = db.custom_query(Path("./sql/pid_connections.sql").read_text())
+
+        if (not st.session_state.ripple_use_compare) or (st.session_state.compare_entries is None):
+            compare_filter = "true"
+        else:
+            compare_filter = "(" + " OR ".join([f'(ts_s >= \'{row["start"]}\' AND ts_s <= \'{row["end"]}\')' for _, row in st.session_state.compare_entries.iterrows()]) + ")"
+        pid_connections_query = Template(Path("./sql/pid_connections.sql").read_text()).render(vfs_ts_filter=compare_filter)
+        pid_connections = db.custom_query(pid_connections_query)
+        pid_connections = pid_connections.sort_values(list(pid_connections.columns))
         missing_discovery = db.custom_query(Path("./sql/missing_discovery.sql").read_text())
+        missing_discovery = missing_discovery.sort_values(list(missing_discovery.columns))
         unconnected_pids = db.custom_query(Path("./sql/unconnected_pids.sql").read_text())
+
+        bootstrap = st.session_state.bootstrap
         graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]), max_nodes=st.session_state.ripple_max_nodes)
         add_missing_discovery(graph, missing_discovery, max_nodes=st.session_state.ripple_max_nodes)
         add_disconnected(graph, unconnected_pids, bootstrap["pid"])

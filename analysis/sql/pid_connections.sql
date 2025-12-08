@@ -4,6 +4,7 @@ WITH
     FROM vfs 
     LEFT JOIN linux_consts lc ON vfs.fs_magic = lc.value and lc.const_type = 'fs_magic'
     WHERE lc.const_name = 'SOCKFS_MAGIC'
+        AND {{vfs_ts_filter}}
   ),
   unix_sock_map AS (
     SELECT DISTINCT 
@@ -22,9 +23,9 @@ WITH
       rusp.pid rpid,
       us.sock2 rsock
     FROM unix_sock_map us
-    LEFT JOIN pid_sock lusp -- left unix socket pid
+    INNER JOIN pid_sock lusp -- left unix socket pid
       ON us.machine_id = lusp.machine_id AND us.sock1 = lusp.inode_id
-    LEFT JOIN pid_sock rusp -- right unix socket pid
+    INNER JOIN pid_sock rusp -- right unix socket pid
       ON us.machine_id = rusp.machine_id AND us.sock2 = rusp.inode_id
     WHERE lpid IS NOT NULL AND rpid IS NOT NULL
   ),
@@ -55,8 +56,8 @@ WITH
       ts.machine1 lmachine, pid1.pid lpid, ts.sock1, 
       ts.machine2 rmachine, pid2.pid rpid, ts.sock2 
     FROM tcp_sock_map ts
-    LEFT JOIN pid_sock pid1 ON ts.machine1 = pid1.machine_id and ts.sock1 = pid1.inode_id
-    LEFT JOIN pid_sock pid2 ON ts.machine2 = pid2.machine_id and ts.sock2 = pid2.inode_id
+    INNER JOIN pid_sock pid1 ON ts.machine1 = pid1.machine_id and ts.sock1 = pid1.inode_id
+    INNER JOIN pid_sock pid2 ON ts.machine2 = pid2.machine_id and ts.sock2 = pid2.inode_id
   ),
   -- get the number of tcp connections between 2 pids
   pid_map_tcp_connections AS (
@@ -75,6 +76,7 @@ WITH
     FROM vfs
     LEFT JOIN linux_consts lcf ON lcf.const_type = 'fs_magic' AND lcf.value = vfs.fs_magic
     WHERE fs_magic_desc = 'PIPEFS_MAGIC'
+        AND {{ vfs_ts_filter }}
     ORDER BY vfs.inode_id
   ),
   -- get the pids interacting via the same pipe

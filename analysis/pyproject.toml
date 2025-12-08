@@ -11,6 +11,7 @@ dependencies = [
     "streamlit-monaco>=0.1.3",
     "btrees>=6.3",
     "openpyxl>=3.1.5",
+    "jinja2>=3.1.6",
 ]
 
 [tool.setuptools]
