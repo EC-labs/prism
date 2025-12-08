@@ -99,6 +99,7 @@ if st.session_state.target_data is not None:
             )
 
         if x_axis and y_axis:
+            st.session_state.target_data[x_axis] = pd.to_datetime(st.session_state.target_data[x_axis])
             st.session_state.compare_chart_axis = {"x_axis": x_axis, "y_axis": y_axis}
 
 

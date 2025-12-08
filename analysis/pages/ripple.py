@@ -24,7 +24,7 @@ def add_disconnected(graph: nx.Graph, disconnected: pd.DataFrame, pid: int):
         machine, pid, service = row["machine_id"], row["pid"], row["service_name"]
         graph.add_node(f"{service}\n({machine}:{pid})", machine=machine, pid=pid, service=service)
 
-def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame):
+def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame, max_nodes: int):
     nodes_to_add, edges_to_add = [], []
     for node, attr in graph.nodes.data():
         pid = attr["pid"]
@@ -32,12 +32,14 @@ def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame):
         for _, edge in missing_edges.iterrows():
             dst = edge["dst_address"]
             connections = edge["connections"]
-            nodes_to_add.append((dst, dict(machine=-1, pid=-1, service=-1)))
-            edges_to_add.append((node, dst, dict(connections=connections)))
+            
+            if len(graph) <= max_nodes:
+                nodes_to_add.append((dst, dict(machine=-1, pid=-1, service=-1)))
+                edges_to_add.append((node, dst, dict(connections=connections)))
     graph.add_nodes_from(nodes_to_add)
     graph.add_edges_from(edges_to_add)
 
-def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[int, int]) -> nx.Graph:
+def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[int, int], max_nodes: int) -> nx.Graph:
     machine, pid = bootstrap
     graph = nx.Graph()
     queue, visited = deque([(machine, pid)]), set()
@@ -57,9 +59,15 @@ def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[i
             if pid1 == pid2: 
                 continue
 
-            graph.add_node(f"{service1}\n({machine1}:{pid1})", machine=machine1, pid=pid1, service=service1)
-            graph.add_node(f"{service2}\n({machine2}:{pid2})", machine=machine2, pid=pid2, service=service2)
-            graph.add_edge(f"{service1}\n({machine1}:{pid1})", f"{service2}\n({machine2}:{pid2})", connections=connections)
+            s1_nid, s2_nid = f"{service1}\n({machine1}:{pid1})", f"{service2}\n({machine2}:{pid2})"
+            if len(graph) <= max_nodes:
+                graph.add_node(s1_nid, machine=machine1, pid=pid1, service=service1)
+
+            if len(graph) <= max_nodes:
+                graph.add_node(s2_nid, machine=machine2, pid=pid2, service=service2)
+
+            if graph.has_node(s1_nid) and graph.has_node(s2_nid):
+                graph.add_edge(s1_nid, s2_nid, connections=connections)
 
             if (machine1, pid1) not in visited:
                 queue.append((machine1, pid1))
@@ -212,14 +220,16 @@ def main():
         query = Path("./sql/service_list.sql").read_text()
         st.session_state.service_list = db.custom_query(query)
         st.session_state.bootstrap = None
+        st.session_state.ripple_max_nodes = 20
 
     st.session_state.ripple_init = True
 
-    left, _ = st.columns([0.6, 0.4])
+    left, right = st.columns([0.6, 0.4])
     if st.session_state.service_list is not None:
         service_list = st.session_state.service_list
         options = service_list.index.astype(str) + " - " + service_list["service_name"] + " (" + service_list["machine_id"].astype(str) + " : " + service_list["pid"].astype(str) + ")"
-        selection = st.session_state.bootstrap = left.selectbox("What service would you like to start from?", options, placeholder="[index] - [service_name] ([machine_id] : [pid])", index=None)
+        selection = left.selectbox("What service would you like to start from?", options, placeholder="[index] - [service_name] ([machine_id] : [pid])", index=None)
+        st.session_state.ripple_max_nodes = right.number_input("Max nodes", value=20)
         if selection is not None:
             match = re.search(r"\d+", selection)
             if match is not None:
@@ -232,9 +242,8 @@ def main():
         pid_connections = db.custom_query(Path("./sql/pid_connections.sql").read_text())
         missing_discovery = db.custom_query(Path("./sql/missing_discovery.sql").read_text())
         unconnected_pids = db.custom_query(Path("./sql/unconnected_pids.sql").read_text())
-        graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]))
-        add_missing_discovery(graph, missing_discovery)
+        graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]), max_nodes=st.session_state.ripple_max_nodes)
+        add_missing_discovery(graph, missing_discovery, max_nodes=st.session_state.ripple_max_nodes)
         add_disconnected(graph, unconnected_pids, bootstrap["pid"])
         draw_network(graph, bootstrap["pid"])
-
 main()
