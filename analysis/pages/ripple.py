@@ -5,16 +5,12 @@ from matplotlib.patches import Wedge
 from jinja2 import Template
 
 import colorsys
-import matplotlib
 import matplotlib.pyplot as plt
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import networkx as nx
 import numpy as np
 import re
-
-from database import DatabaseClient
 
 
 def normalise_angle_degrees(degrees: float) -> float:
@@ -26,19 +22,18 @@ def add_disconnected(graph: nx.Graph, disconnected: pd.DataFrame, pid: int):
         graph.add_node(f"{service}\n({machine}:{pid})", machine=machine, pid=pid, service=service)
 
 def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame, max_nodes: int):
-    nodes_to_add, edges_to_add = [], []
-    for node, attr in graph.nodes.data():
+    for node, attr in list(graph.nodes.data()):
         pid = attr["pid"]
         missing_edges = missing_discovery.loc[missing_discovery["pid"] == pid]
         for _, edge in missing_edges.iterrows():
             dst = edge["dst_address"]
             connections = edge["connections"]
 
-            if len(graph) <= max_nodes:
-                nodes_to_add.append((dst, dict(machine=-1, pid=-1, service=-1)))
-                edges_to_add.append((node, dst, dict(connections=connections)))
-    graph.add_nodes_from(nodes_to_add)
-    graph.add_edges_from(edges_to_add)
+            if len(graph) < max_nodes:
+                graph.add_node(dst, machine=-1, pid=-1, service=-1)
+
+            if graph.has_node(node) and graph.has_node(dst):
+                graph.add_edge(node, dst, connections=connections)
 
 def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[int, int], max_nodes: int) -> nx.Graph:
     machine, pid = bootstrap
