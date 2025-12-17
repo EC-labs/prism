@@ -26,7 +26,7 @@ def bar_tab(tab):
     data = st.session_state.query_result
 
     with tab.container():
-        config_col1, config_col2, config_col3, _ = st.columns([0.15, 0.15, 0.05, 0.65])
+        config_col1, config_col2, _ = st.columns([0.15, 0.15, 0.70])
         with config_col1:
             x_axis = st.selectbox(
                 "X Axis",
