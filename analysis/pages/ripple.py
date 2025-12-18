@@ -256,7 +256,7 @@ def main():
 
     if st.session_state.bootstrap is not None:
 
-        if (not st.session_state.ripple_use_compare) or (st.session_state.compare_entries is None):
+        if (not st.session_state.ripple_use_compare) or (st.session_state.compare_entries is None) or (st.session_state.compare_entries.shape[0] == 0):
             compare_filter = "true"
         else:
             compare_filter = "(" + " OR ".join([f'(ts_s >= \'{row["start"]}\' AND ts_s <= \'{row["end"]}\')' for _, row in st.session_state.compare_entries.iterrows()]) + ")"

@@ -7,7 +7,7 @@ WITH
             fwake.futex_key_offset 
         FROM futex_wake AS fwake
         WHERE {{ pid_filter }}
-          AND ({{ compare filter }} OR {{ baseline_filter }})
+          AND ({{ compare_filter("ts_s") }} OR {{ baseline_filter("ts_s") }})
     ),
 
     fwait AS (
@@ -18,7 +18,7 @@ WITH
             fwait.futex_key_offset 
         FROM futex_wait AS fwait
         WHERE {{ pid_filter }}
-          AND ({{ compare filter }} OR {{ baseline_filter }})
+          AND ({{ compare_filter("ts_s") }} OR {{ baseline_filter("ts_s") }})
     ),
 
     all_futexes AS (
@@ -70,7 +70,7 @@ UNPIVOT (
             USING (futex_key_addr, futex_key_word, futex_key_offset)
         WHERE
             {{ pid_filter }}
-            AND {{ baseline_filter }}
+            AND {{ baseline_filter("ts_s") }}
         GROUP BY pid
     )
 )
@@ -107,7 +107,7 @@ UNPIVOT (
             USING (futex_key_addr, futex_key_word, futex_key_offset)
         WHERE
             {{ pid_filter }}
-            AND {{ compare_filter }}
+            AND {{ compare_filter("ts_s") }}
         GROUP BY pid
     )
 )

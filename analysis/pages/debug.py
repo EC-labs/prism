@@ -1,8 +1,18 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+import random
 
+from jinja2 import Template, meta, Environment
+
+from variables import template_variables
 from components.monaco_sql_editor import monaco_sql_editor
+
+
+def generate_data_editor_key() -> str:
+    return f"data_editor_{random.randint(0, int(1e6))}"
+
 
 st.set_page_config(page_title="Debug", layout="wide")
 st.title("Debug")
@@ -17,7 +27,39 @@ if "init" not in st.session_state:
     st.session_state.show_line_chart = False
     st.session_state.query = None
 
+    st.session_state.debug_variables = pd.DataFrame({"name": [], "value": []})
+    st.session_state.debug_data_editor_key = generate_data_editor_key()
+
 st.session_state.init = True
+
+
+def variables_table():
+    debug_variables = st.session_state.debug_variables
+    st.data_editor(debug_variables, key=st.session_state.debug_data_editor_key, num_rows="dynamic")
+    editor_changes = st.session_state[st.session_state.debug_data_editor_key]
+
+    if editor_changes["deleted_rows"] != []:
+        for idx in editor_changes["deleted_rows"]:
+            st.session_state.debug_variables = debug_variables.drop(idx)
+        st.session_state.debug_data_editor_key = generate_data_editor_key()
+        st.rerun()
+
+    if editor_changes["edited_rows"] != {}:
+        for rowidx, changes in editor_changes["edited_rows"].items():
+            for change_key, change_value in changes.items():
+                debug_variables.iloc[rowidx][change_key] = change_value
+        st.session_state.debug_data_editor_key = generate_data_editor_key()
+        st.rerun()
+
+    if editor_changes["added_rows"] != []:
+        rows = {"name": [], "value": []}
+        for idx, row in enumerate(editor_changes["added_rows"]):
+            rows["name"].append(row.get("name").trim() if row.get("name") is not None else None)
+            rows["value"].append(row.get("value").trim() if row.get("value") is not None else None)
+        st.session_state.debug_variables = pd.concat([st.session_state.debug_variables, pd.DataFrame(rows)]).reset_index(drop=True)
+        st.session_state.debug_data_editor_key = generate_data_editor_key()
+        st.rerun()
+
 
 def bar_tab(tab):
     if st.session_state.query_result is None:
@@ -110,14 +152,11 @@ def histogram_tab(tab):
             align="edge",
             alpha=0.4,
         )
-
         plt.ylabel("Probability")
         plt.xlabel(distribution)
-
         tab.pyplot(fig, width=800)
         plt.close()
     elif group_by in st.session_state.query_result.columns:
-
         data = st.session_state.query_result
         fig = plt.figure(figsize=(12, 8))
         for group in data[group_by].unique():
@@ -129,7 +168,6 @@ def histogram_tab(tab):
             )
 
             pmf = counts / counts.sum() if normalise else counts
-            print(pmf)
 
             plt.bar(
                 bins[:-1],
@@ -139,18 +177,9 @@ def histogram_tab(tab):
                 alpha=0.4,
                 label=group
             )
-
         plt.legend()
         tab.pyplot(fig, width=800)
         plt.close()
-
-    # pmf = data.value_counts(normalize=True).sort_index()
-
-    # fig = plt.figure(figsize=(12, 8))
-    # plt.hist(st.session_state.query_result[distribution], bins=n_bins, density=True)
-    # tab.pyplot(fig, width=800)
-    # plt.close()
-
 
 
 def line_tab(tab):
@@ -221,14 +250,19 @@ def main():
 
     st.session_state.query = monaco_sql_editor(
         value=st.session_state.query if st.session_state.query is not None else "SELECT ts, pid, tid, run_share FROM taskstats_view ORDER BY ts LIMIT 100;",
-        # schema=schema,
         height="150px",
         theme="vs-dark",
         key="sql_editor",
     )
+    variables_table()
+
 
     if st.button("Run Query"):
-        st.session_state.query_result = db.custom_query(st.session_state.query)
+        variables = {row["name"]: row["value"] for _, row in st.session_state.debug_variables.iterrows() if (row["name"] is not None) and (row["value"] is not None)}
+        variables = {**template_variables(), **variables}
+        rendered = Template(st.session_state.query).render(**variables)
+        st.write(rendered)
+        st.session_state.query_result = db.custom_query(rendered)
         st.session_state.show_line_chart = False
 
     if st.session_state.query_result is not None:

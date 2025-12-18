@@ -22,7 +22,7 @@ UNPIVOT (
             SUM(hist0) + SUM(hist1) + SUM(hist2) + SUM(hist3) + SUM(hist4) + SUM(hist5) + SUM(hist6) + SUM(hist7) as total,
         FROM iowait 
         WHERE {{ pid_filter }}
-            AND {{ baseline_filter }}
+            AND {{ baseline_filter("ts_s") }}
         GROUP by pid
     )
 )
@@ -55,7 +55,7 @@ UNPIVOT (
             SUM(hist0) + SUM(hist1) + SUM(hist2) + SUM(hist3) + SUM(hist4) + SUM(hist5) + SUM(hist6) + SUM(hist7) as total,
         FROM iowait 
         WHERE {{ pid_filter }}
-            AND {{ compare_filter }}
+            AND {{ compare_filter("ts_s") }}
         GROUP by pid
     )
 )
