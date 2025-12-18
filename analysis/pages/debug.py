@@ -81,11 +81,13 @@ def histogram_tab(tab):
             n_bins = st.number_input("# Bins", value=20)
 
     with tab.container():
-        config_col1, config_col2, _ = st.columns([0.05, 0.05, 0.9])
+        config_col1, config_col2, config_col3, _ = st.columns([0.05, 0.05, 0.1, 0.8], vertical_alignment="bottom")
         with config_col1:
             range_min = st.number_input("Range Min", value=0.0)
         with config_col2:
             range_max = st.number_input("Range Max", value=1.0)
+        with config_col3:
+            normalise = st.toggle("Normalise")
 
     if distribution not in st.session_state.query_result.columns:
         return
@@ -98,7 +100,7 @@ def histogram_tab(tab):
             range=(range_min, range_max)
         )
 
-        pmf = counts / counts.sum()
+        pmf = counts / counts.sum() if normalise else counts
 
         fig = plt.figure(figsize=(12, 8))
         plt.bar(
@@ -111,7 +113,6 @@ def histogram_tab(tab):
 
         plt.ylabel("Probability")
         plt.xlabel(distribution)
-        plt.ylim(0, 1)
 
         tab.pyplot(fig, width=800)
         plt.close()
@@ -127,7 +128,8 @@ def histogram_tab(tab):
                 range=(range_min, range_max)
             )
 
-            pmf = counts / counts.sum()
+            pmf = counts / counts.sum() if normalise else counts
+            print(pmf)
 
             plt.bar(
                 bins[:-1],
@@ -139,7 +141,6 @@ def histogram_tab(tab):
             )
 
         plt.legend()
-        plt.ylim(0, 1)
         tab.pyplot(fig, width=800)
         plt.close()
 
