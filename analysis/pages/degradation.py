@@ -11,6 +11,7 @@ from collections import defaultdict
 from matplotlib.patches import Wedge
 from pathlib import Path
 from jinja2 import Template
+from BTrees.OOBTree import OOBTree
 
 from database import DatabaseClient
 from variables import template_variables
@@ -43,11 +44,18 @@ SHARES = [
     },
 ]
 
+def hash_db_client(db: DatabaseClient): 
+    return hash(db.conn)
 
-def total_time_range(range_filter: str) -> float | None:
-    if "tree" not in st.session_state or st.session_state.tree is None:
-        return None
-    
+def hash_graph(graph: nx.Graph): 
+    nodes = list(graph.nodes)
+    nodes.sort()
+    return hash(tuple(nodes))
+
+def hash_tree(tree: OOBTree): 
+    return hash(tuple(tree))
+
+def total_time_range(range_filter: str, tree: OOBTree) -> float | None:
     total_time = 0.0
     tree = st.session_state.tree
     for elem in tree:
@@ -83,6 +91,26 @@ def process_shares(machine_id: int, pid: int, total_time_compare: float, total_t
         res[share_type] = score
 
     return res
+
+@st.cache_data(hash_funcs={DatabaseClient: hash_db_client, nx.Graph: hash_graph, OOBTree: hash_tree}, show_spinner=False)
+def compute_scores(db, graph, range_tree, _status) -> pd.DataFrame | None:
+    total_time_compare, total_time_baseline = total_time_range("compare", range_tree), total_time_range("baseline", range_tree)
+    if total_time_compare is None or total_time_baseline is None: 
+        return
+
+    graph_len = len(graph.nodes)
+    scores = pd.DataFrame(columns=["service", "run", "runqueue", "uninterruptible", "blkio", "futex_schedule", "futex_contention"])
+    for i, node in enumerate(graph):
+        machine_id, pid = graph.nodes[node]["machine"], graph.nodes[node]["pid"],
+        _status.update(label=f"⏳Computing shares {i}/{graph_len}", expanded=False)
+        pid_shares = process_shares(machine_id, pid, total_time_compare, total_time_baseline, db)
+        pid_shares["service"] = node
+        scores = pd.concat([scores, pid_shares])
+        
+    scores.insert(1, "score", np.linalg.norm(scores.loc[:, ["run", "runqueue", "uninterruptible", "blkio", "futex_schedule", "futex_contention"]], axis=1))
+    scores.sort_values(by="score", ascending=False, inplace=True)
+    scores.reset_index(drop=True, inplace=True)
+    return scores
 
 def normalise_angle_degrees(degrees: float) -> float:
     return degrees if degrees <= 180 else degrees - 360
@@ -206,6 +234,9 @@ def draw_network(graph: nx.Graph, service_scores: pd.DataFrame):
     st.pyplot(fig, width=800)
     plt.close()
 
+def cb():
+    print("Selected")
+
 def main():
     if ('db' not in st.session_state) or (st.session_state.db is None):
         st.info("You’re almost ready — connect to a Prism database")
@@ -222,31 +253,29 @@ def main():
             st.switch_page("pages/ripple.py")
 
         return
-    db = st.session_state.db
-    graph = st.session_state.ripple_graph
-    total_time_compare, total_time_baseline = total_time_range("compare"), total_time_range("baseline")
-    if total_time_compare is None or total_time_baseline is None: 
+
+    if ('tree' not in st.session_state) or (st.session_state.ripple_graph is None):
+        st.info("Specify compare and baseline periods")
+
+        if st.button("Go to Ranges"):
+            st.switch_page("pages/compare.py")
+
         return
 
-    graph_len = len(graph.nodes)
-    status = st.status(f"⏳ Computing shares 0/{graph_len}", expanded=False)
-    scores = pd.DataFrame(columns=["service", "run", "runqueue", "uninterruptible", "blkio", "futex_schedule", "futex_contention"])
-    for i, node in enumerate(graph):
-        machine_id, pid = graph.nodes[node]["machine"], graph.nodes[node]["pid"],
-        status.update(label=f"⏳Computing shares {i}/{graph_len}", expanded=False)
-        pid_shares = process_shares(machine_id, pid, total_time_compare, total_time_baseline, db)
-        pid_shares["service"] = node
-        scores = pd.concat([scores, pid_shares])
-        
-    scores.insert(1, "score", np.linalg.norm(scores.loc[:, ["run", "runqueue", "uninterruptible", "blkio", "futex_schedule", "futex_contention"]], axis=1))
-    scores.sort_values(by="score", ascending=False, inplace=True)
-    scores.reset_index(drop=True, inplace=True)
+    db = st.session_state.db
+    graph = st.session_state.ripple_graph
+    tree = st.session_state.tree
+    status = st.status("⏳ Computing shares", expanded=False)
+    scores = compute_scores(db, graph, tree, status)
     status.update(label=f"✅️ Complete", state="complete", expanded=False)
+    if scores is None: 
+        return
+
     styler = scores.style.background_gradient(
         subset=["score"],
         cmap="copper"
     )
-    st.dataframe(styler)
+    event = st.dataframe(styler, on_select=cb, selection_mode='single-row')
     draw_network(graph, scores.loc[:, ["service", "score"]])
 
 st.set_page_config(page_title="Degradation", layout="centered")
