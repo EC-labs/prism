@@ -42,7 +42,7 @@ WITH
         SELECT * FROM contention
     )
 
-SELECT ts_s, tid, SUM(total_time)/1e9 as total_time, 'baseline' as type
+SELECT ts_s, tid, (1 - SUM(total_time)/1e9) as share, 'baseline' as type
 FROM futex_wait
 INNER JOIN schedule
     USING (futex_key_addr, futex_key_word, futex_key_offset)
@@ -50,8 +50,9 @@ WHERE
     {{ pid_filter }}
     AND {{ baseline_filter("ts_s") }}
 GROUP BY ts_s, tid
+HAVING share > 0.001
 UNION ALL 
-SELECT ts_s, tid, SUM(total_time)/1e9 as total_time, 'compare' as type
+SELECT ts_s, tid, (1 - SUM(total_time)/1e9) as share, 'compare' as type
 FROM futex_wait
 INNER JOIN schedule
     USING (futex_key_addr, futex_key_word, futex_key_offset)
@@ -59,3 +60,4 @@ WHERE
     {{ pid_filter }}
     AND {{ compare_filter("ts_s") }}
 GROUP BY ts_s, tid
+HAVING share > 0.001

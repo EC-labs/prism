@@ -56,10 +56,10 @@ def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[i
                 continue
 
             s1_nid, s2_nid = f"{service1}\n({machine1}:{pid1})", f"{service2}\n({machine2}:{pid2})"
-            if len(graph) <= max_nodes:
+            if len(graph) < max_nodes:
                 graph.add_node(s1_nid, machine=machine1, pid=pid1, service=service1)
 
-            if len(graph) <= max_nodes:
+            if len(graph) < max_nodes:
                 graph.add_node(s2_nid, machine=machine2, pid=pid2, service=service2)
 
             if graph.has_node(s1_nid) and graph.has_node(s2_nid):
@@ -219,6 +219,7 @@ def main():
         st.session_state.ripple_max_nodes = 20
         st.session_state.ripple_use_compare = False
         st.session_state.compare_entries = None
+        st.session_state.ripple_graph = None
 
     st.session_state.ripple_init = True
 
@@ -240,7 +241,7 @@ def main():
                 index = int(match.group())
                 st.session_state.bootstrap = service_list.iloc[index, :]
 
-        st.session_state.ripple_max_nodes = middle.number_input("Max nodes", value=20)
+        st.session_state.ripple_max_nodes = middle.number_input("Max nodes", value=st.session_state.ripple_max_nodes)
 
         tree = st.session_state.get("tree")
         compare_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
@@ -251,7 +252,7 @@ def main():
                     continue
                 row = pd.DataFrame([[start, end, range_type]], columns=compare_entries.columns)
                 compare_entries = pd.concat([compare_entries, row], ignore_index=True)
-        st.session_state.ripple_use_compare = right.toggle("Use compare", disabled=compare_entries.shape[0] == 0)
+        st.session_state.ripple_use_compare = right.toggle("Use compare", disabled=compare_entries.shape[0] == 0, value=st.session_state.ripple_use_compare)
         st.session_state.compare_entries = compare_entries
 
     if st.session_state.bootstrap is not None:
@@ -271,5 +272,6 @@ def main():
         graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]), max_nodes=st.session_state.ripple_max_nodes)
         add_missing_discovery(graph, missing_discovery, max_nodes=st.session_state.ripple_max_nodes)
         add_disconnected(graph, unconnected_pids, bootstrap["pid"])
+        st.session_state.ripple_graph = graph
         draw_network(graph, bootstrap["pid"])
 main()

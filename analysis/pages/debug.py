@@ -261,7 +261,7 @@ def main():
         variables = {row["name"]: row["value"] for _, row in st.session_state.debug_variables.iterrows() if (row["name"] is not None) and (row["value"] is not None)}
         variables = {**template_variables(), **variables}
         rendered = Template(st.session_state.query).render(**variables)
-        st.write(rendered)
+        print(rendered)
         st.session_state.query_result = db.custom_query(rendered)
         st.session_state.show_line_chart = False
 
