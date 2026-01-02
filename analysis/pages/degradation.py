@@ -80,7 +80,7 @@ def process_shares(machine_id: int, pid: int, total_time_compare: float, total_t
         if "compare" in stats and "baseline" in stats:
             compare, baseline = stats["compare"]/total_time_compare, stats["baseline"]/total_time_compare
             # do not over-inflate when baseline is small
-            if baseline < 0.001:
+            if baseline < 0.01:
                 score = compare
             else:
                 score = (compare-baseline)/baseline * compare
