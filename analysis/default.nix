@@ -13,6 +13,7 @@ let
             ]
           );
       virtualenv = pythonSet.mkVirtualEnv "dev-env" workspace.deps.all;
+      sqlEditor = (pkgs.callPackage ./src/components/monaco_sql_editor/frontend { }).package;
 in
 {
     devShell = pkgs.mkShell {
@@ -25,6 +26,7 @@ in
           UV_NO_SYNC = "1";
           UV_PYTHON = pythonSet.python.interpreter;
           UV_PYTHON_DOWNLOADS = "never";
+          SQL_EDITOR = sqlEditor;
           LD_LIBRARY_PATH = lib.makeLibraryPath pkgs.pythonManylinuxPackages.manylinux1;
         };
         shellHook = ''
@@ -34,6 +36,7 @@ in
     };
     package = pkgs.writeShellScriptBin "analysis" ''
         source ${virtualenv}/bin/activate
+        export SQL_EDITOR=${sqlEditor}
         ${virtualenv}/bin/serve
     '';
 }
