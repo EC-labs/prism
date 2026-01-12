@@ -1,17 +1,17 @@
 import tempfile
 import streamlit as st
 
-from database import DatabaseClient
-
-st.title('Prism Performance Analysis')
-st.set_page_config(page_title="Ripple", layout="centered")
-
-if 'main_init' not in st.session_state:
-    st.session_state.db = None
-
-st.session_state.main_init = True
+from src.database import DatabaseClient
 
 def main():
+    st.title('Prism Performance Analysis')
+    st.set_page_config(page_title="Ripple", layout="centered")
+
+    if 'main_init' not in st.session_state:
+        st.session_state.db = None
+
+    st.session_state.main_init = True
+
     database = st.file_uploader("Upload Prism Database File", type=["db3"])
     if database:
         tmp = tempfile.NamedTemporaryFile(delete=True, delete_on_close=True)

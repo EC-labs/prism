@@ -13,34 +13,34 @@ from pathlib import Path
 from jinja2 import Template
 from BTrees.OOBTree import OOBTree
 
-from database import DatabaseClient
-from variables import template_variables
+from src.database import DatabaseClient
+from src.variables import template_variables
 
 
 SHARES = [
     {
         "share_type": "run",
-        "file_path": "sql/distributions/pid_run_share.sql",
+        "file_path": "distributions/pid_run_share.sql",
     },
     {
         "share_type": "runqueue",
-        "file_path": "sql/distributions/pid_rq_share.sql",
+        "file_path": "distributions/pid_rq_share.sql",
     },
     {
         "share_type": "uninterruptible",
-        "file_path": "sql/distributions/pid_uninterruptible_share.sql",
+        "file_path": "distributions/pid_uninterruptible_share.sql",
     },
     {
         "share_type": "blkio",
-        "file_path": "sql/distributions/pid_blkio_share.sql",
+        "file_path": "distributions/pid_blkio_share.sql",
     },
     {
         "share_type": "futex_schedule",
-        "file_path": "sql/distributions/pid_futex_total_schedule.sql",
+        "file_path": "distributions/pid_futex_total_schedule.sql",
     },
     {
         "share_type": "futex_contention",
-        "file_path": "sql/distributions/pid_futex_total_contention.sql",
+        "file_path": "distributions/pid_futex_total_contention.sql",
     },
 ]
 
@@ -67,8 +67,9 @@ def total_time_range(range_filter: str, tree: OOBTree) -> float | None:
 def process_shares(machine_id: int, pid: int, total_time_compare: float, total_time_baseline: float, db: DatabaseClient):
     res = pd.DataFrame([[pd.NA] * 6], columns=["run", "runqueue", "uninterruptible", "blkio", "futex_schedule", "futex_contention"])
     pid_filter = f"(pid={pid} AND machine_id={machine_id})"
+    sql_dir = Path(__file__).parent / "../sql"
     for share in SHARES:
-        share_type, query_path = share["share_type"], share["file_path"]
+        share_type, query_path = share["share_type"], sql_dir / share["file_path"]
         variables = {**template_variables(), "pid_filter": pid_filter}
         template = Path(query_path).read_text()
         rendered = Template(template).render(**variables)

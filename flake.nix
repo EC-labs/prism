@@ -34,11 +34,16 @@
                 pkgs = nixpkgs.legacyPackages.${system};
                 crate2nixTools = crate2nix.lib.tools;
                 generatedBuild = import ./default.nix { inherit pkgs crate2nixTools; };
+                analysis = import ./analysis { 
+                    inherit pkgs pyproject-build-systems pyproject-nix uv2nix; 
+                    lib = pkgs.lib; 
+                };
             in {
                 packages = {
                     prism = generatedBuild.workspaceMembers.metric-collector.build;
                     default = self.packages.${system}.prism;
                     ripple = self.packages.${system}.prism;
+                    analysis = analysis.package;
                 };
 
                 images = {
@@ -101,10 +106,7 @@
                             (pkgs.python3.withPackages (python-pkgs: with python-pkgs; [ ]))
                         ];
                     };
-                    analysis = import ./analysis { 
-                        inherit pkgs pyproject-build-systems pyproject-nix uv2nix; 
-                        lib = pkgs.lib; 
-                    };
+                    analysis = analysis.devShell;
                     graph = pkgs.mkShell {
                         packages = with pkgs; [
                             (python3.withPackages (python-pkgs: with python-pkgs; [

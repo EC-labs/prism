@@ -6,8 +6,8 @@ import random
 
 from jinja2 import Template, meta, Environment
 
-from variables import template_variables
-from components.monaco_sql_editor import monaco_sql_editor
+from src.variables import template_variables
+from src.components.monaco_sql_editor import monaco_sql_editor
 
 
 def generate_data_editor_key() -> str:

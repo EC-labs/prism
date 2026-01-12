@@ -14,20 +14,26 @@ let
           );
       virtualenv = pythonSet.mkVirtualEnv "dev-env" workspace.deps.all;
 in
-pkgs.mkShell {
-    packages = [
-      python
-      pkgs.uv
-      virtualenv
-    ];
-    env = {
-      UV_NO_SYNC = "1";
-      UV_PYTHON = pythonSet.python.interpreter;
-      UV_PYTHON_DOWNLOADS = "never";
-      LD_LIBRARY_PATH = lib.makeLibraryPath pkgs.pythonManylinuxPackages.manylinux1;
+{
+    devShell = pkgs.mkShell {
+        packages = [
+          python
+          pkgs.uv
+          virtualenv
+        ];
+        env = {
+          UV_NO_SYNC = "1";
+          UV_PYTHON = pythonSet.python.interpreter;
+          UV_PYTHON_DOWNLOADS = "never";
+          LD_LIBRARY_PATH = lib.makeLibraryPath pkgs.pythonManylinuxPackages.manylinux1;
+        };
+        shellHook = ''
+          unset PYTHONPATH
+          source "${virtualenv}/bin/activate"
+        '';
     };
-    shellHook = ''
-      unset PYTHONPATH
-      source "${virtualenv}/bin/activate"
+    package = pkgs.writeShellScriptBin "analysis" ''
+        source ${virtualenv}/bin/activate
+        ${virtualenv}/bin/serve
     '';
 }

@@ -211,9 +211,10 @@ def main():
         return
 
     db = st.session_state.db
+    sql_dir = Path(__file__).parent / "../sql"
 
     if "ripple_init" not in st.session_state:
-        query = Path("./sql/service_list.sql").read_text()
+        query = (sql_dir / "service_list.sql").read_text()
         st.session_state.service_list = db.custom_query(query)
         st.session_state.bootstrap = None
         st.session_state.ripple_max_nodes = 20
@@ -261,12 +262,12 @@ def main():
             compare_filter = "true"
         else:
             compare_filter = "(" + " OR ".join([f'(ts_s >= \'{row["start"]}\' AND ts_s <= \'{row["end"]}\')' for _, row in st.session_state.compare_entries.iterrows()]) + ")"
-        pid_connections_query = Template(Path("./sql/pid_connections.sql").read_text()).render(vfs_ts_filter=compare_filter)
+        pid_connections_query = Template((sql_dir / "pid_connections.sql").read_text()).render(vfs_ts_filter=compare_filter)
         pid_connections = db.custom_query(pid_connections_query)
         pid_connections = pid_connections.sort_values(list(pid_connections.columns))
-        missing_discovery = db.custom_query(Path("./sql/missing_discovery.sql").read_text())
+        missing_discovery = db.custom_query((sql_dir / "missing_discovery.sql").read_text())
         missing_discovery = missing_discovery.sort_values(list(missing_discovery.columns))
-        unconnected_pids = db.custom_query(Path("./sql/unconnected_pids.sql").read_text())
+        unconnected_pids = db.custom_query((sql_dir / "unconnected_pids.sql").read_text())
 
         bootstrap = st.session_state.bootstrap
         graph = bootstrap_undirected_graph(pid_connections, (bootstrap["machine_id"], bootstrap["pid"]), max_nodes=st.session_state.ripple_max_nodes)

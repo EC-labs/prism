@@ -1,5 +1,5 @@
 [project]
-name = "analysis"
+name = "src"
 version = "0.1.0"
 description = "Prism Performance Analysis Dashboard"
 requires-python = ">=3.12"
@@ -14,8 +14,12 @@ dependencies = [
     "jinja2>=3.1.6",
 ]
 
-[tool.setuptools]
-py-modules = []
+[project.scripts]
+serve = "src:start"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
