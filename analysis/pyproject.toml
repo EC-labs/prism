@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-serve = "src:start"
+analysis = "src:start"
 
 [build-system]
 requires = ["hatchling"]

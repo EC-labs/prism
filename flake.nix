@@ -63,6 +63,7 @@
                             Entrypoint = [ "/bin/metric-collector" ];
                         };
                     };
+                    analysis = analysis.image;
                 };
 
                 devShells = {
@@ -71,6 +72,7 @@
                         hardeningDisable = [ "stackprotector" "zerocallusedregs" ];
 
                         nativeBuildInputs = [ 
+                            dive
                             clippy
                             rustfmt
                             rust-analyzer

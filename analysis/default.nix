@@ -15,7 +15,7 @@ let
       virtualenv = pythonSet.mkVirtualEnv "dev-env" workspace.deps.all;
       sqlEditor = (pkgs.callPackage ./src/components/monaco_sql_editor/frontend { }).package;
 in
-{
+rec {
     devShell = pkgs.mkShell {
         packages = [
           python
@@ -37,6 +37,14 @@ in
     package = pkgs.writeShellScriptBin "analysis" ''
         source ${virtualenv}/bin/activate
         export SQL_EDITOR=${sqlEditor}
-        ${virtualenv}/bin/serve
+        ${virtualenv}/bin/analysis
     '';
+    image = pkgs.dockerTools.buildImage {
+        name = "dclandau/prism-analysis";
+        tag = "latest";
+        copyToRoot = [ package pkgs.coreutils ];
+        config = {
+            Entrypoint = [ "/bin/analysis" ];
+        };
+    };
 }
