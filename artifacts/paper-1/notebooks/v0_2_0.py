@@ -141,7 +141,7 @@ def compute_derived_metrics(metrics: pd.DataFrame, start_epoch_s: Optional[int] 
         if m != None: 
             prefix, metric = m.groups()
 
-            metrics[col].fillna(method="pad", inplace=True)
+            metrics[col] = metrics[col].ffill()
             epoch_ms_col = f"{prefix}/epoch_ms"
             metrics.loc[
                 metrics[epoch_ms_col].isna() == True, 
@@ -153,7 +153,7 @@ def compute_derived_metrics(metrics: pd.DataFrame, start_epoch_s: Optional[int] 
             epoch_ms = metrics[epoch_ms_col]
             derived = f"{prefix}/{metric}_rate"
             new_cols[derived] = ((metrics[col] / 1e6).diff() / epoch_ms.diff())
-            new_cols[derived].fillna(0, inplace=True)
+            new_cols[derived] = new_cols[derived].fillna(0)
 
         m = re.search(r'^(thread/.*)/(runtime|rq_time|sleep_time|block_time|iowait_time)$', col)
         if m != None: 
@@ -171,8 +171,8 @@ def compute_derived_metrics(metrics: pd.DataFrame, start_epoch_s: Optional[int] 
         if m != None: 
             prefix, metric = m.groups()
 
-            metrics[col].fillna(method="pad", inplace=True)
-            metrics[col].fillna(0, inplace=True)
+            metrics[col] = metrics[col].ffill()
+            metrics[col] = metrics[col].fillna(0)
 
             epoch_ms_col = f"{prefix}/epoch_ms"
             metrics.loc[
@@ -185,14 +185,14 @@ def compute_derived_metrics(metrics: pd.DataFrame, start_epoch_s: Optional[int] 
             epoch_ms = metrics[epoch_ms_col]
             derived = f"{prefix}/{metric}_rate"
             new_cols[derived] = ((metrics[col] / 1e6).diff() / epoch_ms.diff())
-            new_cols[derived].fillna(0, inplace=True)
+            new_cols[derived] = new_cols[derived].fillna(0)
 
         m = re.search(r'^(thread/.*)/(futex_wait)_ns$', col)
         if m != None: 
             prefix, metric = m.groups()
 
-            metrics[col].fillna(method="pad", inplace=True)
-            metrics[col].fillna(0, inplace=True)
+            metrics[col] = metrics[col].ffill()
+            metrics[col] = metrics[col].fillna(0)
 
             epoch_ms_col = f"{prefix}/epoch_ms"
             metrics.loc[
@@ -206,15 +206,15 @@ def compute_derived_metrics(metrics: pd.DataFrame, start_epoch_s: Optional[int] 
 
             derived = f"{prefix}/{metric}_rate"
             new_cols[derived] = ((metrics[col] / 1e6).diff() / epoch_ms.diff())
-            new_cols[derived].fillna(0, inplace=True)
+            new_cols[derived] = new_cols[derived].fillna(0)
 
         m = re.search(r'^(thread/.*)/(futex_count)$', col)
         if m != None: 
-            metrics[col].fillna(0, inplace=True)
+            metrics[col] = metrics[col].fillna(0)
 
         m = re.search(r'^(global/.*)/(sector_cnt)$', col)
         if m != None: 
-            metrics[col].fillna(0, inplace=True)
+            metrics[col] = metrics[col].fillna(0)
 
     new_cols = pd.DataFrame(new_cols)
     return pd.concat([metrics, new_cols], axis=1)

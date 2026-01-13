@@ -121,6 +121,7 @@ plt.figure(figsize=FIGSIZE)
 plt.ylabel("Block Time (s/s)")
 plt.xlabel("Relative Time (s)")
 threads = pd.Index([])
+samples = pd.DataFrame({}, columns=["epoch_s", "value"])
 res = pd.Series(dtype="Float64", name="value")
 for col in significant_corr.index: 
     if "epoch_s" in col or TARGET_METRIC in col or "epoch_ms" in col: 
@@ -128,23 +129,66 @@ for col in significant_corr.index:
     if metrics[col].median() < 0.05:
         continue
     threads = threads.append(pd.Index([col]))
+
     sub = metrics.loc[:, ["epoch_s", col]].set_index("epoch_s")
     sub.columns = ["value"]
     res = res.add(sub["value"], fill_value=0)
+
     thread = re.sub(r"thread/\d+/(\d+)/.*", r"\1", col)
     thread_id = thread_ids.get(thread)
     if not thread_id:
         thread_ids[thread] = f"t{len(thread_ids) + 1}"
         thread_id = thread_ids[thread]
     plt.plot(metrics["epoch_s"] - MIN_TIMESTAMP, metrics[col], label=thread_id)
+
+    # alternative representation
+    sub = metrics.loc[:, ["epoch_s", col]]
+    sub.columns = ["epoch_s", "value"]
+    sub["epoch_s"] = sub["epoch_s"] - MIN_TIMESTAMP
+    samples = pd.concat([sub, samples])
+
 res = res.reset_index()
-print(res)
 plt.plot(res["epoch_s"] - MIN_TIMESTAMP, res["value"], label="total")
 plt.xlim(XLIM)
 plt.ylim([0, 1.3])
 plt.legend(loc="upper center", ncol=3, prop={"size": 10}, handletextpad=0.1, columnspacing=0.5, handlelength=0.5)
 plt.tight_layout()
 plt.savefig(f"{PATH}/block_time.pdf", bbox_inches='tight', pad_inches=0)
+
+samples.loc[
+    (samples["epoch_s"] > 50) & (samples["epoch_s"] < 110),
+    "group"
+] = "baseline"
+
+samples.loc[
+    samples["epoch_s"] > 110,
+    "group"
+] = "compare"
+
+plt.figure(figsize=FIGSIZE)
+plt.ylabel("Relative Frequency")
+plt.xlabel("Block Time (s)")
+for group in ["baseline", "compare"]:
+    filtered = samples.loc[samples["group"] == group, "value"]
+    counts, bins = np.histogram(
+        filtered,
+        bins=20,
+        range=(0, 0.15)
+    )
+
+    pmf = counts / counts.sum()
+
+    plt.bar(
+        bins[:-1],
+        pmf,
+        width=np.diff(bins),
+        align="edge",
+        alpha=0.4,
+        label=group
+    )
+plt.tight_layout()
+plt.legend()
+plt.savefig(f"{PATH}/block_time_hist.pdf")
 
 block_threads = threads
 
@@ -491,6 +535,7 @@ threads = metric_files.str.replace(r".*/thread/\d+/(\d+)/.*", r"\1", regex=True)
 plt.figure(figsize=FIGSIZE)
 plt.ylabel("Write Count")
 plt.xlabel("Relative Time (s)")
+samples = pd.DataFrame({}, columns=["epoch_s", "value"])
 res = pd.Series(dtype="Float64")
 res.name = "value"
 ncol = 0
@@ -512,6 +557,11 @@ for thread in threads:
             thread_id = thread_ids[thread]
         plt.plot(metrics["epoch_s"] - MIN_TIMESTAMP, metrics[col], label=thread_id)
         ncol += 1
+
+        sub = metrics.loc[:, ["epoch_s", col]]
+        sub.columns = ["epoch_s", "value"]
+        sub["epoch_s"] = sub["epoch_s"] - MIN_TIMESTAMP
+        samples = pd.concat([sub, samples])
     # sub = metrics.loc[:, swr_filter.append(pd.Index(["epoch_s"]))]
     # long = sub.melt(id_vars=["epoch_s"], value_vars=swr_filter)
     # res = res.add(long.groupby([
@@ -522,6 +572,43 @@ plt.legend(ncol=3, loc="upper center", prop={"size": 10}, handletextpad=0.2, col
 plt.ylim([0, 200])
 plt.tight_layout()
 plt.savefig(f"{PATH}/pipe_write_count.pdf", bbox_inches='tight', pad_inches=0)
+
+samples.loc[
+    (samples["epoch_s"] > 50) & (samples["epoch_s"] < 110),
+    "group"
+] = "baseline"
+
+samples.loc[
+    samples["epoch_s"] > 110,
+    "group"
+] = "compare"
+
+plt.figure(figsize=FIGSIZE)
+plt.ylabel("Relative Frequency")
+plt.xlabel("Pipe Write Count")
+for group in ["baseline", "compare"]:
+    filtered = samples.loc[samples["group"] == group, "value"]
+    counts, bins = np.histogram(
+        filtered,
+        bins=20,
+        range=(0, 25)
+    )
+
+    pmf = counts / counts.sum()
+
+    plt.bar(
+        bins[:-1],
+        pmf,
+        width=np.diff(bins),
+        align="edge",
+        alpha=0.4,
+        label=group
+    )
+plt.tight_layout()
+plt.xlim([0, 25])
+# plt.ylim([0, 1])
+plt.legend()
+plt.savefig(f"{PATH}/pipe_write_hist.pdf")
 
 # res = pd.Series(dtype="Float64")
 # for epoll in epolls:

@@ -186,7 +186,7 @@ plt.tight_layout()
 plt.savefig(f"{PATH}/database_lock_wake.pdf", bbox_inches='tight', pad_inches=0)
 # plt.show()
 
-XLIM = [60, 120]
+XLIM = [0, 120]
 
 metric_files = v0_2_0.recursive_dfs(f"../data/{COLLECT_TS}/system-metrics/thread/{MYSQL_PID}")
 metric_files = pd.Series(filter(lambda s: 'futex/wait' in s, metric_files))
@@ -269,6 +269,7 @@ XLIM = [0, 120]
 
 metric_files = v0_2_0.recursive_dfs(f"../data/{COLLECT_TS}/system-metrics/thread/{MYSQL_PID}")
 metric_files = pd.Series(filter(lambda s: 'futex/wait' in s, metric_files))
+samples = pd.DataFrame({}, columns=["epoch_s", "value"])
 plt.figure(figsize=FIGSIZE)
 plt.xlabel("Relative Time (s)")
 plt.ylabel("Wait Time (s/s)")
@@ -281,12 +282,54 @@ for thread in ["250787"]:
         futex_wait_filter = metrics.columns[metrics.columns.str.contains("futex_wait_rate")]
         for col in futex_wait_filter:
             plt.plot(metrics["epoch_s"] - MIN_TIMESTAMP, metrics[col], label=f"{thread}")
+
+            sub = metrics.loc[:, ["epoch_s", col]]
+            sub.columns = ["epoch_s", "value"]
+            sub["epoch_s"] = sub["epoch_s"] - MIN_TIMESTAMP
+            samples = pd.concat([sub, samples])
 plt.xlim(XLIM)
 plt.ylim([0, 1.1])
 # plt.legend()
 plt.tight_layout()
 plt.savefig(f"{PATH}/scenario_2_futex_wait.pdf", bbox_inches='tight', pad_inches=0)
 # plt.show()
+
+samples.loc[
+    ((samples["epoch_s"] > 0) & (samples["epoch_s"] < 25)) | ((samples["epoch_s"] > 55) & (samples["epoch_s"] < 80)),
+    "group"
+] = "baseline"
+
+samples.loc[
+    ((samples["epoch_s"] > 25) & (samples["epoch_s"] < 55)) | ((samples["epoch_s"] > 80) & (samples["epoch_s"] < 115)),
+    "group"
+] = "compare"
+
+plt.figure(figsize=FIGSIZE)
+plt.ylabel("Relative Frequency")
+plt.xlabel("Wait Time (s/s)")
+for group in ["baseline", "compare"]:
+    filtered = samples.loc[samples["group"] == group, "value"]
+    counts, bins = np.histogram(
+        filtered,
+        bins=20,
+        range=(0, 0.4)
+    )
+
+    pmf = counts / counts.sum()
+
+    plt.bar(
+        bins[:-1],
+        pmf,
+        width=np.diff(bins),
+        align="edge",
+        alpha=0.4,
+        label=group
+    )
+plt.tight_layout()
+# plt.xlim([0, 25])
+# plt.ylim([0, 1])
+plt.legend()
+plt.savefig(f"{PATH}/scenario_2_futex_wait_hist.pdf")
 
 # Wait Count
 

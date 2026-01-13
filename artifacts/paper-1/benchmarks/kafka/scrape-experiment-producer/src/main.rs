@@ -88,10 +88,6 @@ async fn scrape_loop(mut rx: Receiver<bool>, stop_flag: Arc<Mutex<bool>>) {
             let metrics = parse_prometheus_client(&body);
             println!("{}", metrics.to_row().join(","));
             writer.write_record(metrics.to_row()).unwrap();
-        } else {
-            let data = writer.into_inner().unwrap();
-            fs::write("throughput.csv", &data).unwrap();
-            break;
         }
     }
 }
