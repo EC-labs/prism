@@ -6,8 +6,26 @@
             url = "github:landaudiogo/crate2nix";
             inputs.nixpkgs.follows = "nixpkgs";
         };
+
+        pyproject-nix = {
+          url = "github:pyproject-nix/pyproject.nix";
+          inputs.nixpkgs.follows = "nixpkgs";
+        };
+
+        uv2nix = {
+          url = "github:pyproject-nix/uv2nix";
+          inputs.pyproject-nix.follows = "pyproject-nix";
+          inputs.nixpkgs.follows = "nixpkgs";
+        };
+
+        pyproject-build-systems = {
+          url = "github:pyproject-nix/build-system-pkgs";
+          inputs.pyproject-nix.follows = "pyproject-nix";
+          inputs.uv2nix.follows = "uv2nix";
+          inputs.nixpkgs.follows = "nixpkgs";
+        };
     };
-    outputs = { self, nixpkgs, flake-utils, crate2nix }: 
+    outputs = { self, nixpkgs, flake-utils, crate2nix, pyproject-nix, uv2nix, pyproject-build-systems, ... }@inputs: 
         let 
             systems = [ "x86_64-linux" "aarch64-linux" ];
         in
@@ -16,11 +34,16 @@
                 pkgs = nixpkgs.legacyPackages.${system};
                 crate2nixTools = crate2nix.lib.tools;
                 generatedBuild = import ./default.nix { inherit pkgs crate2nixTools; };
+                analysis = import ./analysis { 
+                    inherit pkgs pyproject-build-systems pyproject-nix uv2nix; 
+                    lib = pkgs.lib; 
+                };
             in {
                 packages = {
                     prism = generatedBuild.workspaceMembers.metric-collector.build;
                     default = self.packages.${system}.prism;
                     ripple = self.packages.${system}.prism;
+                    analysis = analysis.package;
                 };
 
                 images = {
@@ -40,6 +63,7 @@
                             Entrypoint = [ "/bin/metric-collector" ];
                         };
                     };
+                    analysis = analysis.image;
                 };
 
                 devShells = {
@@ -48,6 +72,7 @@
                         hardeningDisable = [ "stackprotector" "zerocallusedregs" ];
 
                         nativeBuildInputs = [ 
+                            dive
                             clippy
                             rustfmt
                             rust-analyzer
@@ -83,17 +108,7 @@
                             (pkgs.python3.withPackages (python-pkgs: with python-pkgs; [ ]))
                         ];
                     };
-                    notebooks = pkgs.mkShell {
-                        packages = [
-                            (pkgs.python3.withPackages (python-pkgs: with python-pkgs; [
-                              # select Python packages here
-                              pandas
-                              matplotlib
-                              notebook
-                              duckdb
-                            ]))
-                        ];
-                    };
+                    analysis = analysis.devShell;
                     graph = pkgs.mkShell {
                         packages = with pkgs; [
                             (python3.withPackages (python-pkgs: with python-pkgs; [

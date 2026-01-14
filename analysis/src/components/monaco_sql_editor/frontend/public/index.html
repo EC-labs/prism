@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="Monaco SQL Editor for Streamlit" />
+    <title>Monaco SQL Editor</title>
+    <style>
+      /* Ensure suggestion widget shows multiple items by default */
+      .monaco-editor .suggest-widget {
+        min-height: 220px !important;
+        max-height: 440px !important;
+      }
+      .monaco-editor .suggest-widget .monaco-list {
+        min-height: 200px !important;
+      }
+      .monaco-editor .suggest-widget .monaco-list .monaco-list-rows {
+        min-height: 200px !important;
+      }
+      /* Force the suggest widget to show its content */
+      .monaco-editor .suggest-widget .monaco-scrollable-element {
+        height: 200px !important;
+      }
+      .monaco-editor .suggest-widget .monaco-scrollable-element .monaco-list-row {
+        display: block !important;
+      }
+    </style>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
