@@ -1,5 +1,6 @@
 use chrono::prelude::*;
 use clap::ArgMatches;
+use log::info;
 
 pub struct Config {
     pub machine_id: u32,
@@ -18,17 +19,18 @@ impl TryFrom<ArgMatches> for Config {
 
         let process_name = matches.remove_one::<String>("process-name");
 
-        let machine_id = matches.remove_one::<u32>("machine-id").expect("Missing machine-id");
+        let machine_id = matches
+            .remove_one::<u32>("machine-id")
+            .expect("Missing machine-id");
 
-        let period: u64 = matches
-            .remove_one::<u64>("period")
-            .expect("Missing period");
+        let period: u64 = matches.remove_one::<u64>("period").expect("Missing period");
 
         let utc: DateTime<Utc> = Utc::now();
         let mut prism_store = matches
             .remove_one::<String>("data-directory")
             .expect("Required field");
         prism_store += &format!("/prism-{}.db3", utc.to_rfc3339());
+        info!("Prism datastore {prism_store}");
 
         Ok(Self {
             machine_id,

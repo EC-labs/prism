@@ -12,6 +12,7 @@ use std::{
     env,
     mem::MaybeUninit,
     os::fd::AsFd,
+    path::Path,
     sync::{
         mpsc::{self, Receiver},
         Arc, Mutex, RwLock,
@@ -133,6 +134,11 @@ impl Extractor {
             .unwrap_or(format!("{euid}"))
             .parse::<u32>()?;
         unsafe { seteuid(uid) };
+
+        let path = std::path::Path::new(&*config.prism_store);
+        let prefix = path.parent().unwrap();
+        std::fs::create_dir_all(prefix).unwrap();
+
         let conn = Connection::open(&*config.prism_store)?;
         unsafe { seteuid(euid) };
 

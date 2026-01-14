@@ -133,6 +133,10 @@
                         type = "app";
                         program = "${self.packages.${system}.ripple}/bin/metric-collector";
                     };
+                    analysis = {
+                        type = "app";
+                        program = "${self.packages.${system}.analysis}/bin/analysis";
+                    };
                     pushImages = 
                         let
                             loadPush = imageDerivation: ''
