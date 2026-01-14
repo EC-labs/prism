@@ -258,8 +258,8 @@ def main():
     if ('tree' not in st.session_state) or (st.session_state.ripple_graph is None):
         st.info("Specify compare and baseline periods")
 
-        if st.button("Go to Ranges"):
-            st.switch_page("pages/compare.py")
+        if st.button("Go to KPI"):
+            st.switch_page("pages/kpi.py")
 
         return
 

@@ -227,23 +227,11 @@ def line_tab(tab):
 
 def main():
     if ('db' not in st.session_state) or (st.session_state.db is None):
-        st.markdown(
-            """
-            <div style="
-                padding: 1rem;
-                border-radius: 0.5rem;
-                background-color: rgba(0, 123, 255, 0.1);
-                border-left: 0.25rem solid #0d6efd;
-                color: inherit;
-                ">
-                You’re almost ready — connect to a Prism database
-                <a href="/" target="_self" style="color: #0d6efd; text-decoration: underline;">
-                    here
-                </a>.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        st.info("You’re almost ready — connect to a Prism database")
+
+        if st.button("Connect to Database"):
+            st.switch_page("pages/home.py")
+
         return
 
     db = st.session_state.db

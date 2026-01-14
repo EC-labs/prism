@@ -191,23 +191,11 @@ def main():
     """)
 
     if ('db' not in st.session_state) or (st.session_state.db is None):
-        st.markdown(
-            """
-            <div style="
-                padding: 1rem;
-                border-radius: 0.5rem;
-                background-color: rgba(0, 123, 255, 0.1);
-                border-left: 0.25rem solid #0d6efd;
-                color: inherit;
-                ">
-                You’re almost ready — connect to a Prism database
-                <a href="/" target="_self" style="color: #0d6efd; text-decoration: underline;">
-                    here
-                </a>.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        st.info("You’re almost ready — connect to a Prism database")
+
+        if st.button("Connect to Database"):
+            st.switch_page("pages/home.py")
+
         return
 
     db = st.session_state.db
@@ -224,7 +212,7 @@ def main():
 
     st.session_state.ripple_init = True
 
-    left, middle, right = st.columns([0.6, 0.2, 0.2], vertical_alignment="bottom")
+    left, middle, right = st.columns([0.6, 0.15, 0.25], vertical_alignment="bottom")
     if st.session_state.service_list is not None:
         service_list = st.session_state.service_list
         options = service_list.index.astype(str) + " - " + service_list["service_name"] + " (" + service_list["machine_id"].astype(str) + " : " + service_list["pid"].astype(str) + ")"
@@ -253,7 +241,12 @@ def main():
                     continue
                 row = pd.DataFrame([[start, end, range_type]], columns=compare_entries.columns)
                 compare_entries = pd.concat([compare_entries, row], ignore_index=True)
-        st.session_state.ripple_use_compare = right.toggle("Use compare", disabled=compare_entries.shape[0] == 0, value=st.session_state.ripple_use_compare)
+        st.session_state.ripple_use_compare = right.toggle(
+            "Use compare", 
+            disabled=compare_entries.shape[0] == 0, 
+            value=st.session_state.ripple_use_compare, 
+            help="Define *compare* periods in the KPI page to use this feature."
+        )
         st.session_state.compare_entries = compare_entries
 
     if st.session_state.bootstrap is not None:

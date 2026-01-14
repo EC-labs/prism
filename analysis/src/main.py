@@ -1,27 +1,16 @@
-import tempfile
 import streamlit as st
 
-from src.database import DatabaseClient
-
 def main():
-    st.title('Prism Performance Analysis')
-    st.set_page_config(page_title="Ripple", layout="centered")
+    pages = [
+        st.Page("pages/home.py", title="Home"),
+        st.Page("pages/kpi.py", title="KPI"),
+        st.Page("pages/ripple.py", title="Ripple"),
+        st.Page("pages/debug.py", title="Debug"),
+    ]
 
-    if 'main_init' not in st.session_state:
-        st.session_state.db = None
+    pg = st.navigation(pages)
+    pg.run()
 
-    st.session_state.main_init = True
-
-    database = st.file_uploader("Upload Prism Database File", type=["db3"])
-    if database:
-        tmp = tempfile.NamedTemporaryFile(delete=True, delete_on_close=True)
-        tmp.write(database.read())
-        st.session_state.db_file = tmp
-        st.session_state.db = DatabaseClient(tmp.name)
-
-    if st.session_state.db is not None:
-        st.success("connected to database successfully", icon="✅")
-        st.info("navigate to the other pages to analyse your application's performance")
 
 if __name__ == "__main__":
     main()
