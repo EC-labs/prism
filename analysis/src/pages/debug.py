@@ -34,6 +34,7 @@ st.session_state.init = True
 
 
 def variables_table():
+    st.markdown("### Template Variables")
     debug_variables = st.session_state.debug_variables
     st.data_editor(debug_variables, key=st.session_state.debug_data_editor_key, num_rows="dynamic")
     editor_changes = st.session_state[st.session_state.debug_data_editor_key]
