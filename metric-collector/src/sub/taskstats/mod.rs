@@ -327,18 +327,18 @@ fn init_store(conn: &Connection) -> Result<()> {
                     SELECT 
                         machine_id,
                         ts, 
-                        lag(ts, 1) OVER (PARTITION BY tid ORDER BY ts) as ts_last,
+                        lag(ts, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as ts_last,
                         pid,
                         tid, 
                         comm,
                         run_time_total as run_time_curr, 
-                        lag(run_time_total, 1) OVER (PARTITION BY tid ORDER BY ts) as run_time_last,
+                        lag(run_time_total, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as run_time_last,
                         rq_time_total as rq_time_curr, 
-                        lag(rq_time_total, 1) OVER (PARTITION BY tid ORDER BY ts) as rq_time_last,
+                        lag(rq_time_total, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as rq_time_last,
                         uninterruptible_total as uninterruptible_time_curr, 
-                        lag(uninterruptible_total, 1) OVER (PARTITION BY tid ORDER BY ts) as uninterruptible_time_last,
+                        lag(uninterruptible_total, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as uninterruptible_time_last,
                         blkio_time_total as blkio_time_curr, 
-                        lag(blkio_time_total, 1) OVER (PARTITION BY tid ORDER BY ts) as blkio_time_last,
+                        lag(blkio_time_total, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as blkio_time_last,
                     FROM taskstats
                 )
             )
