@@ -1,153 +1,151 @@
-# 🔎 Prism: Application-Agnostic Observability
+# Prism
 
-Prism is a fine-grained metric collection tool that aims to facilitate uncovering the cause of an application's performance degradation through a generalisable set of metrics. E.g. In a scenario where a database is under lock contention through simultaneous access to the same dataset, Prism will highlight the database threads and futex resource behind this activity. Currently Prism supports discovering and tracing co-located processes that have communicated (through IPC mechanisms such as pipes, sockets, and futexes) with the initial target application.
+Prism is a Linux performance diagnostic tool for analysing thread dynamics in distributed systems. It uses lightweight eBPF-based metrics across scheduling, futexes, I/O, networking, and storage, to enable fine-grained analysis of application performance at the level of individual threads, their interactions with each other, and with system resources.
 
-![demo](docs/demo.gif)
+# Quickstart
 
-# Getting Started
+This section illustrates how to start Prism on a single instance. For a distributed setup, refer to [docs/distributed.md](docs/distributed.md)
+
+<details>
+<summary>Run with Docker</summary>
 
 ## Docker
 
-```bash
+Prerequisites:
+
+* [docker](https://docs.docker.com/engine/install/)
+
+Start the metric collector:
+```
 docker run \
     --rm -it --privileged \
     -e RUST_LOG=info \
     --pid host \
-    -v ./cdata:/data \
+    -v ./data:/data \
     -v /sys/fs/cgroup:/sys/fs/cgroup \
     -v /sys/kernel/tracing:/sys/kernel/tracing \
     -v /sys/kernel/debug:/sys/kernel/debug \
-    --name ripple \
-    dclandau/ripple --machine-id <machine-id>
+    --name prism \
+    dclandau/prism --machine-id <machine-id> --pids <pid-list>
 ```
+
+<details>
+<summary><b>Example</b></summary>
+
+```
+docker run \
+    --rm -it --privileged \
+    -e RUST_LOG=info \
+    --pid host \
+    -v ./data:/data \
+    -v /sys/fs/cgroup:/sys/fs/cgroup \
+    -v /sys/kernel/tracing:/sys/kernel/tracing \
+    -v /sys/kernel/debug:/sys/kernel/debug \
+    --name prism \
+    dclandau/prism --machine-id 1 --pids 233296,246465
+```
+
+</details>
+
+
+Start the analysis UI:
+```
+docker run \
+    --rm -it \
+    -p 8501:8501 \
+    --name prism-analysis \
+    dclandau/prism-analysis
+```
+
+</details>
+
+<details>
+<summary>Run with Nix</summary>
 
 ## Nix
 
-1. Install [nix](https://nixos.org/download/) for your distro
-2. Get a local clone of this repository
+Prerequisites:
 
-We start by creating a data directory, which is where Prism will write its data to: 
+* [nix](https://nixos.org/download/)
 
-```bash
-mkdir data 2>/dev/null
+Start the metric collector:
+```
+sudo RUST_LOG=info nix run .#prism -- --machine-id <machine-id> --pids <pid-list>
 ```
 
-We then install the dependencies specified in the `shell.nix` file, and make these available in your shell environment with:
-```bash
-nix-shell shell.nix
+<details>
+<summary><b>Example</b></summary>
+
+```
+sudo RUST_LOG=info nix run .#prism -- --machine-id 1 --pids 233296,246465
 ```
 
-Within the nix-shell environment, you may now start Prism (**don't forget to change the `<pid>` argument in the command**): 
-```bash
-RUST_LOG=info cargo run -r -p metric-collector --config 'target."cfg(all())".runner="sudo -E"' -- --pids <pid>
+</details>
+
+Start the analysis UI:
+```
+nix run .#analysis
 ```
 
-Press `Ctrl-C` to terminate Prism. A new file will be made available in the `data/` directory we created in the first command. E.g.:
-```bash
-$ ls -la data
-.rw-r--r-- 4,7M username 11 apr 16:54 prism-2025-04-11T14:53:27.082056990+00:00.db3
+</details>
+
+Let the metric collector collect some data, and terminate the metric collector when you would like to move on to analysis.
+
+Visit the analysis UI at `http://localhost:8501/`. The UI includes some template analysis and a simple way to explore the data collected. To start the analysis, you will have to import the database into the UI. By default, the metric collector database files are written to `./data/prism*`. As such, you may now:
+
+1. Import the database file in the `Home` page
+1. Visit the `Ripple` page
+1. Select a process you want to create a service dependency graph for
+1. Visualise the service dependency graph for that process
+1. Run custom queries in the `Debug` page
+   <details><summary>Examples</summary>
+
+   The following query provides a distribution analysis on the time a specific process spent waiting for block IO activity. For this query to run, you must: Provide `compare` and `baseline` periods in the KPI page; Fill out a `pid_filter` variable in the `Template Variables` section of the `Debug page`, e.g., `(pid = 1302804 and machine_id = 1)`.
+
+   ```sql
+    SELECT ts, pid, tid, rq_share as share, 'baseline' as type
+    FROM taskstats_view 
+    WHERE {{ pid_filter }}
+      AND {{ baseline_filter("ts") }}
+      AND rq_share > 0.01
+    UNION ALL
+    SELECT ts, pid, tid, rq_share, 'compare' AS type
+    FROM taskstats_view 
+    WHERE {{ pid_filter }}
+      AND {{ compare_filter("ts") }}
+      AND rq_share > 0.01
+   ```
+
+   You may find other queries in tne `./analysis/src/sql` directory.
+
+   </details>
+
+# Papers
+
+This tool is the result of research presented in the following papers:
+
+**eBPF-Based Instrumentation for Generalisable Diagnosis of Performance Degradation:**
+
+```
+Landau, D., Barbosa, J., & Saurabh, N. (2025). eBPF-Based Instrumentation for Generalisable Diagnosis of Performance Degradation. arXiv preprint arXiv:2505.13160.
+
+@article{landau2025ebpf,
+  title={eBPF-Based Instrumentation for Generalisable Diagnosis of Performance Degradation},
+  author={Landau, Diogo and Barbosa, Jorge and Saurabh, Nishant},
+  journal={arXiv preprint arXiv:2505.13160},
+  year={2025}
+}
 ```
 
-Make sure you are still in the nix-shell environment and you may analyse the data with:
+**Retrofitting Service Dependency Discovery in Distributed Systems:**
+
 ```
-v1.1.3 19864453f7
-$ duckdb "data/prism-2025-04-11T14:53:27.082056990+00:00.db3"
-Enter ".help" for usage hints.
-D select * from taskstats_view;
-┌────────────────────────────┬────────────┬────────┬────────┬─────────────────┬───────────┬──────────┬───────────────────────┬─────────────┬─────────────────────┐
-│             ts             │ time_diff  │  pid   │  tid   │      comm       │ run_share │ rq_share │ uninterruptible_share │ blkio_share │ interruptible_share │
-│         timestamp          │   int64    │ uint32 │ uint32 │     varchar     │  double   │  double  │        double         │   double    │       double        │
-├────────────────────────────┼────────────┼────────┼────────┼─────────────────┼───────────┼──────────┼───────────────────────┼─────────────┼─────────────────────┤
-│ 2025-04-11 14:53:56.872306 │  998514000 │   1018 │   1062 │ gdbus           │       0.0 │      0.0 │                   0.0 │         0.0 │                 1.0 │
-│             ·              │      ·     │     ·  │     ·  │   ·             │        ·  │       ·  │                    ·  │          ·  │                  ·  │
-│             ·              │      ·     │     ·  │     ·  │   ·             │        ·  │       ·  │                    ·  │          ·  │                  ·  │
-│             ·              │      ·     │     ·  │     ·  │   ·             │        ·  │       ·  │                    ·  │          ·  │                  ·  │
-│ 2025-04-11 14:54:45.893241 │ 1000157000 │  73150 │  73155 │ GpuMemoryThread │       0.0 │      0.0 │                   0.0 │         0.0 │                 1.0 │
-├────────────────────────────┴────────────┴────────┴────────┴─────────────────┴───────────┴──────────┴───────────────────────┴─────────────┴─────────────────────┤
-│ 20640 rows (2 shown)                                                                                                                                10 columns │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Landau, D., Blanken, G., Barbosa, J., & Saurabh, N. (2025). Retrofitting Service Dependency Discovery in Distributed Systems. arXiv preprint arXiv:2510.15490.
 
-D select * from vfs;
-┌────────────────────────────┬────────┬────────┬────────────┬───────────┬──────────┬───────┬────────────┬────────────────┬────────┬────────┬────────┬────────┬────────┬────────┬────────┬────────┐
-│            ts_s            │  pid   │  tid   │  fs_magic  │ device_id │ inode_id │  op   │ total_time │ total_requests │ hist0  │ hist1  │ hist2  │ hist3  │ hist4  │ hist5  │ hist6  │ hist7  │
-│         timestamp          │ uint32 │ uint32 │   uint32   │  uint32   │  uint64  │ uint8 │   uint64   │     uint32     │ uint32 │ uint32 │ uint32 │ uint32 │ uint32 │ uint32 │ uint32 │ uint32 │
-├────────────────────────────┼────────┼────────┼────────────┼───────────┼──────────┼───────┼────────────┼────────────────┼────────┼────────┼────────┼────────┼────────┼────────┼────────┼────────┤
-│ 2025-04-11 14:53:32.009116 │   2004 │   2039 │   16914836 │ 236978177 │      683 │     0 │      36250 │              4 │      0 │      3 │      1 │      0 │      0 │      0 │      0 │      0 │
-│             ·              │     ·  │     ·  │       ·    │         · │       ·  │     · │        ·   │              · │      · │      · │      · │      · │      · │      · │      · │      · │
-│             ·              │     ·  │     ·  │       ·    │         · │       ·  │     · │        ·   │              · │      · │      · │      · │      · │      · │      · │      · │      · │
-│             ·              │     ·  │     ·  │       ·    │         · │       ·  │     · │        ·   │              · │      · │      · │      · │      · │      · │      · │      · │      · │
-│ 2025-04-11 14:54:43.009116 │   8187 │   8230 │ 1397703499 │         0 │   257746 │     0 │     580141 │             36 │      0 │      2 │     34 │      0 │      0 │      0 │      0 │      0 │
-├────────────────────────────┴────────┴────────┴────────────┴───────────┴──────────┴───────┴────────────┴────────────────┴────────┴────────┴────────┴────────┴────────┴────────┴────────┴────────┤
-│ 5950 rows (2 shown)                                                                                                                                                                 17 columns │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+@article{landau2025retrofitting,
+  title={Retrofitting Service Dependency Discovery in Distributed Systems},
+  author={Landau, Diogo and Blanken, Gijs and Barbosa, Jorge and Saurabh, Nishant},
+  journal={arXiv preprint arXiv:2510.15490},
+  year={2025}
+}
 ```
-
-# Data
-
-Prism collects data for multiple subsystems and stores the enriched metrics in a duckdb database. The tables available are:
-```
-D show tables;
-┌─────────────────┐
-│      name       │
-│     varchar     │
-├─────────────────┤
-│ docker          │
-│ futex_wait      │
-│ futex_wake      │
-│ iowait          │
-│ k8s             │
-│ linux_consts    │
-│ process_context │
-│ socket_context  │
-│ socket_inet     │
-│ socket_map      │
-│ taskstats       │
-│ taskstats_view  │
-│ tcp_discovery   │
-│ vfs             │
-├─────────────────┤
-│     14 rows     │
-└─────────────────┘
-```
-
-# Paper
-The following content refers to the data generated for the following paper:<br>
-            
-      Diogo Landau, Jorge Barbosa, Nishant Saurabh. "eBPF-Based Instrumentation for Generalisable Diagnosis 
-      of Performance Degradation". arXiv preprint arXiv:2505.13160 (2025).
-
-## Bibtex
-      @misc{landau2025ebpfbasedinstrumentationgeneralisablediagnosis,
-      title={eBPF-Based Instrumentation for Generalisable Diagnosis of Performance Degradation}, 
-      author={Diogo Landau and Jorge Barbosa and Nishant Saurabh},
-      year={2025},
-      eprint={2505.13160},
-      archivePrefix={arXiv},
-      primaryClass={cs.DC},
-      url={https://arxiv.org/abs/2505.13160},
-      }
-
-## Experiments
-
-To unzip the datasets, run: 
-```bash
-./scripts/unzip-datasets.sh
-```
-
-Within the `data/` directory you should now find the following directories, each corresponding to an application in the paper's experimentation section:
-
-* `2024-07-30T12:33:54.172726935+00:00`: MySQL
-* `2024-07-31T14:10:52.424946255+00:00`: Solr
-* `2024-08-03T05:51:31.266846823+00:00`: Cassandra
-* `2024-08-04T18:01:53.300127572+00:00`: Kafka
-* `2024-08-24T16:10:31.710423758+00:00`: Teastore
-* `2024-08-06T07:50:39.470480264+00:00`: ML-inference
-* `2024-05-19T13:08:15.671530744+00:00`: Redis
-
-Other than the `system-metrics` collected by Prism, these directories also include `application-metrics` which contain their target metrics and data specific to the load execution, e.g. configuration files, and a README file.
-
-Each application has its own jupyter notebook script in the `notebooks` directory which includes the analysis presented in the paper and additional results.
-
-## Reproducibility
-
-To generate similar datasets for the same applications as those presented in the paper, we have provided a description, and in some cases a run script in  `artifacts/paper-1/benchmarks/` directory for each application.
