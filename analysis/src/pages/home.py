@@ -4,7 +4,7 @@ import streamlit as st
 from src.database import DatabaseClient
 
 def main():
-    st.title('Prism Performance Analysis')
+    st.title('Performance Analysis')
     st.set_page_config(page_title="Ripple", layout="centered")
 
     if 'main_init' not in st.session_state:
@@ -12,7 +12,7 @@ def main():
 
     st.session_state.main_init = True
 
-    database = st.file_uploader("Upload Prism Database File", type=["db3"])
+    database = st.file_uploader("Upload Database File", type=["db3"])
     if database:
         tmp = tempfile.NamedTemporaryFile(delete=True, delete_on_close=True)
         tmp.write(database.read())

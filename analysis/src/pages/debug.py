@@ -228,7 +228,7 @@ def line_tab(tab):
 
 def main():
     if ('db' not in st.session_state) or (st.session_state.db is None):
-        st.info("You’re almost ready — connect to a Prism database")
+        st.info("You’re almost ready — connect to a database")
 
         if st.button("Connect to Database"):
             st.switch_page("pages/home.py")
