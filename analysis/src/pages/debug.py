@@ -34,6 +34,7 @@ st.session_state.init = True
 
 
 def variables_table():
+    st.markdown("### Template Variables")
     debug_variables = st.session_state.debug_variables
     st.data_editor(debug_variables, key=st.session_state.debug_data_editor_key, num_rows="dynamic")
     editor_changes = st.session_state[st.session_state.debug_data_editor_key]
@@ -227,7 +228,7 @@ def line_tab(tab):
 
 def main():
     if ('db' not in st.session_state) or (st.session_state.db is None):
-        st.info("You’re almost ready — connect to a Prism database")
+        st.info("You’re almost ready — connect to a database")
 
         if st.button("Connect to Database"):
             st.switch_page("pages/home.py")

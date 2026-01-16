@@ -165,12 +165,14 @@ def draw_network(graph: nx.Graph, bootstrap: int):
         label_x = label_radius * np.cos(angle)
         label_y = label_radius * np.sin(angle)
         rotation = np.degrees(angle)
+        text = node.split()
+        text = "\n".join([text[0][:15] + "..." if len(text[0]) > 15 else text[0], text[1] if  len(text) > 1 else ""]).strip()
         if rotation < -90 or rotation > 90:
             rotation += 180
             ha = 'right'
         else:
             ha = 'left'
-        ax.text(label_x, label_y, node, fontsize=9, rotation=rotation,
+        ax.text(label_x, label_y, text, fontsize=9, rotation=rotation,
                 ha=ha, va='center', rotation_mode='anchor')
 
     # Final plot tweaks
@@ -184,19 +186,20 @@ def draw_network(graph: nx.Graph, bootstrap: int):
 def main():
     st.set_page_config(page_title="Ripple", layout="centered")
     st.title("Ripple")
-    st.markdown("""
-        ## Application Service Dependency Graph
-
-        If two processes interact with each other via tcp sockets, unix sockets, or pipes, their dependency will appear in the following graph
-    """)
 
     if ('db' not in st.session_state) or (st.session_state.db is None):
-        st.info("You’re almost ready — connect to a Prism database")
+        st.info("You’re almost ready — connect to a database")
 
         if st.button("Connect to Database"):
             st.switch_page("pages/home.py")
 
         return
+
+    st.markdown("""
+        ## Application Service Dependency Graph
+
+        If two processes interact with each other via tcp sockets, unix sockets, or pipes, their dependency will appear in the following graph
+    """)
 
     db = st.session_state.db
     sql_dir = Path(__file__).parent / "../sql"

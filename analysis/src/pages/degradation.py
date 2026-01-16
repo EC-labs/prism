@@ -213,6 +213,7 @@ def draw_network(graph: nx.Graph, service_scores: pd.DataFrame):
         edgecolors="black", linewidths=1.2
     )
 
+
     # Radial labels outside nodes
     for node, (x, y) in pos.items():
         angle = np.arctan2(y, x)
@@ -220,12 +221,14 @@ def draw_network(graph: nx.Graph, service_scores: pd.DataFrame):
         label_x = label_radius * np.cos(angle)
         label_y = label_radius * np.sin(angle)
         rotation = np.degrees(angle)
+        text = node.split()
+        text = "\n".join([text[0][:15] + "..." if len(text[0]) > 15 else text[0], text[1] if  len(text) > 1 else ""]).strip()
         if rotation < -90 or rotation > 90:
             rotation += 180
             ha = 'right'
         else:
             ha = 'left'
-        ax.text(label_x, label_y, node, fontsize=9, rotation=rotation,
+        ax.text(label_x, label_y, text, fontsize=9, rotation=rotation,
                 ha=ha, va='center', rotation_mode='anchor')
 
     # Final plot tweaks
@@ -240,7 +243,7 @@ def cb():
 
 def main():
     if ('db' not in st.session_state) or (st.session_state.db is None):
-        st.info("You’re almost ready — connect to a Prism database")
+        st.info("You’re almost ready — connect to a database")
 
         if st.button("Connect to Database"):
             st.switch_page("main.py")
