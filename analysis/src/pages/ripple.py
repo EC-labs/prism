@@ -186,11 +186,6 @@ def draw_network(graph: nx.Graph, bootstrap: int):
 def main():
     st.set_page_config(page_title="Ripple", layout="centered")
     st.title("Ripple")
-    st.markdown("""
-        ## Application Service Dependency Graph
-
-        If two processes interact with each other via tcp sockets, unix sockets, or pipes, their dependency will appear in the following graph
-    """)
 
     if ('db' not in st.session_state) or (st.session_state.db is None):
         st.info("You’re almost ready — connect to a database")
@@ -199,6 +194,12 @@ def main():
             st.switch_page("pages/home.py")
 
         return
+
+    st.markdown("""
+        ## Application Service Dependency Graph
+
+        If two processes interact with each other via tcp sockets, unix sockets, or pipes, their dependency will appear in the following graph
+    """)
 
     db = st.session_state.db
     sql_dir = Path(__file__).parent / "../sql"
