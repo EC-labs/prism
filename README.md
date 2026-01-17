@@ -94,11 +94,22 @@ Let the metric collector collect some data, and terminate the metric collector w
 Visit the analysis UI at `http://localhost:8501/`. The UI includes some template analysis and a simple way to explore the data collected. To start the analysis, you will have to import the database into the UI. By default, the metric collector database files are written to `./data/prism*`. As such, you may now:
 
 1. Import the database file in the `Home` page
+   <details><summary>Example</summary>
+
+   We have provided an example database you can import [data/oboutique-k8s.db3](data/oboutique-k8s.db3).
+
+   </details>
 1. Visit the `Ripple` page
 1. Select a process you want to create a service dependency graph for
+   <details><summary>Example</summary>
+
+   For the example dataset ([data/oboutique-k8s.db3](data/oboutique-k8s.db3)), selecting the process with `(machine_id : pid)` -> `(3 : 853159)` shows the service dependency graph for online boutique, including the system processes that also interact with the online boutique services for operations such as healthchecks.
+
+   </details>
+   
 1. Visualise the service dependency graph for that process
 1. Run custom queries in the `Debug` page
-   <details><summary>Examples</summary>
+   <details><summary>Example</summary>
 
    The following query provides a distribution analysis on the time a specific process spent waiting for block IO activity. For this query to run, you must: Provide `compare` and `baseline` periods in the KPI page; Fill out a `pid_filter` variable in the `Template Variables` section of the `Debug page`, e.g., `(pid = 1302804 and machine_id = 1)`.
 
