@@ -1,16 +1,20 @@
 # Overview
 
-This document is part of a demo conducted to illustrate Prism auto-discovering and monitoring a microservice application deployed on a kubernetes cluster with 3 nodes.
+This document is part of a demo conducted to illustrate Prism auto-discovering and monitoring a microservice application deployed on a kubernetes cluster with 3 nodes. Almost all commands can be run unmodified, except for those that have a note indicating otherwise.
+
+# Pre-requisites
+
+1. **Distributed** k8s cluster
+1. A machine with ssh access to each k8s node
+1. root access to each k8s node
+1. `kubectl` and `nix` installed on the same machine that has ssh access from where the following commands will be executed
+
+> Note: The commands executed in this tutorial can all be done from a single machine, as long as: it has ssh access to the nodes; kubectl is configured to access the distributed k8s cluster.
 
 # Start Microservice Environment
 
 ```bash
-git clone https://github.com/landaudiogo/ripple-msd.git
-cd ripple-msd
-```
-
-```bash
-kubectl apply -f ./release/kubernetes-manifests.yaml
+kubectl apply -f "https://raw.githubusercontent.com/GoogleCloudPlatform/microservices-demo/refs/heads/main/release/kubernetes-manifests.yaml"
 ```
 
 # Start Prism
@@ -48,6 +52,9 @@ To get the `pid` of the process running within this pod, run (**don't forget to 
 ```bash
 ssh <adservice-node> -t 'sudo crictl inspect "$(sudo crictl ps 2>/dev/null | grep adservice | awk "{print \$1}")" 2>/dev/null | jq ".info.pid"'
 ```
+
+> Note: The previous command may differ if your container runtime is not containerd
+
 
 <details>
     <summary>Example</summary>
@@ -156,29 +163,35 @@ After letting it run for approximately 30s, we can interrupt the Prism agents we
 Copy the data from the Prism agents to your laptop where you would like to analyse it: 
 
 ```bash
-echo '<node-1>\n<node-2>\n<adservice-node>' | xargs -I @ bash -c 'scp @:/home/ubuntu/prism/data/"$(ssh @ "ls -Art /home/ubuntu/prism/data | tail -n 1")" ./media/vm@.db3'
+mkdir data; echo '<node-1>\n<node-2>\n<adservice-node>' | xargs -I @ bash -c 'scp @:/home/ubuntu/cdata/"$(ssh @ "ls -Art /home/ubuntu/cdata | tail -n 1")" ./data/@.db3'
 ```
+
+> Note: The previous command may differ if the directory where the data was stored in each node is different from `/home/ubuntu/cdata`.
+
 
 <details>
     <summary>Example</summary>
 
-    echo 'ip-172-31-25-17\nip-172-31-27-25\nip-172-31-31-167' | xargs -I @ bash -c 'scp @:/home/ubuntu/cdata/"$(ssh @ "ls -Art /home/ubuntu/cdata | tail -n 1")" ./data/@.db3'
+    mkdir data; echo 'ip-172-31-25-17\nip-172-31-27-25\nip-172-31-31-167' | xargs -I @ bash -c 'scp @:/home/ubuntu/cdata/"$(ssh @ "ls -Art /home/ubuntu/cdata | tail -n 1")" ./data/@.db3'
 
 </details>
 
-Run the following python script to generate the service dependency graph: 
+Run the following command to combine databases for analysis:
+```
+nix run .#combinedbs -- --dbs "<node-1>.db3,<node-2>.db3,<adservice-node>.db3" --result-file ./data/combined.db3
+```
+<details>
+    <summary>Example</summary>
 
-```bash
-python services_html.py
-google-chrome-stable services.html
+    nix run .#combinedbs -- --dbs "./data/ip-172-31-25-17.db3,./data/ip-172-31-27-25.db3,./data/ip-172-31-31-167.db3" --result-file "./data/combined.db3"
+
+</details>
+
+> Note: The previous command may differ if the local directory where you copied your data to is not `./data`.
+
+You should now find a new file `./data/combined.db3` that can be imported to the analysis UI. To start the analysis UI, run:
+```
+nix run .#analysis
 ```
 
-Sort the nodes on your browser based on the following architecture, and validate whether they match:
-
-![Online Boutique Architecture](artifacts/online-boutique.png)
-
-
-To finalise, we will use the following command to check whether Prism successfully identified the nodes the services are deployed on:
-```bash
-kubectl get pods -o wide --sort-by=.spec.nodeName
-```
+You may now explore the data Prism collected for the three nodes when bootstrapping Prism with adservice's `pid` in the adservice node. The remaining metrics collected in the other nodes are a result of Prism's automatic discovery.

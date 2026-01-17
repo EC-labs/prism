@@ -38,6 +38,7 @@
                     inherit pkgs pyproject-build-systems pyproject-nix uv2nix; 
                     lib = pkgs.lib; 
                 };
+                scripts = import ./scripts { inherit pkgs; };
             in {
                 packages = {
                     prism = generatedBuild.workspaceMembers.metric-collector.build;
@@ -136,6 +137,10 @@
                     analysis = {
                         type = "app";
                         program = "${self.packages.${system}.analysis}/bin/analysis";
+                    };
+                    combinedbs = {
+                        type = "app";
+                        program = "${scripts.packages.combinedbs}/bin/combinedbs";
                     };
                     pushImages = 
                         let
