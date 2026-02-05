@@ -3,7 +3,7 @@ rec {
     packages = {
         combinedbs = pkgs.stdenv.mkDerivation {
           name = "myscript";
-          propagatedBuildInputs = [
+          buildInputs = [
             (pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
               duckdb
               click

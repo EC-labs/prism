@@ -45,6 +45,7 @@
                     default = self.packages.${system}.prism;
                     ripple = self.packages.${system}.prism;
                     analysis = analysis.package;
+                    combinedbs = scripts.packages.combinedbs;
                 };
 
                 images = {
