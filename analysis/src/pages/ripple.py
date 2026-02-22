@@ -26,6 +26,8 @@ def add_missing_discovery(graph: nx.Graph, missing_discovery: pd.DataFrame, max_
         pid = attr["pid"]
         missing_edges = missing_discovery.loc[missing_discovery["pid"] == pid]
         for _, edge in missing_edges.iterrows():
+            if len(graph) >= max_nodes:
+                break
             dst = edge["dst_address"]
             connections = edge["connections"]
 
@@ -40,6 +42,8 @@ def bootstrap_undirected_graph(pid_connections: pd.DataFrame, bootstrap: Tuple[i
     graph = nx.Graph()
     queue, visited = deque([(machine, pid)]), set()
     while True:
+        if len(graph) >= max_nodes:
+            break
         if len(queue) == 0:
             break
         machine, pid = queue.popleft()
