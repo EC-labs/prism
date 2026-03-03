@@ -13,6 +13,12 @@ import numpy as np
 import re
 
 
+def bootstrap_selection_cb():
+    match = re.search(r"\d+", st.session_state.ripple_selection)
+    if match is not None:
+        index = int(match.group())
+        st.session_state.bootstrap = st.session_state.service_list.iloc[index, :]
+
 def normalise_angle_degrees(degrees: float) -> float:
     return degrees if degrees <= 180 else degrees - 360
 
@@ -230,14 +236,9 @@ def main():
                  (service_list["machine_id"] == st.session_state.bootstrap["machine_id"]) &
                  (service_list["pid"] == st.session_state.bootstrap["pid"])
         ][0]))
-        selection = left.selectbox("What service would you like to start from?", options, placeholder="[index] - [service_name] ([machine_id] : [pid])", index=index)
-        if selection is not None:
-            match = re.search(r"\d+", selection)
-            if match is not None:
-                index = int(match.group())
-                st.session_state.bootstrap = service_list.iloc[index, :]
+        left.selectbox("What service would you like to start from?", options, placeholder="[index] - [service_name] ([machine_id] : [pid])", index=index, key="ripple_selection", on_change=bootstrap_selection_cb)
 
-        st.session_state.ripple_max_nodes = middle.number_input("Max nodes", value=st.session_state.ripple_max_nodes)
+        middle.number_input("Max nodes", value=20, key="ripple_max_nodes")
 
         tree = st.session_state.get("tree")
         compare_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
@@ -248,10 +249,11 @@ def main():
                     continue
                 row = pd.DataFrame([[start, end, range_type]], columns=compare_entries.columns)
                 compare_entries = pd.concat([compare_entries, row], ignore_index=True)
-        st.session_state.ripple_use_compare = right.toggle(
+        right.toggle(
             "Use compare", 
             disabled=compare_entries.shape[0] == 0, 
-            value=st.session_state.ripple_use_compare, 
+            value=False, 
+            key="ripple_use_compare",
             help="Define *compare* periods in the KPI page to use this feature."
         )
         st.session_state.compare_entries = compare_entries
