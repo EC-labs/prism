@@ -7,6 +7,13 @@ import plotly.express as px
 from BTrees.OOBTree import OOBTree
 
 
+
+def store_value(key):
+    st.session_state[key] = st.session_state["_"+key]
+
+def load_value(key):
+    st.session_state["_"+key] = st.session_state.get(key)
+
 def generate_edited_key() -> str:
     return f"edited_rows{random.randint(0, int(1e6))}"
 
@@ -64,6 +71,8 @@ if 'compare_init' not in st.session_state:
     st.session_state.selection = None
     st.session_state.tree = OOBTree()
     st.session_state.compare_chart_axis = None
+    st.session_state.target_x = None
+    st.session_state.target_y = None
     st.session_state.edited_rows_key = generate_edited_key()
 
 st.session_state.compare_init = True
@@ -87,20 +96,26 @@ if st.session_state.target_data is not None:
         with config_col1:
             x_index = (None if not st.session_state.compare_chart_axis 
                        else target_columns.get_loc(st.session_state.compare_chart_axis["x_axis"]))
+            load_value("target_x")
             x_axis = st.selectbox(
                 "Time",
                 target_columns,
                 index=None,
-                key="target_x",
+                key="_target_x",
+                on_change=store_value,
+                args=["target_x"],
             )
         with config_col2:
             y_index = (None if not st.session_state.compare_chart_axis 
                        else target_columns.get_loc(st.session_state.compare_chart_axis["y_axis"]))
+            load_value("target_y")
             st.selectbox(
                 "Target Metric",
                 target_columns,
                 index=None,
-                key="target_y",
+                key="_target_y",
+                on_change=store_value,
+                args=["target_y"],
             )
 
         if st.session_state.target_x and st.session_state.target_y:
