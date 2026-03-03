@@ -12,6 +12,11 @@ import networkx as nx
 import numpy as np
 import re
 
+def store_value(key):
+    st.session_state[key] = st.session_state["_"+key]
+
+def load_value(key):
+    st.session_state["_"+key] = st.session_state.get(key)
 
 def bootstrap_selection_cb():
     match = re.search(r"\d+", st.session_state.ripple_selection)
@@ -238,7 +243,9 @@ def main():
         ][0]))
         left.selectbox("What service would you like to start from?", options, placeholder="[index] - [service_name] ([machine_id] : [pid])", index=index, key="ripple_selection", on_change=bootstrap_selection_cb)
 
-        middle.number_input("Max nodes", value=20, key="ripple_max_nodes")
+        
+        load_value("ripple_max_nodes")
+        middle.number_input("Max nodes", value=st.session_state.ripple_max_nodes, key="_ripple_max_nodes", on_change=store_value, args=["ripple_max_nodes"])
 
         tree = st.session_state.get("tree")
         compare_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
@@ -249,11 +256,15 @@ def main():
                     continue
                 row = pd.DataFrame([[start, end, range_type]], columns=compare_entries.columns)
                 compare_entries = pd.concat([compare_entries, row], ignore_index=True)
+
+        load_value("ripple_use_compare")
         right.toggle(
             "Use compare", 
             disabled=compare_entries.shape[0] == 0, 
-            value=False, 
-            key="ripple_use_compare",
+            value=st.session_state.ripple_use_compare,
+            key="_ripple_use_compare",
+            on_change=store_value,
+            args=["ripple_use_compare"],
             help="Define *compare* periods in the KPI page to use this feature."
         )
         st.session_state.compare_entries = compare_entries
