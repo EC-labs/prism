@@ -61,16 +61,21 @@ st.markdown("""
 
 if 'compare_init' not in st.session_state:
     st.session_state.target_data = None
-    st.session_state.plot_key = "line_chart" + f"{random.randint(0, int(1e6))}"
     st.session_state.selection = None
-    st.session_state.reset_plot = False
     st.session_state.tree = OOBTree()
     st.session_state.compare_chart_axis = None
     st.session_state.edited_rows_key = generate_edited_key()
 
 st.session_state.compare_init = True
 
-target_file = st.file_uploader("Upload Target Metric", type=["csv", "xlsx"])
+def file_upload_cb():
+    st.session_state.compare_chart_axis = None
+    st.session_state.target_x = None
+    st.session_state.target_y = None
+    pass
+
+st.file_uploader("Upload Target Metric", type=["csv", "xlsx"], key="kpi_target_file", on_change=file_upload_cb)
+target_file = st.session_state.kpi_target_file
 if target_file:
     path = Path(target_file.name)
     st.session_state.target_data = pd.read_excel(target_file) if path.suffix == ".xlsx" else pd.read_csv(target_file)
@@ -85,27 +90,26 @@ if st.session_state.target_data is not None:
             x_axis = st.selectbox(
                 "Time",
                 target_columns,
-                index=x_index,
+                index=None,
                 key="target_x",
             )
         with config_col2:
             y_index = (None if not st.session_state.compare_chart_axis 
                        else target_columns.get_loc(st.session_state.compare_chart_axis["y_axis"]))
-            y_axis = st.selectbox(
+            st.selectbox(
                 "Target Metric",
                 target_columns,
-                index=y_index,
+                index=None,
                 key="target_y",
             )
 
-        if x_axis and y_axis:
+        if st.session_state.target_x and st.session_state.target_y:
+            x_axis, y_axis = st.session_state.target_x, st.session_state.target_y
             st.session_state.target_data[x_axis] = pd.to_datetime(st.session_state.target_data[x_axis])
             st.session_state.compare_chart_axis = {"x_axis": x_axis, "y_axis": y_axis}
 
 
-if st.session_state.reset_plot:
-    st.session_state.plot_key = "line_chart" + f"{random.randint(0, int(1e6))}"
-    st.session_state.reset_plot = False
+st.session_state.plot_key = "line_chart"
 
 def main():
     if not ((st.session_state.target_data is None) or (not st.session_state.compare_chart_axis)):
@@ -113,14 +117,12 @@ def main():
                 col1, col2, _ = st.columns([0.25, 0.25, 0.5])
                 with col1:
                     if st.button("compare selection", type="primary"):
-                        st.session_state.reset_plot = True
                         if st.session_state.selection is not None: 
                             entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "compare")
                             add_entry(st.session_state.tree, entry)
                     
                 with col2:
                     if st.button("baseline selection"):
-                        st.session_state.reset_plot = True
                         if st.session_state.selection is not None: 
                             entry = (pd.to_datetime(st.session_state.selection["x0"]), pd.to_datetime(st.session_state.selection["x1"]), "baseline")
                             add_entry(st.session_state.tree, entry)
@@ -135,7 +137,7 @@ def main():
                 events = st.plotly_chart(
                     fig,
                     on_select='rerun',
-                    key=st.session_state.plot_key,
+                    key="line_chart",
                 )
                 if events and 'selection' in events:
                     selection = events["selection"]
@@ -146,7 +148,6 @@ def main():
                         x0, x1 = (x0, x1) if x0 <= x1 else (x1, x0)
                         st.session_state.selection = {"x0": x0, "x1": x1}
 
-    # if len(st.session_state.tree): 
     st.markdown("## Ranges")
 
     tree = st.session_state.tree
