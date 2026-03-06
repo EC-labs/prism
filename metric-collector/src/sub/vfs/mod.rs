@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
-
 use anyhow::Result;
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
@@ -7,7 +5,7 @@ use libbpf_rs::{
     MapCore, OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
-use log::debug;
+use log::{debug, warn};
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -130,30 +128,45 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
         pid_map: BorrowedFd,
         pid_rb: BorrowedFd,
         machine_id: u32,
-    ) -> Result<Self> {
+    ) -> Self {
         let skel_builder = VfsSkelBuilder::default();
 
-        let mut open_skel = skel_builder.open(open_object)?;
-        open_skel.maps.pids.reuse_fd(pid_map)?;
-        open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
+        let mut open_skel = skel_builder
+            .open(open_object)
+            .expect("Vfs skel open failed");
+        open_skel
+            .maps
+            .pids
+            .reuse_fd(pid_map)
+            .expect("Vfs pid_map reuse failed");
+        open_skel
+            .maps
+            .pid_rb
+            .reuse_fd(pid_rb)
+            .expect("Vfs pid_rb reuse failed");
 
-        let mut skel = open_skel.load()?;
-        samples_init::<granularity, stats>(&skel.maps.samples)?;
+        let mut skel = open_skel.load().expect("Vfs skel load failed");
+        samples_init::<granularity, stats>(&skel.maps.samples)
+            .expect("Vfs samples map initialisation failed");
 
-        skel.attach()?;
+        if let Err(e) = skel.attach() {
+            warn!("Vfs bpf programs attach failed:\n{e}");
+        }
 
-        Self::init_store(conn)?;
-        Ok(Self {
+        Self::init_store(conn);
+        Self {
             skel,
-            appender: conn.appender("vfs")?,
-            staging_appender: conn.appender("vfs_staging")?,
+            appender: conn.appender("vfs").expect("Table vfs does not exist"),
+            staging_appender: conn
+                .appender("vfs_staging")
+                .expect("Table vfs_staging does not exist"),
             conn,
             machine_id,
             updated: HashMap::new(),
-        })
+        }
     }
 
-    fn init_store(conn: &Connection) -> Result<()> {
+    fn init_store(conn: &Connection) {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE vfs (
@@ -189,8 +202,8 @@ impl<'obj, 'conn> Vfs<'obj, 'conn> {
                     additional_time UBIGINT,
                 )
             ",
-        )?;
-        Ok(())
+        )
+        .expect("Vfs store initialisation failed");
     }
 
     fn store_samples<'a, I: ExactSizeIterator<Item = (&'a granularity, &'a stats)>>(

@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
-
 use anyhow::Result;
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
@@ -7,7 +5,7 @@ use libbpf_rs::{
     OpenObject, RingBuffer, RingBufferBuilder,
 };
 use libc::{AF_INET, AF_INET6, AF_UNIX, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM};
-use log::debug;
+use log::{debug, warn};
 use net_skel::{types::socket_context_value, NetSkel, NetSkelBuilder};
 use std::{
     fmt::Debug,
@@ -108,48 +106,78 @@ impl<'obj> Net<'obj> {
         pending_map: BorrowedFd,
         to_update_map: BorrowedFd,
         machine_id: u32,
-    ) -> Result<Self>
+    ) -> Self
     where
         'conn: 'obj,
     {
-        Self::init_store(conn)?;
+        Self::init_store(conn);
         let skel_builder = NetSkelBuilder::default();
-        let mut open_skel = skel_builder.open(open_object)?;
-        open_skel.maps.pids.reuse_fd(pid_map)?;
-        open_skel.maps.samples.reuse_fd(samples_map)?;
-        open_skel.maps.pending.reuse_fd(pending_map)?;
-        open_skel.maps.to_update.reuse_fd(to_update_map)?;
-        open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
+        let mut open_skel = skel_builder
+            .open(open_object)
+            .expect("Net skel open failed");
+        open_skel
+            .maps
+            .pids
+            .reuse_fd(pid_map)
+            .expect("Net pid_map reuse failed");
+        open_skel
+            .maps
+            .samples
+            .reuse_fd(samples_map)
+            .expect("Net samples_map reuse failed");
+        open_skel
+            .maps
+            .pending
+            .reuse_fd(pending_map)
+            .expect("Net pending_map reuse failed");
+        open_skel
+            .maps
+            .to_update
+            .reuse_fd(to_update_map)
+            .expect("Net to_update_map reuse failed");
+        open_skel
+            .maps
+            .pid_rb
+            .reuse_fd(pid_rb)
+            .expect("Net pid_rb reuse failed");
 
-        let mut skel = open_skel.load()?;
+        let mut skel = open_skel.load().expect("Net skel open failed");
         let mut builder = RingBufferBuilder::new();
-        builder.add(
-            &skel.maps.rb,
-            wrapped_callback(
-                conn.appender("socket_context").unwrap(),
-                conn.appender("socket_inet").unwrap(),
-                machine_id,
-            ),
-        )?;
-        let rb = builder.build()?;
+        builder
+            .add(
+                &skel.maps.rb,
+                wrapped_callback(
+                    conn.appender("socket_context").unwrap(),
+                    conn.appender("socket_inet").unwrap(),
+                    machine_id,
+                ),
+            )
+            .expect("Net failed to register rb callback");
+        let rb = builder.build().expect("Net failed to build rb handler");
 
         let mut builder = RingBufferBuilder::new();
-        builder.add(
-            &skel.maps.socket_socket_rb,
-            socket_socket_callback(conn.appender("socket_map").unwrap(), machine_id),
-        )?;
-        let socket_socket_rb = builder.build()?;
+        builder
+            .add(
+                &skel.maps.socket_socket_rb,
+                socket_socket_callback(conn.appender("socket_map").unwrap(), machine_id),
+            )
+            .expect("Net failed to register socket_socket_rb callback");
+        let socket_socket_rb = builder
+            .build()
+            .expect("Net failed to build socket_socket_rb handler");
 
-        skel.attach()?;
+        if let Err(e) = skel.attach() {
+            warn!("Failed to attach Net programs:\n{e}");
+        }
 
-        Ok(Self {
+        Self {
             skel,
             rb,
             socket_socket_rb,
-        })
+        }
     }
 
-    fn init_store(conn: &Connection) -> Result<()> {
+    fn init_store(conn: &Connection) {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE socket_context (
@@ -176,8 +204,8 @@ impl<'obj> Net<'obj> {
                     sock2_inode_id UBIGINT,
                 );
             ",
-        )?;
-        Ok(())
+        )
+        .expect("Net store initialisation failed");
     }
 
     pub fn sample(&mut self) -> Result<()> {

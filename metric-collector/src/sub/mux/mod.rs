@@ -6,7 +6,7 @@ use libbpf_rs::{
     MapCore, OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
-use log::debug;
+use log::{debug, warn};
 use std::{
     collections::HashMap,
     ffi::c_void,
@@ -136,19 +136,40 @@ impl<'obj, 'conn> Muxio<'obj, 'conn> {
     ) -> Result<Self> {
         let skel_builder = MuxSkelBuilder::default();
 
-        let mut open_skel = skel_builder.open(open_object)?;
-        open_skel.maps.pids.reuse_fd(pid_map)?;
-        open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
+        let mut open_skel = skel_builder
+            .open(open_object)
+            .expect("Muxio skel open failed");
+        open_skel
+            .maps
+            .pids
+            .reuse_fd(pid_map)
+            .expect("Muxio pid_map reuse failed");
+        open_skel
+            .maps
+            .pid_rb
+            .reuse_fd(pid_rb)
+            .expect("Muxio pid_rb reuse failed");
 
-        let mut skel = open_skel.load()?;
-        super::samples_init::<granularity, stats>(&skel.maps.samples)?;
-        super::samples_init::<file_granularity, file_stats>(&skel.maps.file_samples)?;
-        skel.attach()?;
+        let mut skel = open_skel.load().expect("Muxio skel load failed");
+        super::samples_init::<granularity, stats>(&skel.maps.samples)
+            .expect("Muxio samples map initialisation failed");
+        super::samples_init::<file_granularity, file_stats>(&skel.maps.file_samples)
+            .expect("Muxio file_samples map initialisation failed");
+        if let Err(e) = skel.attach() {
+            warn!("Failed to attach Muxio programs:\n{e}");
+            return Err(e.into());
+        }
 
-        Self::init_store(conn)?;
-        let muxio_appender = conn.appender("muxio_wait")?;
-        let muxio_staging_appender = conn.appender("muxio_staging")?;
-        let muxio_file_appender = conn.appender("muxio_file")?;
+        Self::init_store(conn);
+        let muxio_appender = conn
+            .appender("muxio_wait")
+            .expect("Table muxio_wait does not exist");
+        let muxio_staging_appender = conn
+            .appender("muxio_staging")
+            .expect("Table muxio_staging does not exist");
+        let muxio_file_appender = conn
+            .appender("muxio_file")
+            .expect("Table muxio_file does not exist");
         Ok(Self {
             skel,
             conn,
@@ -160,7 +181,7 @@ impl<'obj, 'conn> Muxio<'obj, 'conn> {
         })
     }
 
-    fn init_store(conn: &Connection) -> Result<()> {
+    fn init_store(conn: &Connection) {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE muxio_wait (
@@ -202,8 +223,8 @@ impl<'obj, 'conn> Muxio<'obj, 'conn> {
                     hist7 UINTEGER,
                 );
             ",
-        )?;
-        Ok(())
+        )
+        .expect("Muxio store initialisation failed");
     }
 
     fn store_samples<'a, I: ExactSizeIterator<Item = (&'a granularity, &'a stats)>>(

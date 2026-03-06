@@ -1,5 +1,5 @@
 use bus::Bus;
-use log::{error, info};
+use log::{error, info, warn};
 use std::{
     collections::HashMap,
     ffi::CStr,
@@ -93,19 +93,28 @@ impl<'conn> TaskStatsIter<'conn> {
         std::thread::spawn(move || {
             let mut open_object = MaybeUninit::uninit();
             let skel_builder = TaskstatsSkelBuilder::default();
-            let open_skel = skel_builder.open(&mut open_object)?;
-            let skel = open_skel.load()?;
+            let open_skel = skel_builder
+                .open(&mut open_object)
+                .expect("TaskStatsIter skel open failed");
+            let skel = open_skel.load().expect("TaskStatsIter skel load failed");
 
             for pid in init_pids {
-                let link = create_link_for_pid(pid, &skel.progs.get_tasks)?;
+                let Ok(link) = create_link_for_pid(pid, &skel.progs.get_tasks) else {
+                    warn!("Failed to create a link for pid `{pid}`");
+                    continue;
+                };
                 let Ok(_) = tx.send((pid, link)) else {
                     return Err(mpsc::SendError("failed to send link").into());
                 };
             }
 
             let mut builder = RingBufferBuilder::new();
-            builder.add(&pid_rb as _, rb_callback(tx, skel.progs.get_tasks))?;
-            let rb = builder.build()?;
+            builder
+                .add(&pid_rb as _, rb_callback(tx, skel.progs.get_tasks))
+                .expect("TaskStatsIter failed to register pid_rb callback");
+            let rb = builder
+                .build()
+                .expect("TaskStatsIter failed to build pid_rb handler");
 
             loop {
                 if let Err(_e) = rb.poll(Duration::from_secs(1)) {
@@ -115,14 +124,16 @@ impl<'conn> TaskStatsIter<'conn> {
             Ok(()) as Result<()>
         });
 
-        init_store(conn)?;
+        init_store(conn);
         Ok(Self {
             pid_map,
             pid_bus,
             machine_id,
             links: HashMap::new(),
             link_rx: rx,
-            taskstats_appender: conn.appender("taskstats")?,
+            taskstats_appender: conn
+                .appender("taskstats")
+                .expect("Table taskstats does not exist"),
         })
     }
 
@@ -173,17 +184,24 @@ impl<'conn> TaskStatsIter<'conn> {
         let mut remove = Vec::new();
         let mut buf = Vec::new();
         for (pid, link) in self.links.iter() {
-            let mut iterator = Iter::new(link)?;
+            let mut iterator = match Iter::new(link) {
+                Ok(iterator) => iterator,
+                Err(e) => {
+                    warn!("Failed to create Iter for pid `{pid}`");
+                    continue;
+                }
+            };
             let bytes = iterator.read_to_end(&mut buf);
             if bytes.is_err() || matches!(bytes, Ok(bytes) if bytes == 0) {
                 remove.push(*pid);
-                continue;
             }
         }
 
         for pid in remove {
             self.links.remove(&pid);
-            self.pid_map.delete(&pid.to_ne_bytes())?;
+            if let Err(e) = self.pid_map.delete(&pid.to_ne_bytes()) {
+                warn!("Failed to remove pid `{pid}` from pid_map: `{e}`");
+            }
             info!("remove {pid}");
         }
 
@@ -220,19 +238,36 @@ impl<'obj> TaskStatsTrace<'obj> {
     where
         'conn: 'obj,
     {
-        init_store(conn)?;
+        init_store(conn);
         let skel_builder = TaskstatsSkelBuilder::default();
-        let mut open_skel = skel_builder.open(open_object)?;
-        open_skel.maps.pids.reuse_fd(pid_map)?;
-        open_skel.maps.pid_rb.reuse_fd(pid_rb.as_fd())?;
-        let mut skel = open_skel.load()?;
+        let mut open_skel = skel_builder
+            .open(open_object)
+            .expect("TaskStatsTrace skel open failed");
+        open_skel
+            .maps
+            .pids
+            .reuse_fd(pid_map)
+            .expect("TaskStatsTrace pid_map reuse failed");
+        open_skel
+            .maps
+            .pid_rb
+            .reuse_fd(pid_rb.as_fd())
+            .expect("TaskStatsTrace pid_rb reuse failed");
+        let mut skel = open_skel.load().expect("TaskStatsTrace skel load failed");
         let mut builder = RingBufferBuilder::new();
-        builder.add(
-            &skel.maps.taskstats_rb,
-            wrapped_callback(conn.appender("taskstats").unwrap(), machine_id),
-        )?;
-        let taskstats_rb = builder.build()?;
-        skel.attach()?;
+        builder
+            .add(
+                &skel.maps.taskstats_rb,
+                wrapped_callback(conn.appender("taskstats").unwrap(), machine_id),
+            )
+            .expect("TaskStatsTrace failed to register taskstats_rb callback");
+        let taskstats_rb = builder
+            .build()
+            .expect("TaskStatsTrace failed to build taskstats_rb handler");
+        if let Err(e) = skel.attach() {
+            warn!("Failed to attach TaskStatsTrace programs:\n{e}");
+            return Err(e.into());
+        }
 
         Ok(Self {
             _skel: skel,
@@ -246,6 +281,11 @@ impl<'obj> TaskStatsTrace<'obj> {
     }
 }
 
+/// Creates a libbpf_rs::link::Link for a pid
+///
+/// # Errors
+///
+/// This function propagates libbpf errors from resulting from `bpf_program__attach_iter`
 fn create_link_for_pid(pid: u32, get_tasks: &ProgramMut) -> Result<Link> {
     let mut linfo = bpf_iter_link_info::default();
     let mut opts = bpf_iter_attach_opts::default();
@@ -273,7 +313,7 @@ fn rb_callback(
     }
 }
 
-fn init_store(conn: &Connection) -> Result<()> {
+fn init_store(conn: &Connection) {
     conn.execute_batch(
         r"
             CREATE TABLE IF NOT EXISTS taskstats (
@@ -345,8 +385,7 @@ fn init_store(conn: &Connection) -> Result<()> {
             WHERE 
                 time_diff IS NOT NULL;
         ",
-    )?;
-    Ok(())
+    ).expect("Taskstats store initialisation failed");
 }
 
 fn wrapped_callback<'conn>(
