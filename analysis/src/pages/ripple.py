@@ -245,7 +245,7 @@ def main():
 
         
         load_value("ripple_max_nodes")
-        middle.number_input("Max nodes", value=st.session_state.ripple_max_nodes, key="_ripple_max_nodes", on_change=store_value, args=["ripple_max_nodes"])
+        middle.number_input("Max nodes", key="_ripple_max_nodes", step=1, on_change=store_value, args=["ripple_max_nodes"])
 
         tree = st.session_state.get("tree")
         compare_entries = pd.DataFrame({'start': pd.Series(dtype='datetime64[ns]'), 'end': pd.Series(dtype='datetime64[ns]'), 'range_type': pd.Series(dtype='str')})
