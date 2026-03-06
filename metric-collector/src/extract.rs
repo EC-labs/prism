@@ -12,7 +12,6 @@ use std::{
     env,
     mem::MaybeUninit,
     os::fd::AsFd,
-    path::Path,
     sync::{
         mpsc::{self, Receiver},
         Arc, Mutex, RwLock,
@@ -277,8 +276,7 @@ impl Extractor {
         let conn = &self.conn;
 
         let mut iowait_open_object = MaybeUninit::uninit();
-        let mut iowait =
-            IOWait::new(&mut iowait_open_object, conn, self.config.machine_id).unwrap();
+        let mut iowait = IOWait::new(&mut iowait_open_object, conn, self.config.machine_id);
 
         let mut vfs_open_object = MaybeUninit::uninit();
         let mut vfs = Vfs::new(
@@ -287,8 +285,7 @@ impl Extractor {
             pid_map.as_fd(),
             pid_rb.as_fd(),
             self.config.machine_id,
-        )
-        .unwrap();
+        );
 
         let mut futex_open_object = MaybeUninit::uninit();
         let mut futex = Futex::new(
@@ -297,8 +294,7 @@ impl Extractor {
             pid_rb.as_fd(),
             conn,
             self.config.machine_id,
-        )
-        .unwrap();
+        );
 
         let mut muxio_open_object = MaybeUninit::uninit();
         let mut muxio = Muxio::new(
@@ -307,8 +303,7 @@ impl Extractor {
             pid_rb.as_fd(),
             conn,
             self.config.machine_id,
-        )
-        .unwrap();
+        );
 
         let mut aio_open_object = MaybeUninit::uninit();
         let mut aio = Aio::new(
@@ -316,8 +311,7 @@ impl Extractor {
             pid_map.as_fd(),
             conn,
             self.config.machine_id,
-        )
-        .unwrap();
+        );
 
         let mut net_open_object = MaybeUninit::uninit();
         let mut net = Net::new(
@@ -329,8 +323,7 @@ impl Extractor {
             vfs.skel.maps.pending.as_fd(),
             vfs.skel.maps.to_update.as_fd(),
             self.config.machine_id,
-        )
-        .unwrap();
+        );
 
         let mut discovery = Discovery::new(
             conn,
@@ -340,17 +333,16 @@ impl Extractor {
             MapHandle::try_from(&net.skel.maps.socket_context)?,
             MapHandle::try_from(&net.skel.maps.rb)?,
             discovery_rx,
-        )
-        .unwrap();
+        );
 
         let mut taskstats_open_object = MaybeUninit::uninit();
-        let mut taskstats = TaskStatsTrace::new(
+        let mut taskstats_trace = TaskStatsTrace::new(
             &mut taskstats_open_object,
             conn,
             pid_map.as_fd(),
             MapHandle::try_from(&pid_rb)?,
             self.config.machine_id,
-        )?;
+        );
 
         TimeSensitive::init_thread(
             self.terminate_flag.clone(),
@@ -379,18 +371,26 @@ impl Extractor {
             }
 
             let start = Instant::now();
-            iowait.sample()?;
+            if let Ok(ref mut iowait) = iowait {
+                iowait.sample()?;
+            }
             let iowait_elapsed = start.elapsed().as_nanos();
             vfs.sample()?;
             let vfs_elapsed = start.elapsed().as_nanos();
             let vfs_acct = vfs_elapsed - iowait_elapsed;
-            futex.sample()?;
+            if let Ok(ref mut futex) = futex {
+                futex.sample()?;
+            }
             let futex_elapsed = start.elapsed().as_nanos();
             let futex_acct = futex_elapsed - vfs_elapsed;
-            muxio.sample()?;
+            if let Ok(ref mut muxio) = muxio {
+                muxio.sample()?;
+            }
             let muxio_elapsed = start.elapsed().as_nanos();
             let muxio_acct = muxio_elapsed - futex_elapsed;
-            aio.sample()?;
+            if let Ok(ref mut aio) = aio {
+                aio.sample()?;
+            }
             let aio_elapsed = start.elapsed().as_nanos();
             let aio_acct = aio_elapsed - muxio_elapsed;
             net.sample()?;
@@ -399,7 +399,9 @@ impl Extractor {
             discovery.sample()?;
             let discovery_elapsed = start.elapsed().as_nanos();
             let discovery_acct = discovery_elapsed - net_elapsed;
-            taskstats.sample()?;
+            if let Ok(ref mut taskstats_trace) = taskstats_trace {
+                taskstats_trace.sample()?;
+            }
             let taskstats_elapsed = start.elapsed().as_nanos();
             let taskstats_acct = taskstats_elapsed - discovery_elapsed;
 
@@ -452,7 +454,7 @@ impl TimeSensitive {
         thread::Builder::new()
             .name("ts-collect".to_string())
             .spawn(move || {
-                let mut taskstats =
+                let mut taskstats_iter =
                     TaskStatsIter::new(pid_map, pid_rb, &conn, pid_bus, machine_id)?;
                 loop {
                     sample_rx.recv()?;
@@ -461,7 +463,7 @@ impl TimeSensitive {
                         break;
                     }
                     let start = Instant::now();
-                    taskstats.sample()?;
+                    taskstats_iter.sample()?;
                     let elapsed_us = start.elapsed().as_micros();
                     if elapsed_us > 10_000 {
                         warn!(

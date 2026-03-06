@@ -5,7 +5,7 @@ use libbpf_rs::{
     MapCore, OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
-use log::{debug, error};
+use log::{debug, error, warn};
 use std::{
     collections::HashMap,
     ffi::c_void,
@@ -118,19 +118,38 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
     ) -> Result<Self> {
         let skel_builder = AioSkelBuilder::default();
 
-        let mut open_skel = skel_builder.open(open_object)?;
-        open_skel.maps.pids.reuse_fd(pid_map)?;
+        let mut open_skel = skel_builder
+            .open(open_object)
+            .expect("Aio skel open failed");
+        open_skel
+            .maps
+            .pids
+            .reuse_fd(pid_map)
+            .expect("Aio pid_map reuse failed");
 
-        let mut skel = open_skel.load()?;
-        super::samples_init::<granularity, stats>(&skel.maps.samples)?;
-        super::samples_init::<file_granularity, file_stats>(&skel.maps.file_samples)?;
-        skel.attach()?;
+        let mut skel = open_skel.load().expect("Aio skel load failed");
+        super::samples_init::<granularity, stats>(&skel.maps.samples)
+            .expect("Aio samples map initialisation failed");
+        super::samples_init::<file_granularity, file_stats>(&skel.maps.file_samples)
+            .expect("Aio file_samples map initialisation failed");
+        if let Err(e) = skel.attach() {
+            warn!("Failed to attach Aio programs:\n{e}");
+            return Err(e.into());
+        }
 
-        Self::init_store(conn)?;
-        let aio_getevents_appender = conn.appender("aio_getevents")?;
-        let aio_staging_appender = conn.appender("aio_staging")?;
-        let aio_submit_appender = conn.appender("aio_submit")?;
-        let aio_file_appender = conn.appender("aio_file")?;
+        Self::init_store(conn);
+        let aio_getevents_appender = conn
+            .appender("aio_getevents")
+            .expect("Table aio_getevents does not exist");
+        let aio_staging_appender = conn
+            .appender("aio_staging")
+            .expect("Table aio_staging does not exist");
+        let aio_submit_appender = conn
+            .appender("aio_submit")
+            .expect("Table aio_submit does not exist");
+        let aio_file_appender = conn
+            .appender("aio_file")
+            .expect("Table aio_file does not exist");
         Ok(Aio {
             machine_id,
             skel,
@@ -143,7 +162,7 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
         })
     }
 
-    fn init_store(conn: &Connection) -> Result<()> {
+    fn init_store(conn: &Connection) {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE aio_getevents (
@@ -195,8 +214,8 @@ impl<'conn, 'obj> Aio<'conn, 'obj> {
                     hist7 UINTEGER,
                 );
             ",
-        )?;
-        Ok(())
+        )
+        .expect("Aio store initialisation failed");
     }
 
     fn store_samples<'a, I: ExactSizeIterator<Item = (&'a granularity, &'a stats)>>(

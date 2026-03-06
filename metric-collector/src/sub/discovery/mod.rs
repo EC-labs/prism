@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
-
 use anyhow::Result;
 use bus::BusReader;
 use duckdb::{Appender, Connection, ToSql};
@@ -7,7 +5,7 @@ use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     MapHandle, RingBufferBuilder, TcHook, TcHookBuilder, TC_EGRESS,
 };
-use log::{debug, error};
+use log::{debug, error, warn};
 use std::{
     mem::MaybeUninit,
     os::fd::AsFd,
@@ -54,38 +52,65 @@ impl Discovery {
         net_socket_context: MapHandle,
         net_rb: MapHandle,
         mut pid_rx: BusReader<u32>,
-    ) -> Result<Self>
-where {
+    ) -> Self {
         let (hook_tx, hook_rx) = mpsc::channel();
-        let conn = conn.try_clone()?;
-        Self::init_store(&conn)?;
+        let conn = conn
+            .try_clone()
+            .expect("Discovery failed to clone connection");
+        Self::init_store(&conn);
 
         thread::spawn(move || -> Result<()> {
             let skel_builder = DiscoverySkelBuilder::default();
             let mut open_object = MaybeUninit::uninit();
-            let mut open_skel = skel_builder.open(&mut open_object)?;
+            let mut open_skel = skel_builder
+                .open(&mut open_object)
+                .expect("Discovery skel open failed");
             open_skel.maps.rodata_data.machine_id = machine_id;
-            open_skel.maps.pids.reuse_fd(pid_map.as_fd())?;
-            open_skel.maps.pid_rb.reuse_fd(pid_rb.as_fd())?;
+            open_skel
+                .maps
+                .pids
+                .reuse_fd(pid_map.as_fd())
+                .expect("Discovery pid_map reuse failed");
+            open_skel
+                .maps
+                .pid_rb
+                .reuse_fd(pid_rb.as_fd())
+                .expect("Discovery pid_rb reuse failed");
             open_skel
                 .maps
                 .socket_context
-                .reuse_fd(net_socket_context.as_fd())?;
-            open_skel.maps.rb.reuse_fd(net_rb.as_fd())?;
+                .reuse_fd(net_socket_context.as_fd())
+                .expect("Discovery net_socket_context reuse failed");
+            open_skel
+                .maps
+                .rb
+                .reuse_fd(net_rb.as_fd())
+                .expect("Discovery net_rb reuse failed");
 
-            let mut skel = open_skel.load()?;
+            let mut skel = open_skel.load().expect("Discovery skel load failed");
             let mut builder = RingBufferBuilder::new();
-            builder.add(&skel.maps.rb_skb_data, |_: &[u8]| 0)?;
-            let rb = builder.build()?;
+            builder
+                .add(&skel.maps.rb_skb_data, |_: &[u8]| 0)
+                .expect("Discovery failed to register rb_skb_data callback");
+            let rb = builder
+                .build()
+                .expect("Discovery failed to build rb_skb_data handler");
 
             let mut builder = RingBufferBuilder::new();
-            builder.add(
-                &skel.maps.tcp_discovery_rb,
-                tcp_discovery_callback(conn.appender("tcp_discovery").unwrap()),
-            )?;
-            let tcp_discovery_rb = builder.build()?;
+            builder
+                .add(
+                    &skel.maps.tcp_discovery_rb,
+                    tcp_discovery_callback(conn.appender("tcp_discovery").unwrap()),
+                )
+                .expect("Discovery failed to register tcp_discovery_rb callback");
+            let tcp_discovery_rb = builder
+                .build()
+                .expect("Discovery failed to build tcp_discovery_rb handler");
 
-            skel.attach()?;
+            if let Err(e) = skel.attach() {
+                warn!("Failed to attach Discovery programs:\n{e}");
+                return Err(e.into());
+            }
 
             loop {
                 loop {
@@ -130,18 +155,22 @@ where {
                         }
                     }
                 }
-                tcp_discovery_rb.consume()?;
-                rb.consume()?;
+                if let Err(e) = tcp_discovery_rb.consume() {
+                    warn!("Failed to consume tcp_discovery_rb: `{e}`");
+                }
+                if let Err(e) = rb.consume() {
+                    warn!("Failed to consume rb_skb_data: `{e}`");
+                }
             }
         });
 
-        Ok(Self {
+        Self {
             hook_rx,
             hooks: Vec::new(),
-        })
+        }
     }
 
-    fn init_store(conn: &Connection) -> Result<()> {
+    fn init_store(conn: &Connection) {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE tcp_discovery (
@@ -152,8 +181,8 @@ where {
                     inserted_at         TIMESTAMP,
                 );
             ",
-        )?;
-        Ok(())
+        )
+        .expect("Discovery store initialisation");
     }
 
     pub fn sample(&mut self) -> Result<()> {

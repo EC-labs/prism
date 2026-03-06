@@ -1,13 +1,10 @@
-// SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
-
-use anyhow::{bail, Result};
+use anyhow::Result;
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
-    libbpf_sys::{self, bpf_map_create},
     skel::{OpenSkel, Skel, SkelBuilder},
     OpenObject,
 };
-use log::debug;
+use log::{debug, warn};
 use std::{mem::MaybeUninit, time::Duration};
 
 mod iowait_skel {
@@ -19,13 +16,9 @@ mod iowait_skel {
 
 use iowait_skel::types::{granularity, stats};
 use iowait_skel::*;
-use libbpf_rs::MapCore;
-use libbpf_rs::MapFlags;
 use libc::clock_gettime;
 use libc::timespec;
 use libc::CLOCK_BOOTTIME;
-
-use crate::sub::{replace_samples, MAX_ENTRIES, SAMPLES};
 
 pub struct IOWait<'obj, 'conn> {
     skel: IowaitSkel<'obj>,
@@ -39,42 +32,32 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
         conn: &'conn Connection,
         machine_id: u32,
     ) -> Result<Self> {
-        Self::init_store(conn)?;
+        Self::init_store(conn);
 
         let skel_builder = IowaitSkelBuilder::default();
-        let open_skel = skel_builder.open(open_object)?;
+        let open_skel = skel_builder
+            .open(open_object)
+            .expect("Iowait skel open failed");
 
-        let mut skel = open_skel.load()?;
-        for i in 0..SAMPLES {
-            let mapfd = unsafe {
-                bpf_map_create(
-                    libbpf_sys::BPF_MAP_TYPE_HASH,
-                    std::ptr::null(),
-                    size_of::<granularity>() as u32,
-                    size_of::<stats>() as u32,
-                    MAX_ENTRIES as u32,
-                    std::ptr::null(),
-                )
-            };
-            if mapfd < 0 {
-                bail!("Failed to create map for {i}: {mapfd}")
-            }
+        let mut skel = open_skel.load().expect("Iowait skel load failed");
+        super::samples_init::<granularity, stats>(&skel.maps.samples)
+            .expect("Iowait samples map initialisation failed");
 
-            skel.maps
-                .samples
-                .update(&i.to_ne_bytes(), &mapfd.to_ne_bytes(), MapFlags::ANY)?;
-            unsafe { libc::close(mapfd) };
-        }
+        if let Err(e) = skel.attach() {
+            warn!("Failed to attach Iowait programs:\n{e}");
+            return Err(e.into());
+        };
 
-        skel.attach()?;
         Ok(Self {
             skel,
             machine_id,
-            appender: conn.appender("iowait")?,
+            appender: conn
+                .appender("iowait")
+                .expect("Table iowait does not exist"),
         })
     }
 
-    fn init_store(conn: &Connection) -> Result<()> {
+    fn init_store(conn: &Connection) {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE iowait (
@@ -97,8 +80,8 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
                     hist7 UINTEGER,
                 );
             ",
-        )?;
-        Ok(())
+        )
+        .expect("Iowait store initialisation failed");
     }
 
     fn store<'a, I: ExactSizeIterator<Item = (&'a granularity, &'a stats)>>(
@@ -140,7 +123,7 @@ impl<'obj, 'conn> IOWait<'obj, 'conn> {
     pub fn sample(&mut self) -> Result<()> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts as *mut timespec) };
-        let (keys, values) = replace_samples(&self.skel.maps.samples, &ts);
+        let (keys, values) = super::replace_samples(&self.skel.maps.samples, &ts);
         self.store(keys.iter().zip(values.iter()))?;
         Ok(())
     }

@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
-
 use anyhow::{bail, Result};
 use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
@@ -7,7 +5,7 @@ use libbpf_rs::{
     MapCore, OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME, FUTEX_WAIT, FUTEX_WAKE};
-use log::debug;
+use log::{debug, warn};
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -130,15 +128,30 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
     ) -> Result<Self> {
         let skel_builder = FutexSkelBuilder::default();
 
-        let mut open_skel = skel_builder.open(open_object)?;
-        open_skel.maps.pids.reuse_fd(pid_map)?;
-        open_skel.maps.pid_rb.reuse_fd(pid_rb)?;
+        let mut open_skel = skel_builder
+            .open(open_object)
+            .expect("Futex skel open failed");
+        open_skel
+            .maps
+            .pids
+            .reuse_fd(pid_map)
+            .expect("Futex pid_map reuse failed");
+        open_skel
+            .maps
+            .pid_rb
+            .reuse_fd(pid_rb)
+            .expect("Futex pid_rb reuse failed");
 
-        let mut skel = open_skel.load()?;
-        samples_init::<granularity, stats>(&skel.maps.samples)?;
-        skel.attach()?;
+        let mut skel = open_skel.load().expect("Futex skel load failed");
+        samples_init::<granularity, stats>(&skel.maps.samples)
+            .expect("Futex samples map initialisation failed");
 
-        Self::init_store(conn)?;
+        if let Err(e) = skel.attach() {
+            warn!("Failed to attach Futex programs:\n{e}");
+            return Err(e.into());
+        }
+
+        Self::init_store(conn);
         Ok(Self {
             skel,
             futex_wait_appender: conn.appender("futex_wait")?,
@@ -150,7 +163,7 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
         })
     }
 
-    fn init_store(conn: &Connection) -> Result<()> {
+    fn init_store(conn: &Connection) {
         conn.execute_batch(
             r"
                 CREATE OR REPLACE TABLE futex_wait (
@@ -196,8 +209,8 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
                     successful_count UBIGINT,
                 );
             ",
-        )?;
-        Ok(())
+        )
+        .expect("Futex store initialisation failed");
     }
 
     fn store_samples<'a, I: ExactSizeIterator<Item = (&'a granularity, &'a stats)>>(
