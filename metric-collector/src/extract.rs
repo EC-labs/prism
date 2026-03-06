@@ -1,6 +1,5 @@
 use anyhow::Result;
 use bus::Bus;
-use ctrlc;
 use duckdb::{Connection, ToSql};
 use lazy_static::lazy_static;
 use libbpf_rs::{libbpf_sys, set_print, MapCore, MapFlags, MapHandle, MapType, PrintLevel};
@@ -8,6 +7,10 @@ use libc::{geteuid, seteuid};
 use log::{debug, error, info, trace, warn, LevelFilter};
 use nix::time::{self, ClockId};
 use regex::Regex;
+use signal_hook::{
+    consts::{SIGINT, SIGTERM},
+    iterator::Signals,
+};
 use std::{
     env,
     mem::MaybeUninit,
@@ -215,12 +218,15 @@ impl Extractor {
 
     fn register_sighandler(&self) {
         let terminate_flag = self.terminate_flag.clone();
-        ctrlc::set_handler(move || {
-            let mut terminate_flag = terminate_flag.lock().unwrap();
-            info!("received termination signal");
-            *terminate_flag = true;
-        })
-        .expect("Error setting Ctrl-C handler");
+        let mut signals = Signals::new([SIGINT, SIGTERM]).expect("Signals failed to register");
+
+        thread::spawn(move || {
+            for sig in signals.forever() {
+                let mut terminate_flag = terminate_flag.lock().unwrap();
+                info!("Terminating agent: received signal `{sig}`");
+                *terminate_flag = true;
+            }
+        });
     }
 
     fn start_timer_thread(&mut self) {

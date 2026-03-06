@@ -46,3 +46,4 @@ bollard = "0.19.0"
 tokio = { version = "1.45.1", features = ["full"] }
 containerd-client = "0.8.0"
 tonic = "0.12"
+signal-hook = "0.4.3"
