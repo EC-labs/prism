@@ -52,5 +52,9 @@ struct to_update_key {
 	struct granularity granularity;
 };
 
+struct to_update_value {
+	__u64 last_sample;
+};
+
 #endif /* __FUTEX_H */
 

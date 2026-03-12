@@ -32,6 +32,7 @@
                 openssl
                 libz
                 elfutils
+                rdkafka
             ];
 
             LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";

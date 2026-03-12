@@ -75,11 +75,13 @@ int raw_block_io_done(u64 *ctx)
     if (!v)
         return 0;
 
+    struct inflight_val value = *v;
+    bpf_map_delete_elem(&pending, &k);
     struct granularity gran = {
-        .tgid = get_tgid(v->pid_tgid),
-        .pid = get_pid(v->pid_tgid),
+        .tgid = get_tgid(value.pid_tgid),
+        .pid = get_pid(value.pid_tgid),
         .part0 = k.part0,
-        .bdev = v->bdev,
+        .bdev = value.bdev,
     };
 
     u64 ts = bpf_ktime_get_boot_ns();
@@ -98,13 +100,12 @@ int raw_block_io_done(u64 *ctx)
         if (!stat)
             return 0;
     }
-    __u64 ns_latency = ts - v->ts;
+    __u64 ns_latency = ts - value.ts;
     __u32 bucket = log_base10_bucket(ns_latency);
     __sync_fetch_and_add(&stat->total_requests, 1);
     __sync_fetch_and_add(&stat->total_time, ns_latency);
-    __sync_fetch_and_add(&stat->sector_cnt, v->size);
+    __sync_fetch_and_add(&stat->sector_cnt, value.size);
     __sync_fetch_and_add(stat->hist + bucket, 1);
 
-    bpf_map_delete_elem(&pending, &k);
     return 0;
 }

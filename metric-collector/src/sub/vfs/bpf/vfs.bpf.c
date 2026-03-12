@@ -20,7 +20,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, PENDING_MAX_ENTRIES);
     __type(key, struct to_update_key);
-    __type(value, u64);
+    __type(value, struct to_update_value);
 } to_update SEC(".maps");
 
 struct {

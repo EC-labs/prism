@@ -1,5 +1,5 @@
 use bus::Bus;
-use log::{error, info, warn};
+use log::{info, warn};
 use std::{
     collections::HashMap,
     ffi::CStr,
@@ -7,12 +7,11 @@ use std::{
     mem::MaybeUninit,
     os::fd::{AsFd, BorrowedFd},
     ptr::NonNull,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{self, Receiver, SendError, Sender},
     time::Duration,
 };
 
 use anyhow::{Context, Result};
-use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     libbpf_sys::{self, bpf_iter_attach_opts, bpf_iter_link_info, bpf_program__attach_iter},
     skel::{OpenSkel, Skel, SkelBuilder},
@@ -20,6 +19,8 @@ use libbpf_rs::{
     RingBufferBuilder,
 };
 use log::debug;
+
+use crate::event::{Event, TaskstatsEvent};
 
 mod taskstats_skel {
     include!(concat!(
@@ -64,20 +65,20 @@ fn validate_bpf_ret<T>(ptr: *mut T) -> libbpf_rs::Result<NonNull<T>> {
     }
 }
 
-pub struct TaskStatsIter<'conn> {
+pub struct TaskStatsIter {
     links: HashMap<u32, Link>,
     link_rx: Receiver<(u32, Link)>,
-    taskstats_appender: Appender<'conn>,
     pid_map: MapHandle,
     pid_bus: Bus<u32>,
     machine_id: u32,
+    sink_tx: Sender<Event>,
 }
 
-impl<'conn> TaskStatsIter<'conn> {
+impl TaskStatsIter {
     pub fn new(
         pid_map: MapHandle,
         pid_rb: MapHandle,
-        conn: &'conn Connection,
+        sink_tx: Sender<Event>,
         pid_bus: Bus<u32>,
         machine_id: u32,
     ) -> Result<Self> {
@@ -124,45 +125,45 @@ impl<'conn> TaskStatsIter<'conn> {
             Ok(()) as Result<()>
         });
 
-        init_store(conn);
         Ok(Self {
             pid_map,
             pid_bus,
             machine_id,
             links: HashMap::new(),
             link_rx: rx,
-            taskstats_appender: conn
-                .appender("taskstats")
-                .expect("Table taskstats does not exist"),
+            sink_tx,
         })
     }
 
-    fn store(&mut self, records: &[task_delay_acct]) -> Result<()> {
+    fn store(&mut self, records: &[task_delay_acct]) -> Result<(), SendError<Event>> {
         debug!("store {} taskstats records", records.len());
         for record in records {
-            let comm = unsafe { CStr::from_ptr(&record.comm as _).to_str()? };
+            let comm = unsafe { CStr::from_ptr(&record.comm as _).to_str() };
+            let comm = comm
+                .inspect_err(|e| warn!("Failed to parse process comm {e}: {:?}", record.comm))
+                .unwrap_or("");
             let ts = Duration::from_nanos(crate::extract::boot_to_epoch(record.ts));
-            self.taskstats_appender.append_row([
-                &self.machine_id as &dyn ToSql,
-                &ts,
-                &record.pid,
-                &record.tid,
-                &comm,
-                &record.nvcsw,
-                &record.nivcsw,
-                &record.runtime_total,
-                &record.rq_delay_total,
-                &record.rq_count,
-                &record.blkio_delay_total,
-                &record.blkio_count,
-                &record.uninterruptible_delay_total,
-                &record.freepages_delay_total,
-                &record.freepages_count,
-                &record.thrashing_delay_total,
-                &record.thrashing_count,
-                &record.swapin_delay_total,
-                &record.swapin_count,
-            ])?;
+            self.sink_tx.send(Event::Taskstats(TaskstatsEvent {
+                machine_id: self.machine_id,
+                ts: ts,
+                pid: record.pid,
+                tid: record.tid,
+                comm: comm.to_string(),
+                nvcsw: record.nvcsw,
+                nivcsw: record.nivcsw,
+                run_time_total: record.runtime_total,
+                rq_time_total: record.rq_delay_total,
+                rq_count: record.rq_count,
+                blkio_time_total: record.blkio_delay_total,
+                blkio_count: record.blkio_count,
+                uninterruptible_total: record.uninterruptible_delay_total,
+                freepages_time_total: record.freepages_delay_total,
+                freepages_count: record.freepages_count,
+                thrashing_time_total: record.thrashing_delay_total,
+                thrashing_count: record.thrashing_count,
+                swapin_time_total: record.swapin_delay_total,
+                swapin_count: record.swapin_count,
+            }))?;
         }
         Ok(())
     }
@@ -187,7 +188,7 @@ impl<'conn> TaskStatsIter<'conn> {
             let mut iterator = match Iter::new(link) {
                 Ok(iterator) => iterator,
                 Err(e) => {
-                    warn!("Failed to create Iter for pid `{pid}`");
+                    warn!("Failed to create Iter for pid `{pid}`: {e}");
                     continue;
                 }
             };
@@ -228,17 +229,13 @@ pub struct TaskStatsTrace<'obj> {
 }
 
 impl<'obj> TaskStatsTrace<'obj> {
-    pub fn new<'conn>(
+    pub fn new(
         open_object: &'obj mut MaybeUninit<OpenObject>,
-        conn: &'conn Connection,
+        sink_tx: Sender<Event>,
         pid_map: BorrowedFd,
         pid_rb: MapHandle,
         machine_id: u32,
-    ) -> Result<Self>
-    where
-        'conn: 'obj,
-    {
-        init_store(conn);
+    ) -> Result<Self> {
         let skel_builder = TaskstatsSkelBuilder::default();
         let mut open_skel = skel_builder
             .open(open_object)
@@ -258,7 +255,7 @@ impl<'obj> TaskStatsTrace<'obj> {
         builder
             .add(
                 &skel.maps.taskstats_rb,
-                wrapped_callback(conn.appender("taskstats").unwrap(), machine_id),
+                wrapped_callback(sink_tx.clone(), machine_id),
             )
             .expect("TaskStatsTrace failed to register taskstats_rb callback");
         let taskstats_rb = builder
@@ -275,8 +272,10 @@ impl<'obj> TaskStatsTrace<'obj> {
         })
     }
 
-    pub fn sample(&mut self) -> Result<()> {
-        self.taskstats_rb.consume()?;
+    pub fn sample(&mut self) -> Result<(), SendError<Event>> {
+        if let Err(e) = self.taskstats_rb.consume() {
+            warn!("Unexpected error while consuming from taskstats_rb: {e}");
+        };
         Ok(())
     }
 }
@@ -313,115 +312,38 @@ fn rb_callback(
     }
 }
 
-fn init_store(conn: &Connection) {
-    conn.execute_batch(
-        r"
-            CREATE TABLE IF NOT EXISTS taskstats (
-                machine_id      UINTEGER,
-                ts              TIMESTAMP,
-                pid             UINTEGER,
-                tid             UINTEGER,
-                comm            VARCHAR,
-                nvcsw           UBIGINT,
-                nivcsw           UBIGINT,
-                run_time_total  UBIGINT,
-                rq_time_total   UBIGINT,
-                rq_count        UBIGINT,
-                blkio_time_total    UBIGINT,
-                blkio_count         UBIGINT,
-                uninterruptible_total   UBIGINT,
-                freepages_time_total    UBIGINT,
-                freepages_count         UBIGINT,
-                thrashing_time_total    UBIGINT,
-                thrashing_count         UBIGINT,
-                swapin_time_total    UBIGINT,
-                swapin_count         UBIGINT,
-            );
-
-            CREATE OR REPLACE VIEW taskstats_view AS 
-            SELECT 
-                machine_id,
-                ts, 
-                time_diff,
-                pid,
-                tid,
-                comm,
-                run_time/time_diff as run_share, 
-                rq_time/time_diff as rq_share,
-                uninterruptible_time/time_diff as uninterruptible_share,
-                blkio_time/time_diff as blkio_share,
-                greatest((time_diff - (run_time + rq_time + uninterruptible_time))/time_diff, 0) as interruptible_share
-            FROM (
-                SELECT 
-                    machine_id,
-                    ts, 
-                    epoch_ns(ts - ts_last) as time_diff,
-                    pid,
-                    tid, 
-                    comm,
-                    run_time_curr - run_time_last AS run_time,
-                    rq_time_curr - rq_time_last AS rq_time,
-                    uninterruptible_time_curr - uninterruptible_time_last AS uninterruptible_time,
-                    blkio_time_curr - blkio_time_last AS blkio_time,
-                FROM (
-                    SELECT 
-                        machine_id,
-                        ts, 
-                        lag(ts, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as ts_last,
-                        pid,
-                        tid, 
-                        comm,
-                        run_time_total as run_time_curr, 
-                        lag(run_time_total, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as run_time_last,
-                        rq_time_total as rq_time_curr, 
-                        lag(rq_time_total, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as rq_time_last,
-                        uninterruptible_total as uninterruptible_time_curr, 
-                        lag(uninterruptible_total, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as uninterruptible_time_last,
-                        blkio_time_total as blkio_time_curr, 
-                        lag(blkio_time_total, 1) OVER (PARTITION BY machine_id, tid ORDER BY ts) as blkio_time_last,
-                    FROM taskstats
-                )
-            )
-            WHERE 
-                time_diff IS NOT NULL;
-        ",
-    ).expect("Taskstats store initialisation failed");
-}
-
-fn wrapped_callback<'conn>(
-    mut taskstats_appender: Appender<'conn>,
-    machine_id: u32,
-) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
+fn wrapped_callback(sink_tx: Sender<Event>, machine_id: u32) -> impl FnMut(&[u8]) -> i32 {
     move |data: &[u8]| {
         let data: &[u8; size_of::<task_delay_acct>()] =
             &data[..size_of::<task_delay_acct>()].try_into().unwrap();
         let record: &task_delay_acct = unsafe { std::mem::transmute(data) };
         let comm = unsafe { CStr::from_ptr(&record.comm as _).to_str().unwrap() };
         let ts = Duration::from_nanos(crate::extract::boot_to_epoch(record.ts));
-        if let Err(e) = taskstats_appender.append_row([
-            &machine_id as &dyn ToSql,
-            &ts,
-            &record.pid,
-            &record.tid,
-            &comm,
-            &record.nvcsw,
-            &record.nivcsw,
-            &record.runtime_total,
-            &record.rq_delay_total,
-            &record.rq_count,
-            &record.blkio_delay_total,
-            &record.blkio_count,
-            &record.uninterruptible_delay_total,
-            &record.freepages_delay_total,
-            &record.freepages_count,
-            &record.thrashing_delay_total,
-            &record.thrashing_count,
-            &record.swapin_delay_total,
-            &record.swapin_count,
-        ]) {
-            error!("failed to append row");
-            panic!("{e}");
-        };
-        0
+        let res = sink_tx.send(Event::Taskstats(TaskstatsEvent {
+            machine_id: machine_id,
+            ts: ts,
+            pid: record.pid,
+            tid: record.tid,
+            comm: comm.to_string(),
+            nvcsw: record.nvcsw,
+            nivcsw: record.nivcsw,
+            run_time_total: record.runtime_total,
+            rq_time_total: record.rq_delay_total,
+            rq_count: record.rq_count,
+            blkio_time_total: record.blkio_delay_total,
+            blkio_count: record.blkio_count,
+            uninterruptible_total: record.uninterruptible_delay_total,
+            freepages_time_total: record.freepages_delay_total,
+            freepages_count: record.freepages_count,
+            thrashing_time_total: record.thrashing_delay_total,
+            thrashing_count: record.thrashing_count,
+            swapin_time_total: record.swapin_delay_total,
+            swapin_count: record.swapin_count,
+        }));
+
+        match res {
+            Err(_) => 1,
+            Ok(()) => 0,
+        }
     }
 }

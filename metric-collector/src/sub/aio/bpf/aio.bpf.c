@@ -1,5 +1,35 @@
 // AIO stats
 //
+// # Resources
+//
+// > Pitfalls when using libaio with buffered files, and pseudo files (e.g. pipes, sockets):
+// > https://github.com/littledan/linux-aio?tab=readme-ov-file#performance-considerations
+//
+// > Extending libaio to support polling:
+// > https://blog.cloudflare.com/io_submit-the-epoll-alternative-youve-never-heard-about/
+//  
+// # Notes
+//
+// To understand why submitting a buffered regular file for read/write operations
+// performs the full operation in the io_submit system call, we will compare the 
+// code path when submitting a read request for a buffered file, and one 
+// configured with the O_DIRECT flag.
+//
+// Submitting a read request for either, ultimately arrives at 
+// [this](https://elixir.bootlin.com/linux/v6.17.7/source/fs/aio.c#L1603) line. 
+// The second argument that is passed to `aio_rw_done` is the result of the 
+// file's `read_iter` function call, and is the reason why io_submit will 
+// perform the full operation on io_submit for buffered files, but not for 
+// non-buffered files.
+//
+// Further analysing ext4's file_operations to understand the distinction 
+// between submitting requests for buffered and non-buffered files, 
+// [this code block](https://elixir.bootlin.com/linux/v6.17.7/source/fs/ext4/file.c#L144-L147)
+// shows that if the file has O_DIRECT configured, then it will call ext4's
+// `ext4_dio_read_iter`, otherwise it calls `generic_file_read_iter`.
+//
+// # Metrics
+//
 // We are interested in collecting: 
 // 1. The time a thread spends in the AIO subsystem, and the threads interacting
 //    with a particualr AIO Backing Resource identifier (BRI).
@@ -118,6 +148,7 @@ __always_inline static void aio_acct_start(void *pending_map, u64 tgid_pid, stru
     struct inflight_value value = {0};
     value.ts = bpf_ktime_get_boot_ns();
     value.aioctx = aioctx;
+    value.op = AIO_GETEVENTS;
     bpf_map_update_elem(pending_map, &key, &value, BPF_ANY);
 }
 
@@ -130,17 +161,26 @@ __always_inline static void to_update_acct(void *to_update_map, u64 start, u64 c
     struct to_update_key key = {0};
     key.ts = start;
     key.granularity = gran;
-    struct to_update_value value = { .additional_time = sample };
+    struct to_update_value value = { .last_sample = sample };
     bpf_map_update_elem(to_update_map, &key, &value, BPF_ANY);
 }
 
 __always_inline static int aio_acct_end(void *pending_map, void *samples, void *to_update_map) 
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
-    struct inflight_value *value = bpf_map_lookup_elem(pending_map, &tgid_pid);
-    if (!value)
+    struct inflight_value *v = bpf_map_lookup_elem(pending_map, &tgid_pid);
+    if (!v)
         return 0;
 
+    // POTENTIAL RACE CONDITION:
+    // We have to make sure that the pending record is removed from the map
+    // before we get the current timestamp. In combination with the userspace
+    // logic that first checks the current time, and then inspects the values
+    // that exists in the pending map we can be sure that the last_sample stored
+    // in the to_update_map is always going to be greater than the
+    // last_registered_sample registered in userspace.
+    struct inflight_value value = *v;
+    bpf_map_delete_elem(pending_map, &tgid_pid);
     u64 ts = bpf_ktime_get_boot_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     void *inner = bpf_map_lookup_elem(samples, &sample);
@@ -150,8 +190,8 @@ __always_inline static int aio_acct_end(void *pending_map, void *samples, void *
     struct granularity gran = {0};
     gran.tgid = get_tgid(tgid_pid);
     gran.pid = get_pid(tgid_pid);
-    gran.aioctx = value->aioctx;
-    gran.op = AIO_GETEVENTS;
+    gran.aioctx = value.aioctx;
+    gran.op = value.op;
 
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
     if (!stat) {
@@ -165,14 +205,13 @@ __always_inline static int aio_acct_end(void *pending_map, void *samples, void *
         }
     }
 
-    __u64 sample_latency = min(ts - value->ts, ts - (ts/1000000000) * 1000000000);
-    __u64 ns_latency = ts - value->ts;
+    __u64 sample_latency = min(ts - value.ts, ts - (ts/1000000000) * 1000000000);
+    __u64 ns_latency = ts - value.ts;
     __sync_fetch_and_add(&stat->total_requests, 1);
     __sync_fetch_and_add(&stat->total_time, sample_latency);
 
-    to_update_acct(to_update_map, value->ts, ts, gran);
+    to_update_acct(to_update_map, value.ts, ts, gran);
     
-    bpf_map_delete_elem(pending_map, &tgid_pid);
     return 0;
 }
 
@@ -192,12 +231,12 @@ __always_inline static int file_acct(void *file_samples_map, struct inode *f_ino
     umode_t i_mode = BPF_CORE_READ(f_inode, i_mode);
     if (((i_mode & S_IFMT) == S_IFREG) || ((i_mode & S_IFMT) == S_IFBLK)) {
         gran.isreg = 1;
-        gran.bdev.part0 = BPF_CORE_READ(f_inode, i_sb, s_bdev, bd_disk, part0, bd_dev);
-        gran.bdev.dev = BPF_CORE_READ(f_inode, i_sb, s_bdev, bd_dev);
+        gran.bri.bdev.part0 = BPF_CORE_READ(f_inode, i_sb, s_bdev, bd_disk, part0, bd_dev);
+        gran.bri.bdev.dev = BPF_CORE_READ(f_inode, i_sb, s_bdev, bd_dev);
     } else {
         struct vfs_bri bri = inode_to_vfs_bri(f_inode);
         gran.isreg = 0;
-        gran.bri = bri;
+        gran.bri.vfs = bri;
     }
 
 

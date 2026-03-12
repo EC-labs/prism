@@ -1,6 +1,5 @@
 use anyhow::Result;
 use bus::BusReader;
-use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     MapHandle, RingBufferBuilder, TcHook, TcHookBuilder, TC_EGRESS,
@@ -10,10 +9,12 @@ use std::{
     mem::MaybeUninit,
     os::fd::AsFd,
     sync::mpsc::RecvTimeoutError,
-    sync::mpsc::{self, Receiver},
+    sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, SystemTime},
 };
+
+use crate::event::{Event, TcpDiscoveryEvent};
 
 mod discovery_skel {
     include!(concat!(
@@ -45,7 +46,7 @@ pub struct Discovery {
 
 impl Discovery {
     pub fn new(
-        conn: &Connection,
+        sink_tx: Sender<Event>,
         machine_id: u32,
         pid_map: MapHandle,
         pid_rb: MapHandle,
@@ -54,11 +55,6 @@ impl Discovery {
         mut pid_rx: BusReader<u32>,
     ) -> Self {
         let (hook_tx, hook_rx) = mpsc::channel();
-        let conn = conn
-            .try_clone()
-            .expect("Discovery failed to clone connection");
-        Self::init_store(&conn);
-
         thread::spawn(move || -> Result<()> {
             let skel_builder = DiscoverySkelBuilder::default();
             let mut open_object = MaybeUninit::uninit();
@@ -98,10 +94,7 @@ impl Discovery {
 
             let mut builder = RingBufferBuilder::new();
             builder
-                .add(
-                    &skel.maps.tcp_discovery_rb,
-                    tcp_discovery_callback(conn.appender("tcp_discovery").unwrap()),
-                )
+                .add(&skel.maps.tcp_discovery_rb, tcp_discovery_callback(sink_tx))
                 .expect("Discovery failed to register tcp_discovery_rb callback");
             let tcp_discovery_rb = builder
                 .build()
@@ -170,21 +163,6 @@ impl Discovery {
         }
     }
 
-    fn init_store(conn: &Connection) {
-        conn.execute_batch(
-            r"
-                CREATE OR REPLACE TABLE tcp_discovery (
-                    local_machine_id    UINTEGER,
-                    local_inode_id      UBIGINT,
-                    remote_machine_id   UINTEGER,
-                    remote_inode_id     UBIGINT,
-                    inserted_at         TIMESTAMP,
-                );
-            ",
-        )
-        .expect("Discovery store initialisation");
-    }
-
     pub fn sample(&mut self) -> Result<()> {
         while let Ok(hook) = self.hook_rx.try_recv() {
             self.hooks.push(hook);
@@ -193,9 +171,7 @@ impl Discovery {
     }
 }
 
-fn tcp_discovery_callback<'conn>(
-    mut tcp_discovery_appender: Appender<'conn>,
-) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
+fn tcp_discovery_callback(sink_tx: Sender<Event>) -> impl FnMut(&[u8]) -> i32 {
     move |data: &[u8]| {
         let event: &[u8; size_of::<tcp_discovery_event>()] =
             &data[..size_of::<tcp_discovery_event>()].try_into().unwrap();
@@ -214,16 +190,17 @@ fn tcp_discovery_callback<'conn>(
         let epoch = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
-        if let Err(e) = tcp_discovery_appender.append_row([
-            &event.local_machine_id as &dyn ToSql,
-            &event.local_inode_id,
-            &event.remote_machine_id,
-            &event.remote_inode_id,
-            &epoch,
-        ]) {
-            error!("failed to append row");
-            panic!("{e}");
+        let send_result = sink_tx.send(Event::TcpDiscovery(TcpDiscoveryEvent {
+            local_machine_id: event.local_machine_id,
+            local_inode_id: (event.local_inode_id as u64),
+            remote_machine_id: event.remote_machine_id,
+            remote_inode_id: (event.remote_inode_id as u64),
+            inserted_at: epoch,
+        }));
+
+        match send_result {
+            Ok(_) => 0,
+            Err(_) => 1, // This terminates the ringbuffer consumption
         }
-        0
     }
 }

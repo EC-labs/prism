@@ -1,5 +1,4 @@
 use anyhow::Result;
-use duckdb::{Appender, Connection, ToSql};
 use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     OpenObject, RingBuffer, RingBufferBuilder,
@@ -12,7 +11,10 @@ use std::{
     mem::MaybeUninit,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::fd::BorrowedFd,
+    sync::mpsc::Sender,
 };
+
+use crate::event::{Event, SocketContextEvent, SocketInetEvent, SocketMapEvent};
 
 mod net_skel {
     include!(concat!(
@@ -97,20 +99,16 @@ pub struct Net<'obj> {
 
 impl<'obj> Net<'obj> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<'conn>(
+    pub fn new(
         open_object: &'obj mut MaybeUninit<OpenObject>,
-        conn: &'conn Connection,
+        sink_tx: Sender<Event>,
         pid_map: BorrowedFd,
         pid_rb: BorrowedFd,
         samples_map: BorrowedFd,
         pending_map: BorrowedFd,
         to_update_map: BorrowedFd,
         machine_id: u32,
-    ) -> Self
-    where
-        'conn: 'obj,
-    {
-        Self::init_store(conn);
+    ) -> Self {
         let skel_builder = NetSkelBuilder::default();
         let mut open_skel = skel_builder
             .open(open_object)
@@ -144,14 +142,7 @@ impl<'obj> Net<'obj> {
         let mut skel = open_skel.load().expect("Net skel open failed");
         let mut builder = RingBufferBuilder::new();
         builder
-            .add(
-                &skel.maps.rb,
-                wrapped_callback(
-                    conn.appender("socket_context").unwrap(),
-                    conn.appender("socket_inet").unwrap(),
-                    machine_id,
-                ),
-            )
+            .add(&skel.maps.rb, wrapped_callback(sink_tx.clone(), machine_id))
             .expect("Net failed to register rb callback");
         let rb = builder.build().expect("Net failed to build rb handler");
 
@@ -159,7 +150,7 @@ impl<'obj> Net<'obj> {
         builder
             .add(
                 &skel.maps.socket_socket_rb,
-                socket_socket_callback(conn.appender("socket_map").unwrap(), machine_id),
+                socket_socket_callback(sink_tx, machine_id),
             )
             .expect("Net failed to register socket_socket_rb callback");
         let socket_socket_rb = builder
@@ -177,37 +168,6 @@ impl<'obj> Net<'obj> {
         }
     }
 
-    fn init_store(conn: &Connection) {
-        conn.execute_batch(
-            r"
-                CREATE OR REPLACE TABLE socket_context (
-                    machine_id UINTEGER,
-                    inode_id UBIGINT,
-                    family          USMALLINT, 
-                    type            USMALLINT, 
-                    protocol        USMALLINT, 
-                );
-
-                CREATE OR REPLACE TABLE socket_inet (
-                    machine_id UINTEGER,
-                    inode_id        UBIGINT,
-                    netns_cookie    UBIGINT,
-                    src_address     VARCHAR,
-                    src_port        USMALLINT, 
-                    dst_address     VARCHAR,
-                    dst_port        USMALLINT, 
-                );
-
-                CREATE OR REPLACE TABLE socket_map (
-                    machine_id UINTEGER,
-                    sock1_inode_id UBIGINT,
-                    sock2_inode_id UBIGINT,
-                );
-            ",
-        )
-        .expect("Net store initialisation failed");
-    }
-
     pub fn sample(&mut self) -> Result<()> {
         self.rb.consume()?;
         self.socket_socket_rb.consume()?;
@@ -216,30 +176,33 @@ impl<'obj> Net<'obj> {
     }
 }
 
-fn socket_socket_callback<'conn>(
-    mut socket_socket_appender: Appender<'conn>,
-    machine_id: u32,
-) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
+fn socket_socket_callback(sink_tx: Sender<Event>, machine_id: u32) -> impl FnMut(&[u8]) -> i32 {
     move |data: &[u8]| {
         let data: &[u8; size_of::<[u64; 2]>()] = &data[..size_of::<[u64; 2]>()].try_into().unwrap();
         let data: &[u64; 2] = unsafe { std::mem::transmute::<_, _>(data) };
         let (sock1, sock2) = (data[0], data[1]);
         debug!("map {sock1} - {sock2}");
-        socket_socket_appender
-            .append_row([&machine_id as &dyn ToSql, &sock1, &sock2])
-            .unwrap();
-        socket_socket_appender
-            .append_row([&machine_id as &dyn ToSql, &sock2, &sock1])
-            .unwrap();
-        0
+
+        let res1 = sink_tx.send(Event::SocketMap(SocketMapEvent {
+            machine_id: machine_id,
+            sock1_inode_id: sock1,
+            sock2_inode_id: sock2,
+        }));
+        let res2 = sink_tx.send(Event::SocketMap(SocketMapEvent {
+            machine_id: machine_id,
+            sock1_inode_id: sock2,
+            sock2_inode_id: sock1,
+        }));
+
+        match (res1, res2) {
+            (Err(_), _) => 1,
+            (_, Err(_)) => 1,
+            _ => 0,
+        }
     }
 }
 
-fn wrapped_callback<'conn>(
-    mut socket_context_appender: Appender<'conn>,
-    mut socket_inet_appender: Appender<'conn>,
-    machine_id: u32,
-) -> impl FnMut(&[u8]) -> i32 + use<'conn> {
+fn wrapped_callback(sink_tx: Sender<Event>, machine_id: u32) -> impl FnMut(&[u8]) -> i32 {
     move |data: &[u8]| {
         let data: &[u8; size_of::<socket_context_value>()] = &data
             [..size_of::<socket_context_value>()]
@@ -259,71 +222,73 @@ fn wrapped_callback<'conn>(
             context.dst_addr,
             context.dst_port
         );
+        let res = sink_tx.send(Event::SocketContext(SocketContextEvent {
+            machine_id: machine_id,
+            inode_id: context.inode_id,
+            family: context.sk_family,
+            type_: context.sk_type,
+            protocol: context.sk_protocol,
+        }));
 
-        socket_context_appender
-            .append_row([
-                &machine_id as &dyn ToSql,
-                &context.inode_id,
-                &context.sk_family,
-                &context.sk_type,
-                &context.sk_protocol,
-            ])
-            .unwrap();
-        match (context.src_addr, context.dst_addr) {
+        if let Err(_) = res {
+            return 1;
+        }
+
+        let res = match (context.src_addr, context.dst_addr) {
             (Some(IpAddr::V4(src_addr)), Some(IpAddr::V4(dst_addr))) => {
-                socket_inet_appender
-                    .append_row([
-                        &machine_id as &dyn ToSql,
-                        &context.inode_id,
-                        &context.netns_cookie,
-                        &src_addr.to_string(),
-                        &context.src_port.unwrap_or(0),
-                        &dst_addr.to_string(),
-                        &context.dst_port.unwrap_or(0),
-                    ])
-                    .unwrap();
+                sink_tx.send(Event::SocketInet(SocketInetEvent {
+                    machine_id: machine_id,
+                    inode_id: context.inode_id,
+                    netns_cookie: context.netns_cookie,
+                    src_address: src_addr.to_string(),
+                    src_port: context.src_port.unwrap_or(0),
+                    dst_address: dst_addr.to_string(),
+                    dst_port: context.dst_port.unwrap_or(0),
+                }))
             }
             (Some(IpAddr::V4(src_addr)), None) => {
-                socket_inet_appender
-                    .append_row([
-                        &machine_id as &dyn ToSql,
-                        &context.inode_id,
-                        &context.netns_cookie,
-                        &src_addr.to_string(),
-                        &context.src_port.unwrap_or(0),
-                        &Ipv4Addr::from(0).to_string(),
-                        &context.dst_port.unwrap_or(0),
-                    ])
-                    .unwrap();
+                sink_tx.send(Event::SocketInet(SocketInetEvent {
+                    machine_id: machine_id,
+                    inode_id: context.inode_id,
+                    netns_cookie: context.netns_cookie,
+                    src_address: src_addr.to_string(),
+                    src_port: context.src_port.unwrap_or(0),
+                    dst_address: Ipv4Addr::from(0).to_string(),
+                    dst_port: context.dst_port.unwrap_or(0),
+                }))
             }
             (Some(IpAddr::V6(src_addr)), Some(IpAddr::V6(dst_addr))) => {
-                socket_inet_appender
-                    .append_row([
-                        &machine_id as &dyn ToSql,
-                        &context.inode_id,
-                        &context.netns_cookie,
-                        &src_addr.to_string(),
-                        &context.src_port.unwrap_or(0),
-                        &dst_addr.to_string(),
-                        &context.dst_port.unwrap_or(0),
-                    ])
-                    .unwrap();
+                sink_tx.send(Event::SocketInet(SocketInetEvent {
+                    machine_id: machine_id,
+                    inode_id: context.inode_id,
+                    netns_cookie: context.netns_cookie,
+                    src_address: src_addr.to_string(),
+                    src_port: context.src_port.unwrap_or(0),
+                    dst_address: dst_addr.to_string(),
+                    dst_port: context.dst_port.unwrap_or(0),
+                }))
             }
             (Some(IpAddr::V6(src_addr)), None) => {
-                socket_inet_appender
-                    .append_row([
-                        &machine_id as &dyn ToSql,
-                        &context.inode_id,
-                        &context.netns_cookie,
-                        &src_addr.to_string(),
-                        &context.src_port.unwrap_or(0),
-                        &Ipv4Addr::from(0).to_string(),
-                        &context.dst_port.unwrap_or(0),
-                    ])
-                    .unwrap();
+                sink_tx.send(Event::SocketInet(SocketInetEvent {
+                    machine_id: machine_id,
+                    inode_id: context.inode_id,
+                    netns_cookie: context.netns_cookie,
+                    src_address: src_addr.to_string(),
+                    src_port: context.src_port.unwrap_or(0),
+                    dst_address: Ipv4Addr::from(0).to_string(),
+                    dst_port: context.dst_port.unwrap_or(0),
+                }))
             }
-            _ => {}
+            (src, dst) => {
+                warn!("Unexpected net address combination {src:?} {dst:?}");
+                return 0;
+            }
+        };
+
+        if let Err(_) = res {
+            return 1;
         }
+
         0
     }
 }

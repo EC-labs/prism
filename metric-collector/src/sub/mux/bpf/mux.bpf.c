@@ -109,17 +109,26 @@ __always_inline static void to_update_acct(void *to_update_map, u64 start, u64 c
     struct to_update_key key = {0};
     key.ts = start;
     key.granularity = gran;
-    struct to_update_value value = { .additional_time = sample };
+    struct to_update_value value = { .last_sample = sample };
     bpf_map_update_elem(to_update_map, &key, &value, BPF_ANY);
 }
 
 __always_inline static int mux_acct_end(void *pending_map, void *samples, void *to_update_map) 
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
-    struct inflight_value *value = bpf_map_lookup_elem(pending_map, &tgid_pid);
-    if (!value)
+    struct inflight_value *v = bpf_map_lookup_elem(pending_map, &tgid_pid);
+    if (!v)
         return 0;
 
+    // POTENTIAL RACE CONDITION:
+    // We have to make sure that the pending record is removed from the map
+    // before we get the current timestamp. In combination with the userspace
+    // logic that first checks the current time, and then inspects the values
+    // that exists in the pending map we can be sure that the last_sample stored
+    // in the to_update_map is always going to be greater than the
+    // last_registered_sample registered in userspace.
+    struct inflight_value value = *v;
+    bpf_map_delete_elem(pending_map, &tgid_pid);
     u64 ts = bpf_ktime_get_boot_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     void *inner = bpf_map_lookup_elem(samples, &sample);
@@ -129,7 +138,7 @@ __always_inline static int mux_acct_end(void *pending_map, void *samples, void *
     struct granularity gran = {0};
     gran.tgid = get_tgid(tgid_pid);
     gran.pid = get_pid(tgid_pid);
-    gran.ep = value->ep;
+    gran.ep = value.ep;
 
     struct stats *stat = bpf_map_lookup_elem(inner, &gran);
     if (!stat) {
@@ -143,13 +152,12 @@ __always_inline static int mux_acct_end(void *pending_map, void *samples, void *
         }
     }
 
-    __u64 sample_latency = min(ts - value->ts, ts - (ts/1000000000) * 1000000000);
+    __u64 sample_latency = min(ts - value.ts, ts - (ts/1000000000) * 1000000000);
     __sync_fetch_and_add(&stat->total_requests, 1);
     __sync_fetch_and_add(&stat->total_time, sample_latency);
 
-    to_update_acct(to_update_map, value->ts, ts, gran);
+    to_update_acct(to_update_map, value.ts, ts, gran);
     
-    bpf_map_delete_elem(pending_map, &tgid_pid);
     return 0;
 }
 

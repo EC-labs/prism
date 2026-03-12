@@ -40,7 +40,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, PENDING_MAX_ENTRIES);
     __type(key, struct to_update_key);
-    __type(value, u64);
+    __type(value, struct to_update_value);
 } to_update SEC(".maps");
 
 
@@ -86,10 +86,11 @@ __always_inline void to_update_acct(u64 start, u64 curr, struct granularity gran
         return;
     }
 
+    struct to_update_value value = { .last_sample = sample };
     struct to_update_key key = {0};
     key.ts = start;
     key.granularity = gran;
-    bpf_map_update_elem(&to_update, &key, &sample, BPF_ANY);
+    bpf_map_update_elem(&to_update, &key, &value, BPF_ANY);
 }
 
 __always_inline void sample_wait_acct(void *inner, union futex_key *key, u32 tgid, u32 pid, u64 ts, struct inflight_value *value) 
@@ -175,10 +176,19 @@ int BPF_PROG(fentry__futex_unqueue, struct futex_q *q)
     u32 wait_pid = BPF_CORE_READ(q, task, pid);
     u32 wait_tgid = BPF_CORE_READ(q, task, tgid);
     u64 wait_tgid_pid = (u64) wait_tgid << 32 | wait_pid;
-    struct inflight_value *value = bpf_map_lookup_elem(&pending, &wait_tgid_pid);
-    if (!value)
+    struct inflight_value *v = bpf_map_lookup_elem(&pending, &wait_tgid_pid);
+    if (!v)
         return 0;
 
+    // POTENTIAL RACE CONDITION:
+    // We have to make sure that the pending record is removed from the map
+    // before we get the current timestamp. In combination with the userspace
+    // logic that first checks the current time, and then inspects the values
+    // that exists in the pending map we can be sure that the last_sample stored
+    // in the to_update_map is always going to be greater than the
+    // last_registered_sample registered in userspace.
+    struct inflight_value value = *v;
+    bpf_map_delete_elem(&pending, &wait_tgid_pid);
     u64 ts = bpf_ktime_get_boot_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     struct inner *inner = bpf_map_lookup_elem(&samples, &sample);
@@ -186,11 +196,11 @@ int BPF_PROG(fentry__futex_unqueue, struct futex_q *q)
         return 0;
 
     /* futex wait accounting */
-    if (!futex_key_match(&value->fkey, &key)) {
+    if (!futex_key_match(&value.fkey, &key)) {
         bpf_printk("[futex] unqueue key does not match queued key");
-        sample_wait_acct(inner, &value->fkey, wait_tgid, wait_pid, ts, value);
+        sample_wait_acct(inner, &value.fkey, wait_tgid, wait_pid, ts, &value);
     }
-    sample_wait_acct(inner, &key, wait_tgid, wait_pid, ts, value);
+    sample_wait_acct(inner, &key, wait_tgid, wait_pid, ts, &value);
 
 
     /* futex wake accounting */
@@ -215,6 +225,5 @@ int BPF_PROG(fentry__futex_unqueue, struct futex_q *q)
         __sync_fetch_and_add(&wake_stat->wake.successful_count, 1);
     }
 
-    bpf_map_delete_elem(&pending, &wait_tgid_pid);
     return 0;
 }

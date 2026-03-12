@@ -1,21 +1,29 @@
-use anyhow::{bail, Result};
-use duckdb::{Appender, Connection, ToSql};
+use anyhow::Result;
 use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
-    MapCore, OpenObject,
+    OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME, FUTEX_WAIT, FUTEX_WAKE};
-use log::{debug, warn};
+use log::{error, warn};
 use std::{
+    cmp::{Eq, PartialEq},
     collections::HashMap,
     fmt::Debug,
+    hash::Hash,
     mem::MaybeUninit,
-    os::fd::{AsFd, AsRawFd, BorrowedFd},
+    os::fd::BorrowedFd,
+    sync::mpsc::{SendError, Sender},
     time::Duration,
 };
-use types::{granularity, inflight_key, inflight_value, stats, to_update_key};
+use types::{granularity, inflight_key, inflight_value, stats, to_update_key, to_update_value};
 
-use crate::sub::{read_batch, replace_samples, samples_init};
+use crate::sub::{
+    samples_init, AggregateSum, BPFKeyDefault, IncrementStart, LastSample, TimeSinceBoot, UpdateEnd,
+};
+use crate::{
+    event::{Event, FutexWaitEvent, FutexWakeEvent},
+    sub::BootSampleSecond,
+};
 
 mod futex_skel {
     include!(concat!(
@@ -26,26 +34,93 @@ mod futex_skel {
 
 use futex_skel::*;
 
-trait UpdateEnd<T> {
-    fn update_end(curr: u64, pending: T) -> u64;
-}
+impl BPFKeyDefault for granularity {}
 
-impl UpdateEnd<&u64> for &u64 {
-    fn update_end(_: u64, pending: &u64) -> u64 {
-        *pending / 1_000_000_000 * 1_000_000_000
+impl Hash for granularity {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key_hash(state)
     }
 }
 
-impl UpdateEnd<&inflight_value> for &inflight_value {
-    fn update_end(curr: u64, _: &inflight_value) -> u64 {
+impl PartialEq for granularity {
+    fn eq(&self, other: &Self) -> bool {
+        self.key_eq(other)
+    }
+}
+
+impl Eq for granularity {}
+
+impl UpdateEnd for inflight_value {
+    fn update_end(&self, curr: TimeSinceBoot) -> TimeSinceBoot {
         curr
+    }
+}
+
+impl AggregateSum for stats {
+    fn aggregate_sum(&mut self, other: &Self) {
+        // Aggregation will only happen on wait futexes since these are the only
+        // ones that go into the pending / to_update map
+        unsafe { self.wait.total_time += other.wait.total_time };
+    }
+}
+
+impl BootSampleSecond for stats {
+    fn boot_sample_second(&self) -> TimeSinceBoot {
+        TimeSinceBoot::from_secs(unsafe { self.both.ts_s })
+    }
+}
+
+impl From<(TimeSinceBoot, Duration)> for stats {
+    fn from((boot_sample, increment): (TimeSinceBoot, Duration)) -> Self {
+        let mut st: Self = unsafe { MaybeUninit::zeroed().assume_init() };
+        st.wait.ts_s = boot_sample.as_secs();
+        st.wait.total_time = increment.as_nanos() as u64;
+        st
+    }
+}
+
+impl IncrementStart for UpdatedKey {
+    fn increment_start(&self) -> TimeSinceBoot {
+        self.start
+    }
+}
+
+impl LastSample for to_update_value {
+    fn last_sample(&self) -> TimeSinceBoot {
+        TimeSinceBoot::from_nanos(self.last_sample)
+    }
+}
+
+impl<'a> From<(&'a inflight_key, &'a inflight_value)> for granularity {
+    fn from((key, value): (&inflight_key, &inflight_value)) -> Self {
+        let mut gran: granularity = unsafe { MaybeUninit::zeroed().assume_init() };
+        gran.tgid = (key.tgid_pid >> 32) as u32;
+        gran.pid = key.tgid_pid as u32;
+        gran.fkey.both.ptr = unsafe { value.fkey.both.ptr };
+        gran.fkey.both.word = unsafe { value.fkey.both.word };
+        gran.fkey.both.offset = unsafe { value.fkey.both.offset };
+        gran.op = value.op;
+        gran
+    }
+}
+
+impl<'a> From<(&'a to_update_key, &'a to_update_value)> for granularity {
+    fn from((key, _value): (&to_update_key, &to_update_value)) -> Self {
+        let mut gran: granularity = unsafe { MaybeUninit::zeroed().assume_init() };
+        gran.tgid = key.granularity.tgid;
+        gran.pid = key.granularity.pid;
+        gran.fkey.both.ptr = unsafe { key.granularity.fkey.both.ptr };
+        gran.fkey.both.word = unsafe { key.granularity.fkey.both.word };
+        gran.fkey.both.offset = unsafe { key.granularity.fkey.both.offset };
+        gran.op = key.granularity.op;
+        gran
     }
 }
 
 impl From<UpdatedKey> for to_update_key {
     fn from(value: UpdatedKey) -> Self {
         let mut key: to_update_key = unsafe { MaybeUninit::zeroed().assume_init() };
-        key.ts = value.start;
+        key.ts = value.start.as_nanos();
         key.granularity.pid = value.tgid_pid as u32;
         key.granularity.tgid = (value.tgid_pid >> 32) as u32;
         key.granularity.fkey.both.ptr = value.futex_key.ptr;
@@ -65,7 +140,7 @@ struct FutexKey {
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct UpdatedKey {
     futex_key: FutexKey,
-    start: u64,
+    start: TimeSinceBoot,
     tgid_pid: u64,
 }
 
@@ -78,14 +153,14 @@ impl From<(&inflight_key, &inflight_value)> for UpdatedKey {
                 word: fkey.word,
                 offset: fkey.offset,
             },
-            start: map_value.ts,
+            start: TimeSinceBoot::from_nanos(map_value.ts),
             tgid_pid: map_key.tgid_pid,
         }
     }
 }
 
-impl From<(&to_update_key, &u64)> for UpdatedKey {
-    fn from((map_key, _): (&to_update_key, &u64)) -> Self {
+impl From<(&to_update_key, &to_update_value)> for UpdatedKey {
+    fn from((map_key, _): (&to_update_key, &to_update_value)) -> Self {
         let fkey = unsafe { map_key.granularity.fkey.both };
         UpdatedKey {
             futex_key: FutexKey {
@@ -93,37 +168,25 @@ impl From<(&to_update_key, &u64)> for UpdatedKey {
                 word: fkey.word,
                 offset: fkey.offset,
             },
-            start: map_key.ts,
+            start: TimeSinceBoot::from_nanos(map_key.ts),
             tgid_pid: (map_key.granularity.tgid as u64) << 32 | map_key.granularity.pid as u64,
         }
     }
 }
 
-#[derive(Debug)]
-struct PendingRecord {
-    ts_s: u64,
-    pid: u32,
-    tid: u32,
-    futex_key: FutexKey,
-    additional_time: u64,
-}
-
-pub struct Futex<'obj, 'conn> {
+pub struct Futex<'obj> {
     skel: FutexSkel<'obj>,
-    futex_wait_appender: Appender<'conn>,
-    futex_wake_appender: Appender<'conn>,
-    updated: HashMap<UpdatedKey, u64>,
-    staging_appender: Appender<'conn>,
-    conn: &'conn Connection,
+    updated: HashMap<UpdatedKey, TimeSinceBoot>,
+    sink_tx: Sender<Event>,
     machine_id: u32,
 }
 
-impl<'obj, 'conn> Futex<'obj, 'conn> {
+impl<'obj> Futex<'obj> {
     pub fn new(
         open_object: &'obj mut MaybeUninit<OpenObject>,
         pid_map: BorrowedFd,
         pid_rb: BorrowedFd,
-        conn: &'conn Connection,
+        sink_tx: Sender<Event>,
         machine_id: u32,
     ) -> Result<Self> {
         let skel_builder = FutexSkelBuilder::default();
@@ -151,287 +214,80 @@ impl<'obj, 'conn> Futex<'obj, 'conn> {
             return Err(e.into());
         }
 
-        Self::init_store(conn);
         Ok(Self {
             skel,
-            futex_wait_appender: conn.appender("futex_wait")?,
-            futex_wake_appender: conn.appender("futex_wake")?,
-            staging_appender: conn.appender("futex_wait_staging")?,
             updated: HashMap::new(),
-            conn,
+            sink_tx,
             machine_id,
         })
     }
 
-    fn init_store(conn: &Connection) {
-        conn.execute_batch(
-            r"
-                CREATE OR REPLACE TABLE futex_wait (
-                    machine_id UINTEGER,
-                    ts_s TIMESTAMP,
-                    pid UINTEGER,
-                    tid UINTEGER,
-                    futex_key_addr UBIGINT,
-                    futex_key_word UBIGINT,
-                    futex_key_offset UINTEGER,
-                    total_requests UBIGINT,
-                    total_time UBIGINT,
-                    hist0 UINTEGER,
-                    hist1 UINTEGER,
-                    hist2 UINTEGER,
-                    hist3 UINTEGER,
-                    hist4 UINTEGER,
-                    hist5 UINTEGER,
-                    hist6 UINTEGER,
-                    hist7 UINTEGER,
-                );
-
-                CREATE OR REPLACE TEMP TABLE futex_wait_staging (
-                    machine_id UINTEGER,
-                    ts_s TIMESTAMP,
-                    pid UINTEGER,
-                    tid UINTEGER,
-                    futex_key_addr UBIGINT,
-                    futex_key_word UBIGINT,
-                    futex_key_offset UINTEGER,
-                    additional_time UBIGINT,
-                );
-
-                CREATE OR REPLACE TABLE futex_wake (
-                    machine_id UINTEGER,
-                    ts_s TIMESTAMP,
-                    pid UINTEGER,
-                    tid UINTEGER,
-                    futex_key_addr UBIGINT,
-                    futex_key_word UBIGINT,
-                    futex_key_offset UINTEGER,
-                    total_requests UBIGINT,
-                    successful_count UBIGINT,
-                );
-            ",
-        )
-        .expect("Futex store initialisation failed");
-    }
-
-    fn store_samples<'a, I: ExactSizeIterator<Item = (&'a granularity, &'a stats)>>(
-        &mut self,
-        records: I,
-    ) -> Result<()> {
-        let nrecords = records.len();
-        if nrecords == 0 {
-            return Ok(());
-        }
-
-        debug!("Store {} records", records.len());
-        for (granularity, stat) in records {
-            match granularity.op as i32 {
-                FUTEX_WAIT => {
-                    let stat = unsafe { stat.wait };
-                    let fkey = unsafe { granularity.fkey.both };
-                    let ts_s = crate::extract::boot_to_epoch(stat.ts_s * 1_000_000_000);
-                    self.futex_wait_appender.append_row([
-                        &self.machine_id as &dyn ToSql,
-                        &Duration::from_nanos(ts_s),
-                        &granularity.tgid,
-                        &granularity.pid,
-                        &fkey.ptr,
-                        &fkey.word,
-                        &fkey.offset,
-                        &stat.total_requests,
-                        &stat.total_time,
-                        &stat.hist[0],
-                        &stat.hist[1],
-                        &stat.hist[2],
-                        &stat.hist[3],
-                        &stat.hist[4],
-                        &stat.hist[5],
-                        &stat.hist[6],
-                        &stat.hist[7],
-                    ])?;
-                }
-                FUTEX_WAKE => {
-                    let stat = unsafe { stat.wake };
-                    let fkey = unsafe { granularity.fkey.both };
-                    let ts_s = crate::extract::boot_to_epoch(stat.ts_s * 1_000_000_000);
-                    self.futex_wake_appender.append_row([
-                        &self.machine_id as &dyn ToSql,
-                        &Duration::from_nanos(ts_s),
-                        &granularity.tgid,
-                        &granularity.pid,
-                        &fkey.ptr,
-                        &fkey.word,
-                        &fkey.offset,
-                        &stat.total_requests,
-                        &stat.successful_count,
-                    ])?;
-                }
-                op => bail!("unexpected op {}", op),
-            }
-        }
-
-        Ok(())
-    }
-
-    fn store_pending<'a, I: ExactSizeIterator<Item = &'a PendingRecord>>(
-        &mut self,
-        records: I,
-    ) -> Result<()> {
-        let nrecords = records.len();
-        if nrecords == 0 {
-            return Ok(());
-        }
-
-        debug!("Stage {} records", records.len());
-        for record in records {
-            let ts_s = crate::extract::boot_to_epoch(record.ts_s * 1_000_000_000);
-            self.staging_appender.append_row([
-                &self.machine_id as &dyn ToSql,
-                &Duration::from_nanos(ts_s),
-                &record.pid,
-                &record.tid,
-                &record.futex_key.ptr,
-                &record.futex_key.word,
-                &record.futex_key.offset,
-                &record.additional_time,
-            ])?;
-        }
-
-        Ok(())
-    }
-
-    fn upsert_pending(&mut self) -> Result<()> {
-        self.conn.execute_batch(
-            r"
-            UPDATE futex_wait as f
-            SET
-                total_time = total_time + additional_time
-            FROM
-                futex_wait_staging as fs
-            WHERE
-                f.ts_s = fs.ts_s
-                AND f.pid = fs.pid
-                AND f.tid = fs.tid
-                AND f.futex_key_addr = fs.futex_key_addr
-                AND f.futex_key_word = fs.futex_key_word
-                AND f.futex_key_offset = fs.futex_key_offset;
-
-            INSERT INTO futex_wait (machine_id, ts_s, pid, tid, futex_key_addr, futex_key_word, futex_key_offset, total_time)
-                SELECT
-                    fs.*
-                FROM futex_wait_staging as fs
-                LEFT JOIN futex_wait as f
-                    USING (ts_s, pid, tid, futex_key_addr, futex_key_word, futex_key_offset)
-                WHERE
-                    f.ts_s IS NULL;
-
-            DELETE FROM futex_wait_staging;
-            ",
-        )?;
-        Ok(())
-    }
-
-    fn create_pending_records<K, V, I>(
-        &mut self,
-        pending: I,
-        now: &timespec,
-        records: &mut Vec<PendingRecord>,
-    ) where
-        I: Iterator<Item = (K, V)> + ExactSizeIterator,
-        UpdatedKey: From<(K, V)>,
-        V: UpdateEnd<V>,
-        K: Copy,
-        V: Copy + Debug,
-    {
-        let curr_sample = (now.tv_sec as u64) * 1_000_000_000;
-        for (key, value) in pending {
-            let updated_key = UpdatedKey::from((key, value));
-            let last_sample = *self.updated.get(&updated_key).unwrap_or(&updated_key.start);
-            let start = (last_sample / 1_000_000_000 * 1_000_000_000) + 1_000_000_000;
-            let end = V::update_end(curr_sample, value);
-            if end < start {
-                continue;
-            }
-
-            for sample in (start..=end).step_by(1_000_000_000) {
-                let additional_time = u64::min(1_000_000_000, sample - last_sample);
-                records.push(PendingRecord {
-                    ts_s: (sample - 1) / 1_000_000_000,
-                    pid: (updated_key.tgid_pid >> 32) as u32,
-                    tid: (updated_key.tgid_pid & ((1 << 32) - 1)) as u32,
-                    futex_key: updated_key.futex_key.clone(),
-                    additional_time,
-                });
-            }
-
-            assert!(end > last_sample);
-            self.updated.insert(updated_key, end);
-        }
-    }
-
-    fn remove_updated_entries<'a, I: Iterator<Item = (&'a to_update_key, &'a u64)>>(
-        &mut self,
-        entries: I,
-    ) -> Result<()> {
-        for (key, value) in entries {
-            let update_key = UpdatedKey::from((key, value));
-            let Some(last_sample) = self.updated.get(&update_key) else {
-                continue;
-            };
-
-            assert!(last_sample <= value);
-            if last_sample < value {
-                continue;
-            }
-
-            self.updated.remove(&update_key);
-            let key = to_update_key::from(update_key);
-            let key = unsafe {
-                std::mem::transmute::<to_update_key, [u8; size_of::<to_update_key>()]>(key)
-            };
-            self.skel.maps.to_update.delete(&key)?
-        }
-        Ok(())
-    }
-
-    pub fn sample(&mut self) -> Result<()> {
+    pub fn sample(&mut self) -> Result<(), SendError<Event>> {
         let mut ts: timespec = unsafe { MaybeUninit::<timespec>::zeroed().assume_init() };
         unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts as *mut timespec) };
-        let (keys, values) = replace_samples(&self.skel.maps.samples, &ts);
-        self.store_samples(keys.iter().zip(values.iter()))?;
-        self.futex_wake_appender.flush();
-        self.futex_wait_appender.flush();
 
-        let mut pending_records = Vec::new();
-        let (mut pending_keys, mut pending_values) = (Vec::new(), Vec::new());
-        read_batch::<inflight_key, inflight_value>(
-            self.skel.maps.pending.as_fd().as_raw_fd(),
-            &mut pending_keys,
-            &mut pending_values,
-        );
-        self.create_pending_records(
-            pending_keys.iter().zip(pending_values.iter()),
+        let events: Vec<(granularity, stats)> = super::process_samples::<
+            granularity,
+            stats,
+            inflight_key,
+            inflight_value,
+            to_update_key,
+            to_update_value,
+            UpdatedKey,
+        >(
             &ts,
-            &mut pending_records,
+            &self.skel.maps.samples,
+            &self.skel.maps.pending,
+            &self.skel.maps.to_update,
+            &mut self.updated,
         );
-        debug!("after pending: {}", pending_records.len());
 
-        let (mut to_update_keys, mut to_update_values) = (Vec::new(), Vec::new());
-        read_batch::<to_update_key, u64>(
-            self.skel.maps.to_update.as_fd().as_raw_fd(),
-            &mut to_update_keys,
-            &mut to_update_values,
-        );
-        self.create_pending_records(
-            to_update_keys.iter().zip(to_update_values.iter()),
-            &ts,
-            &mut pending_records,
-        );
-        debug!("after to_update: {}", pending_records.len());
-        self.store_pending(pending_records.iter())?;
-        self.staging_appender.flush();
-
-        self.upsert_pending()?;
-        self.remove_updated_entries(to_update_keys.iter().zip(to_update_values.iter()))?;
+        for (gr, st) in events {
+            match gr.op as i32 {
+                FUTEX_WAIT => unsafe {
+                    self.sink_tx.send(Event::FutexWait(FutexWaitEvent {
+                        machine_id: self.machine_id,
+                        ts_s: Duration::from_nanos(crate::extract::boot_to_epoch(
+                            st.both.ts_s * 1_000_000_000,
+                        )),
+                        pid: gr.tgid,
+                        tid: gr.pid,
+                        futex_key_addr: gr.fkey.both.ptr,
+                        futex_key_word: gr.fkey.both.word,
+                        futex_key_offset: gr.fkey.both.offset,
+                        total_requests: st.wait.total_requests,
+                        total_time: st.wait.total_time,
+                        hist0: st.wait.hist[0],
+                        hist1: st.wait.hist[1],
+                        hist2: st.wait.hist[2],
+                        hist3: st.wait.hist[3],
+                        hist4: st.wait.hist[4],
+                        hist5: st.wait.hist[5],
+                        hist6: st.wait.hist[6],
+                        hist7: st.wait.hist[7],
+                    }))?;
+                },
+                FUTEX_WAKE => unsafe {
+                    self.sink_tx.send(Event::FutexWake(FutexWakeEvent {
+                        machine_id: self.machine_id,
+                        ts_s: Duration::from_nanos(crate::extract::boot_to_epoch(
+                            st.both.ts_s * 1_000_000_000,
+                        )),
+                        pid: gr.tgid,
+                        tid: gr.pid,
+                        futex_key_addr: gr.fkey.both.ptr,
+                        futex_key_word: gr.fkey.both.word,
+                        futex_key_offset: gr.fkey.both.offset,
+                        total_requests: st.both.total_requests,
+                        successful_count: st.both.total_requests,
+                    }))?;
+                },
+                futex_type => {
+                    error!("Unexpected futex type `{futex_type}`");
+                    panic!();
+                }
+            }
+        }
 
         Ok(())
     }

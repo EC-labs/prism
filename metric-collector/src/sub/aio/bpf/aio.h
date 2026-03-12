@@ -13,7 +13,8 @@ struct inflight_key {
 
 struct inflight_value {
 	__u64 ts;
-    void *aioctx;
+    void  *aioctx;
+    __u8  op;
 };
 
 struct granularity {
@@ -26,7 +27,7 @@ struct granularity {
 struct stats {
 	__u64 ts_s;
 	__u64 total_time;
-	__u32 total_requests;
+	__u64 total_requests;
 };
 
 struct to_update_key {
@@ -35,7 +36,7 @@ struct to_update_key {
 };
 
 struct to_update_value {
-    __u64 additional_time;
+    __u64 last_sample;
 };
 
 struct file_prep_value {
@@ -57,9 +58,9 @@ struct blockdev {
 struct file_granularity {
     u64            aioctx;
     union {
-        struct vfs_bri  bri;
+        struct vfs_bri  vfs;
         struct blockdev bdev;
-    };
+    } bri;
     __u8            isreg;
     __u8            mode;
 };

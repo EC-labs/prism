@@ -91,12 +91,14 @@
                             strace
                             netcat-openbsd
                             tcpdump
+                            cargo-flamegraph
                         ];
 
                         buildInputs = [ 
                             duckdb
                             openssl
                             protobuf
+                            rdkafka
                         ];
 
                         LIBCLANG_PATH = "${libclang.lib}/lib";

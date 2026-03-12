@@ -6,3 +6,4 @@ bpftrace-hdrs/
 result
 .direnv/
 __pycache__/
+.vscode

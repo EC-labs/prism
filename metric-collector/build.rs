@@ -65,7 +65,7 @@ fn generate_consts_header_bindings(cargo_manifest_dir: &Path) -> Result<()> {
 }
 
 fn generate_sub_header_bindings(cargo_manifest_dir: &Path) -> Result<()> {
-    for bind in ["taskstats", "muxio"] {
+    for bind in ["taskstats"] {
         let bindings = bindgen::Builder::default()
             .header(
                 cargo_manifest_dir
@@ -111,7 +111,14 @@ fn main() -> Result<()> {
     for sub in SUBS {
         let out = cargo_manifest_dir.join(format!("src/sub/{sub}/bpf/{sub}.skel.rs"));
 
+        let srch = format!("src/sub/{sub}/bpf/{sub}.h");
+        if let Ok(true) = std::fs::exists(&srch) {
+            println!("cargo:rerun-if-changed={srch}");
+        }
         let src = format!("src/sub/{sub}/bpf/{sub}.bpf.c");
+        if let Ok(true) = std::fs::exists(&src) {
+            println!("cargo:rerun-if-changed={src}");
+        }
         SkeletonBuilder::new()
             .source(&src)
             .clang_args([
@@ -122,7 +129,6 @@ fn main() -> Result<()> {
             ])
             .build_and_generate(&out)
             .unwrap();
-        println!("cargo:rerun-if-changed={src}");
     }
 
     Ok(())

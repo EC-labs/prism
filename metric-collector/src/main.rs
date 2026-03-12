@@ -5,6 +5,9 @@ pub mod cmdline;
 pub mod configure;
 pub mod extract;
 pub mod sub;
+pub mod sinkmanager;
+pub mod event;
+pub mod sink;
 mod target;
 
 use crate::configure::Config;

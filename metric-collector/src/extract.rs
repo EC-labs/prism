@@ -1,9 +1,7 @@
 use anyhow::Result;
 use bus::Bus;
-use duckdb::{Connection, ToSql};
 use lazy_static::lazy_static;
 use libbpf_rs::{libbpf_sys, set_print, MapCore, MapFlags, MapHandle, MapType, PrintLevel};
-use libc::{geteuid, seteuid};
 use log::{debug, error, info, trace, warn, LevelFilter};
 use nix::time::{self, ClockId};
 use regex::Regex;
@@ -12,11 +10,10 @@ use signal_hook::{
     iterator::Signals,
 };
 use std::{
-    env,
     mem::MaybeUninit,
     os::fd::AsFd,
     sync::{
-        mpsc::{self, Receiver},
+        mpsc::{self, Receiver, Sender},
         Arc, Mutex, RwLock,
     },
     thread,
@@ -26,6 +23,8 @@ use syn::{Expr, Item, Lit};
 
 use crate::{
     configure::Config,
+    event::{Event, LinuxConstsEvent},
+    sinkmanager::{Manager, SinkConfig},
     sub::{
         self,
         aio::Aio,
@@ -104,7 +103,10 @@ pub struct Extractor {
     terminate_flag: Arc<Mutex<bool>>,
     config: Config,
     rx_timer: Option<Receiver<bool>>,
-    conn: Connection,
+    sink_tx: Sender<Event>,
+    /// The sink manager is stored in the extractor so that its Drop implementation is called when
+    /// the extractor is dropped.
+    _sink_manager: Manager,
 }
 
 impl Extractor {
@@ -131,18 +133,10 @@ impl Extractor {
 
         sub::bump_memlock_rlimit()?;
 
-        let euid = unsafe { geteuid() };
-        let uid = env::var("SUDO_UID")
-            .unwrap_or(format!("{euid}"))
-            .parse::<u32>()?;
-        unsafe { seteuid(uid) };
-
-        let path = std::path::Path::new(&*config.prism_store);
-        let prefix = path.parent().unwrap();
-        std::fs::create_dir_all(prefix).unwrap();
-
-        let conn = Connection::open(&*config.prism_store)?;
-        unsafe { seteuid(euid) };
+        let sink_config = SinkConfig::DuckDB(config.prism_store.to_string());
+        let (sink_tx, sink_rx) = mpsc::channel();
+        let terminate_flag = Arc::new(Mutex::new(false));
+        let sink_manager = Manager::new(terminate_flag.clone(), sink_config, sink_rx)?;
 
         if let Err(e) = std::fs::write("/proc/sys/kernel/sched_schedstats", b"1") {
             warn!("Could not enable sched_schedstats: {e}");
@@ -151,27 +145,17 @@ impl Extractor {
             warn!("Could not enable task_delayacct: {e}");
         }
 
-        Self::insert_linux_consts(&conn)?;
+        Self::insert_linux_consts(config.machine_id, &sink_tx)?;
         Ok(Self {
-            conn,
+            _sink_manager: sink_manager,
+            sink_tx,
             config,
-            terminate_flag: Arc::new(Mutex::new(false)),
+            terminate_flag,
             rx_timer: None,
         })
     }
 
-    fn insert_linux_consts(conn: &Connection) -> Result<()> {
-        conn.execute_batch(
-            r"
-            CREATE OR REPLACE TABLE linux_consts (
-                const_type VARCHAR,
-                const_name VARCHAR,   
-                value UINTEGER,
-            );
-            ",
-        )?;
-        let mut appender = conn.appender("linux_consts")?;
-
+    fn insert_linux_consts(machine_id: u32, sink_tx: &Sender<Event>) -> Result<()> {
         let src = include_str!("sub/include/linux/bindings.rs");
         let syntax = syn::parse_file(src).expect("Unable to parse file");
         for item in syntax.items {
@@ -190,25 +174,53 @@ impl Extractor {
 
             if let Some(captures) = SOCK_TYPE.captures(&identifier) {
                 let const_name = captures.get(1).unwrap().as_str();
-                appender.append_row([&"socket_type" as &dyn ToSql, &const_name, &literal])?;
+                sink_tx.send(Event::LinuxConsts(
+                    LinuxConstsEvent {
+                        const_type: "socket_type".to_string(),
+                        const_name: const_name.to_string(),
+                        value: literal,
+                    },
+                    machine_id,
+                ))?;
                 continue;
             }
 
             if let Some(captures) = SOCK_FAMILY.captures(&identifier) {
                 let const_name = captures.get(1).unwrap().as_str();
-                appender.append_row([&"socket_family" as &dyn ToSql, &const_name, &literal])?;
+                sink_tx.send(Event::LinuxConsts(
+                    LinuxConstsEvent {
+                        const_type: "socket_family".to_string(),
+                        const_name: const_name.to_string(),
+                        value: literal,
+                    },
+                    machine_id,
+                ))?;
                 continue;
             }
 
             if let Some(captures) = IPPROTO.captures(&identifier) {
                 let const_name = captures.get(1).unwrap().as_str();
-                appender.append_row([&"family_protocol" as &dyn ToSql, &const_name, &literal])?;
+                sink_tx.send(Event::LinuxConsts(
+                    LinuxConstsEvent {
+                        const_type: "family_protocol".to_string(),
+                        const_name: const_name.to_string(),
+                        value: literal,
+                    },
+                    machine_id,
+                ))?;
                 continue;
             }
 
             if let Some(captures) = FS_MAGIC.captures(&identifier) {
                 let const_name = captures.get(1).unwrap().as_str();
-                appender.append_row([&"fs_magic" as &dyn ToSql, &const_name, &literal])?;
+                sink_tx.send(Event::LinuxConsts(
+                    LinuxConstsEvent {
+                        const_type: "fs_magic".to_string(),
+                        const_name: const_name.to_string(),
+                        value: literal,
+                    },
+                    machine_id,
+                ))?;
                 continue;
             }
         }
@@ -279,15 +291,17 @@ impl Extractor {
         let discovery_rx = pid_bus.add_rx();
         let process_context_rx = pid_bus.add_rx();
 
-        let conn = &self.conn;
-
         let mut iowait_open_object = MaybeUninit::uninit();
-        let mut iowait = IOWait::new(&mut iowait_open_object, conn, self.config.machine_id);
+        let mut iowait = IOWait::new(
+            &mut iowait_open_object,
+            self.sink_tx.clone(),
+            self.config.machine_id,
+        );
 
         let mut vfs_open_object = MaybeUninit::uninit();
         let mut vfs = Vfs::new(
             &mut vfs_open_object,
-            conn,
+            self.sink_tx.clone(),
             pid_map.as_fd(),
             pid_rb.as_fd(),
             self.config.machine_id,
@@ -298,7 +312,7 @@ impl Extractor {
             &mut futex_open_object,
             pid_map.as_fd(),
             pid_rb.as_fd(),
-            conn,
+            self.sink_tx.clone(),
             self.config.machine_id,
         );
 
@@ -307,7 +321,7 @@ impl Extractor {
             &mut muxio_open_object,
             pid_map.as_fd(),
             pid_rb.as_fd(),
-            conn,
+            self.sink_tx.clone(),
             self.config.machine_id,
         );
 
@@ -315,14 +329,14 @@ impl Extractor {
         let mut aio = Aio::new(
             &mut aio_open_object,
             pid_map.as_fd(),
-            conn,
+            self.sink_tx.clone(),
             self.config.machine_id,
         );
 
         let mut net_open_object = MaybeUninit::uninit();
         let mut net = Net::new(
             &mut net_open_object,
-            conn,
+            self.sink_tx.clone(),
             pid_map.as_fd(),
             pid_rb.as_fd(),
             vfs.skel.maps.samples.as_fd(),
@@ -332,7 +346,7 @@ impl Extractor {
         );
 
         let mut discovery = Discovery::new(
-            conn,
+            self.sink_tx.clone(),
             self.config.machine_id,
             MapHandle::try_from(&pid_map)?,
             MapHandle::try_from(&pid_rb)?,
@@ -344,7 +358,7 @@ impl Extractor {
         let mut taskstats_open_object = MaybeUninit::uninit();
         let mut taskstats_trace = TaskStatsTrace::new(
             &mut taskstats_open_object,
-            conn,
+            self.sink_tx.clone(),
             pid_map.as_fd(),
             MapHandle::try_from(&pid_rb)?,
             self.config.machine_id,
@@ -356,13 +370,13 @@ impl Extractor {
             pid_map,
             pid_rb,
             pid_bus,
-            conn.try_clone()?,
+            self.sink_tx.clone(),
             self.config.machine_id,
         );
 
         process_context::init_thread(
             self.terminate_flag.clone(),
-            conn,
+            self.sink_tx.clone(),
             process_context_rx,
             self.config.machine_id,
         )?;
@@ -440,7 +454,15 @@ impl Extractor {
             }
         }
 
+        info!("Sample loop interrupted");
+
         Ok(())
+    }
+}
+
+impl Drop for Extractor {
+    fn drop(&mut self) {
+        *self.terminate_flag.lock().expect("Lock is poisoned") = true;
     }
 }
 
@@ -453,7 +475,7 @@ impl TimeSensitive {
         pid_map: MapHandle,
         pid_rb: MapHandle,
         pid_bus: Bus<u32>,
-        conn: Connection,
+        sink_tx: Sender<Event>,
         machine_id: u32,
     ) {
         let sample_rx = Self::start_timer_thread(terminate_flag.clone(), sample_interval);
@@ -461,7 +483,7 @@ impl TimeSensitive {
             .name("ts-collect".to_string())
             .spawn(move || {
                 let mut taskstats_iter =
-                    TaskStatsIter::new(pid_map, pid_rb, &conn, pid_bus, machine_id)?;
+                    TaskStatsIter::new(pid_map, pid_rb, sink_tx, pid_bus, machine_id)?;
                 loop {
                     sample_rx.recv()?;
                     while sample_rx.try_recv().is_ok() {}

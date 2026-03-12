@@ -43,6 +43,10 @@ struct to_update_key {
 	struct granularity granularity;
 };
 
+struct to_update_value {
+    __u64 last_sample;
+};
+
 __always_inline static struct bri inode_to_vfs_bri(struct inode *f_inode) 
 {
     struct bri file = {0};
@@ -61,7 +65,8 @@ __always_inline static void to_update_acct(void *to_update_map, u64 start, u64 c
     struct to_update_key key = {0};
     key.ts = start;
     key.granularity = gran;
-    bpf_map_update_elem(to_update_map, &key, &sample, BPF_ANY);
+    struct to_update_value value = { .last_sample = sample };
+    bpf_map_update_elem(to_update_map, &key, &value, BPF_ANY);
 }
 
 __always_inline static void vfs_acct_start(void *pending_map, u64 tgid_pid, struct bri *file, __u8 op)
@@ -84,6 +89,14 @@ __always_inline static int vfs_acct_end(void *pending_map, void *samples, void *
     if (!value)
         return 0;
 
+    // POTENTIAL RACE CONDITION:
+    // We have to make sure that the pending record is removed from the map
+    // before we get the current timestamp. In combination with the userspace
+    // logic that first checks the current time, and then inspects the values
+    // that exists in the pending map we can be sure that the last_sample stored
+    // in the to_update_map is always going to be greater than the
+    // last_registered_sample registered in userspace.
+    bpf_map_delete_elem(pending_map, &tgid_pid);
     u64 ts = bpf_ktime_get_boot_ns();
     u64 sample = (ts / 1000000000) % SAMPLES;
     void *inner = bpf_map_lookup_elem(samples, &sample);
@@ -117,7 +130,6 @@ __always_inline static int vfs_acct_end(void *pending_map, void *samples, void *
 
     to_update_acct(to_update_map, value->ts, ts, gran);
     
-    bpf_map_delete_elem(pending_map, &tgid_pid);
     return 0;
 }
 

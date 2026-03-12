@@ -47,7 +47,7 @@ struct granularity {
 struct stats {
 	__u64 ts_s;
 	__u64 total_time;
-	__u32 total_requests;
+	__u64 total_requests;
 };
 
 struct to_update_key {
@@ -56,7 +56,7 @@ struct to_update_key {
 };
 
 struct to_update_value {
-    __u64 additional_time;
+    __u64 last_sample;
 };
 
 struct ep_callback_depth_value {
