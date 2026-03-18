@@ -1,7 +1,7 @@
 // sinkmanager.rs
 use crate::{
     event::Event,
-    sink::{duckdb::DuckdbSink, kafka::KafkaSink},
+    sink::{clickhouse::ClickhouseSink, duckdb::DuckdbSink, kafka::KafkaSink},
 };
 use anyhow::Result;
 use log::{error, info};
@@ -13,6 +13,7 @@ use std::{
 pub enum SinkConfig {
     DuckDB(String),
     Kafka(String),
+    Clickhouse(String),
 }
 
 pub struct Manager {
@@ -30,6 +31,7 @@ impl Manager {
                 DuckdbSink::new(terminate_flag, path_string, sink_rx)?
             }
             SinkConfig::Kafka(address) => KafkaSink::new(terminate_flag, address, sink_rx)?,
+            SinkConfig::Clickhouse(url) => ClickhouseSink::new(terminate_flag, &url, sink_rx)?,
         };
 
         Ok(Self {

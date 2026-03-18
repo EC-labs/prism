@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use bollard::{query_parameters::InspectContainerOptions, Docker, API_DEFAULT_VERSION};
-use bus::BusReader;
 use containerd_client::{
     connect,
     services::v1::{containers_client::ContainersClient, GetContainerRequest},
@@ -8,7 +7,7 @@ use containerd_client::{
     with_namespace,
 };
 use lazy_static::lazy_static;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use regex::Regex;
 use std::{
     ffi::CStr,
@@ -19,9 +18,11 @@ use std::{
     thread,
     time::Duration,
 };
+use tokio::sync::broadcast;
 use tokio::{
     runtime::Runtime,
     sync::mpsc::{self, Receiver, Sender},
+    time::timeout,
 };
 use tonic::Request;
 
@@ -110,9 +111,9 @@ impl ContainerRuntimes {
     fn init_async_runtime(
         mut cgroup_rx: Receiver<Cgroup>,
         store_object_tx: Sender<ProcessObject>,
-    ) -> Result<Runtime> {
-        let mut runtimes = ContainerRuntimes::new()?;
-        let async_rt = Runtime::new()?;
+    ) -> Runtime {
+        let mut runtimes = ContainerRuntimes::new();
+        let async_rt = Runtime::new().unwrap();
         async_rt.spawn(async move {
             loop {
                 let Some(cgroup) = cgroup_rx.recv().await else {
@@ -136,16 +137,16 @@ impl ContainerRuntimes {
             }
             Ok(()) as Result<()>
         });
-        Ok(async_rt)
+        async_rt
     }
 
-    fn new() -> Result<Self> {
+    fn new() -> Self {
         let docker_client = Docker::connect_with_socket_defaults().ok();
         let containerd_client = None;
-        Ok(Self {
+        Self {
             docker_client,
             containerd_client,
-        })
+        }
     }
 
     async fn connect_containerd(&mut self) {
@@ -344,12 +345,12 @@ impl TryFrom<Pid> for ProcessContext {
 fn process_context_thread(
     terminate_flag: Arc<Mutex<bool>>,
     sink_tx: std::sync::mpsc::Sender<Event>,
-    mut pid_rx: BusReader<u32>,
+    mut pid_rx: broadcast::Receiver<u32>,
     machine_id: u32,
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel(1000);
     let (store_object_tx, store_object_rx) = mpsc::channel(1000);
-    let _async_rt = ContainerRuntimes::init_async_runtime(rx, store_object_tx.clone());
+    let async_rt = ContainerRuntimes::init_async_runtime(rx, store_object_tx.clone());
 
     thread::spawn(move || start_appender_thread(sink_tx, store_object_rx, machine_id));
 
@@ -362,11 +363,24 @@ fn process_context_thread(
         }
         drop(terminate);
 
-        let pid = match pid_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(pid) => Pid(pid),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(_e) => break,
+        let res =
+            async_rt.block_on(async { timeout(Duration::from_millis(100), pid_rx.recv()).await });
+        let res = match res {
+            Ok(res) => res,
+            Err(_) => {
+                // Elapsed
+                continue;
+            }
         };
+
+        let pid = match res {
+            Ok(pid) => Pid(pid),
+            Err(e) => {
+                info!("Terminating process context thread: {e}");
+                return Err(e.into());
+            }
+        };
+
         let Ok(context) = ProcessContext::try_from(pid) else {
             continue;
         };
@@ -416,7 +430,7 @@ fn start_appender_thread(
 pub fn init_thread(
     terminate_flag: Arc<Mutex<bool>>,
     sink_tx: std::sync::mpsc::Sender<Event>,
-    pid_rx: BusReader<u32>,
+    pid_rx: broadcast::Receiver<u32>,
     machine_id: u32,
 ) -> Result<()> {
     thread::spawn(move || process_context_thread(terminate_flag, sink_tx, pid_rx, machine_id));

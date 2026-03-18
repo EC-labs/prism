@@ -1,4 +1,3 @@
-// duckdb.rs
 use crate::event::Event;
 use anyhow::Result;
 use duckdb::{Appender, Connection, ToSql};
@@ -383,7 +382,6 @@ impl<'conn> DuckdbAppender<'conn> {
                     &e.const_name,
                     &e.value,
                 ])?;
-                // self.linux_consts_appender.flush();
                 Ok(())
             }
             Event::IoWait(e) => {
@@ -576,7 +574,7 @@ impl<'conn> DuckdbAppender<'conn> {
                     &e.netns_cookie,
                     &e.src_address,
                     &e.src_port,
-                    &e.dst_port,
+                    &e.dst_address,
                     &e.dst_port,
                 ])?;
                 Ok(())

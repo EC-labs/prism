@@ -279,8 +279,7 @@ fn wrapped_callback(sink_tx: Sender<Event>, machine_id: u32) -> impl FnMut(&[u8]
                     dst_port: context.dst_port.unwrap_or(0),
                 }))
             }
-            (src, dst) => {
-                warn!("Unexpected net address combination {src:?} {dst:?}");
+            _ => {
                 return 0;
             }
         };

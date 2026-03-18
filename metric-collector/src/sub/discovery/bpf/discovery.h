@@ -36,10 +36,10 @@ struct pending_receives_key {
 };
 
 struct tcp_discovery_event {
-    __u64 local_machine_id;
-    __u32 local_inode_id;
-    __u64 remote_machine_id;
-    __u32 remote_inode_id;
+    __u32 local_machine_id;
+    __u64 local_inode_id;
+    __u32 remote_machine_id;
+    __u64 remote_inode_id;
 } tcp_discovery_event;
 
 #endif /* __DISCOVERY_H */

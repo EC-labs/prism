@@ -1,5 +1,4 @@
 use anyhow::Result;
-use bus::BusReader;
 use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     MapHandle, RingBufferBuilder, TcHook, TcHookBuilder, TC_EGRESS,
@@ -8,11 +7,11 @@ use log::{debug, error, warn};
 use std::{
     mem::MaybeUninit,
     os::fd::AsFd,
-    sync::mpsc::RecvTimeoutError,
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, SystemTime},
 };
+use tokio::{sync::broadcast, time::timeout};
 
 use crate::event::{Event, TcpDiscoveryEvent};
 
@@ -52,7 +51,7 @@ impl Discovery {
         pid_rb: MapHandle,
         net_socket_context: MapHandle,
         net_rb: MapHandle,
-        mut pid_rx: BusReader<u32>,
+        mut pid_rx: broadcast::Receiver<u32>,
     ) -> Self {
         let (hook_tx, hook_rx) = mpsc::channel();
         thread::spawn(move || -> Result<()> {
@@ -105,16 +104,23 @@ impl Discovery {
                 return Err(e.into());
             }
 
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+
             loop {
                 loop {
-                    let pid = pid_rx.recv_timeout(Duration::from_millis(100));
-                    let pid = match pid {
+                    let Ok(res) = runtime.block_on(async {
+                        timeout(Duration::from_millis(100), pid_rx.recv()).await
+                    }) else {
+                        break;
+                    };
+
+                    let pid = match res {
                         Ok(pid) => pid,
-                        Err(RecvTimeoutError::Timeout) => break,
                         Err(e) => {
                             return Err(e.into());
                         }
                     };
+
                     let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
                     if pidfd < 0 {
                         continue;

@@ -1,4 +1,4 @@
-use chrono::TimeZone;
+use clickhouse::Row;
 use serde::Serialize;
 use std::time::Duration;
 
@@ -6,12 +6,7 @@ fn serialize_timestamp<S>(ts: &std::time::Duration, s: S) -> Result<S::Ok, S::Er
 where
     S: serde::Serializer,
 {
-    s.serialize_str(
-        &chrono::Utc
-            .timestamp_millis_opt(ts.as_millis() as i64)
-            .unwrap()
-            .to_rfc3339(),
-    )
+    s.serialize_u64(ts.as_millis() as u64)
 }
 
 #[derive(Debug)]
@@ -36,14 +31,14 @@ pub enum Event {
     ProcessContext(ProcessContextEvent),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct LinuxConstsEvent {
     pub const_type: String,
     pub const_name: String,
     pub value: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct IoWaitEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -65,7 +60,7 @@ pub struct IoWaitEvent {
     pub hist7: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct AioGeteventsEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -77,7 +72,7 @@ pub struct AioGeteventsEvent {
     pub total_requests: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct AioSubmitEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -88,7 +83,7 @@ pub struct AioSubmitEvent {
     pub total_requests: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct AioFileEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -111,17 +106,17 @@ pub struct AioFileEvent {
     pub hist7: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct TcpDiscoveryEvent {
-    pub local_machine_id: u64,
+    pub local_machine_id: u32,
     pub local_inode_id: u64,
-    pub remote_machine_id: u64,
+    pub remote_machine_id: u32,
     pub remote_inode_id: u64,
     #[serde(serialize_with = "serialize_timestamp")]
     pub inserted_at: Duration,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct VfsEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -144,7 +139,7 @@ pub struct VfsEvent {
     pub hist7: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct FutexWaitEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -166,7 +161,7 @@ pub struct FutexWaitEvent {
     pub hist7: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct FutexWakeEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -180,7 +175,7 @@ pub struct FutexWakeEvent {
     pub successful_count: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct MuxioWaitEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -193,7 +188,7 @@ pub struct MuxioWaitEvent {
     pub total_requests: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct MuxioFileEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -213,7 +208,7 @@ pub struct MuxioFileEvent {
     pub hist7: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct SocketContextEvent {
     pub machine_id: u32,
     pub inode_id: u64,
@@ -223,7 +218,7 @@ pub struct SocketContextEvent {
     pub protocol: u16,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct SocketInetEvent {
     pub machine_id: u32,
     pub inode_id: u64,
@@ -234,20 +229,20 @@ pub struct SocketInetEvent {
     pub dst_port: u16,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct SocketMapEvent {
     pub machine_id: u32,
     pub sock1_inode_id: u64,
     pub sock2_inode_id: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct TaskstatsEvent {
     pub machine_id: u32,
     #[serde(serialize_with = "serialize_timestamp")]
     pub ts: Duration,
-    pub pid: u64,
-    pub tid: u64,
+    pub pid: u32,
+    pub tid: u32,
     pub comm: String,
     pub nvcsw: u64,
     pub nivcsw: u64,
@@ -265,7 +260,7 @@ pub struct TaskstatsEvent {
     pub swapin_count: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct DockerEvent {
     pub machine_id: u32,
     pub cgroup: String,
@@ -275,7 +270,7 @@ pub struct DockerEvent {
     pub image_hash: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct K8sEvent {
     pub machine_id: u32,
     pub cgroup: String,
@@ -286,7 +281,7 @@ pub struct K8sEvent {
     pub image_name: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Row)]
 pub struct ProcessContextEvent {
     pub machine_id: u32,
     pub pid: u32,

@@ -1,4 +1,3 @@
-use bus::Bus;
 use log::{info, warn};
 use std::{
     collections::HashMap,
@@ -10,6 +9,7 @@ use std::{
     sync::mpsc::{self, Receiver, SendError, Sender},
     time::Duration,
 };
+use tokio::sync::broadcast;
 
 use anyhow::{Context, Result};
 use libbpf_rs::{
@@ -69,7 +69,7 @@ pub struct TaskStatsIter {
     links: HashMap<u32, Link>,
     link_rx: Receiver<(u32, Link)>,
     pid_map: MapHandle,
-    pid_bus: Bus<u32>,
+    pid_sender: broadcast::Sender<u32>,
     machine_id: u32,
     sink_tx: Sender<Event>,
 }
@@ -79,7 +79,7 @@ impl TaskStatsIter {
         pid_map: MapHandle,
         pid_rb: MapHandle,
         sink_tx: Sender<Event>,
-        pid_bus: Bus<u32>,
+        pid_sender: broadcast::Sender<u32>,
         machine_id: u32,
     ) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
@@ -127,7 +127,7 @@ impl TaskStatsIter {
 
         Ok(Self {
             pid_map,
-            pid_bus,
+            pid_sender,
             machine_id,
             links: HashMap::new(),
             link_rx: rx,
@@ -146,8 +146,8 @@ impl TaskStatsIter {
             self.sink_tx.send(Event::Taskstats(TaskstatsEvent {
                 machine_id: self.machine_id,
                 ts: ts,
-                pid: record.pid,
-                tid: record.tid,
+                pid: record.pid as u32,
+                tid: record.tid as u32,
                 comm: comm.to_string(),
                 nvcsw: record.nvcsw,
                 nivcsw: record.nivcsw,
@@ -178,7 +178,7 @@ impl TaskStatsIter {
 
             self.links.entry(pid).or_insert_with(|| {
                 info!("discovered {pid}");
-                self.pid_bus.broadcast(pid);
+                self.pid_sender.send(pid).unwrap();
                 link
             });
         }
@@ -322,8 +322,8 @@ fn wrapped_callback(sink_tx: Sender<Event>, machine_id: u32) -> impl FnMut(&[u8]
         let res = sink_tx.send(Event::Taskstats(TaskstatsEvent {
             machine_id: machine_id,
             ts: ts,
-            pid: record.pid,
-            tid: record.tid,
+            pid: record.pid as u32,
+            tid: record.tid as u32,
             comm: comm.to_string(),
             nvcsw: record.nvcsw,
             nivcsw: record.nivcsw,

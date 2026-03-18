@@ -1,5 +1,4 @@
 use anyhow::Result;
-use bus::Bus;
 use lazy_static::lazy_static;
 use libbpf_rs::{libbpf_sys, set_print, MapCore, MapFlags, MapHandle, MapType, PrintLevel};
 use log::{debug, error, info, trace, warn, LevelFilter};
@@ -20,6 +19,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use syn::{Expr, Item, Lit};
+use tokio::sync::broadcast;
 
 use crate::{
     configure::Config,
@@ -134,6 +134,7 @@ impl Extractor {
         sub::bump_memlock_rlimit()?;
 
         let sink_config = SinkConfig::DuckDB(config.prism_store.to_string());
+        // let sink_config = SinkConfig::Clickhouse("http://localhost:8123".into());
         let (sink_tx, sink_rx) = mpsc::channel();
         let terminate_flag = Arc::new(Mutex::new(false));
         let sink_manager = Manager::new(terminate_flag.clone(), sink_config, sink_rx)?;
@@ -287,9 +288,7 @@ impl Extractor {
         }
 
         // To broadcast when a new pid is registered
-        let mut pid_bus = Bus::new(100);
-        let discovery_rx = pid_bus.add_rx();
-        let process_context_rx = pid_bus.add_rx();
+        let (pid_tx, pid_rx) = broadcast::channel(10_000);
 
         let mut iowait_open_object = MaybeUninit::uninit();
         let mut iowait = IOWait::new(
@@ -352,7 +351,7 @@ impl Extractor {
             MapHandle::try_from(&pid_rb)?,
             MapHandle::try_from(&net.skel.maps.socket_context)?,
             MapHandle::try_from(&net.skel.maps.rb)?,
-            discovery_rx,
+            pid_tx.subscribe(),
         );
 
         let mut taskstats_open_object = MaybeUninit::uninit();
@@ -369,7 +368,7 @@ impl Extractor {
             Duration::from_millis(self.config.period),
             pid_map,
             pid_rb,
-            pid_bus,
+            pid_tx,
             self.sink_tx.clone(),
             self.config.machine_id,
         );
@@ -377,7 +376,7 @@ impl Extractor {
         process_context::init_thread(
             self.terminate_flag.clone(),
             self.sink_tx.clone(),
-            process_context_rx,
+            pid_rx,
             self.config.machine_id,
         )?;
 
@@ -474,7 +473,7 @@ impl TimeSensitive {
         sample_interval: Duration,
         pid_map: MapHandle,
         pid_rb: MapHandle,
-        pid_bus: Bus<u32>,
+        pid_sender: broadcast::Sender<u32>,
         sink_tx: Sender<Event>,
         machine_id: u32,
     ) {
@@ -483,7 +482,7 @@ impl TimeSensitive {
             .name("ts-collect".to_string())
             .spawn(move || {
                 let mut taskstats_iter =
-                    TaskStatsIter::new(pid_map, pid_rb, sink_tx, pid_bus, machine_id)?;
+                    TaskStatsIter::new(pid_map, pid_rb, sink_tx, pid_sender, machine_id)?;
                 loop {
                     sample_rx.recv()?;
                     while sample_rx.try_recv().is_ok() {}
