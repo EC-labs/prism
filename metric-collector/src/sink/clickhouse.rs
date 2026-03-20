@@ -4,6 +4,7 @@ use crate::event::{
     ProcessContextEvent, SocketContextEvent, SocketInetEvent, SocketMapEvent, TaskstatsEvent,
     TcpDiscoveryEvent, VfsEvent,
 };
+use crate::sink::ClickhouseConfig;
 
 use anyhow::Result;
 use clickhouse::Row;
@@ -22,14 +23,15 @@ pub struct ClickhouseSink;
 impl ClickhouseSink {
     pub fn new(
         terminate_flag: Arc<Mutex<bool>>,
-        url: &str,
+        config: &ClickhouseConfig,
         sink_rx: Receiver<Event>,
     ) -> Result<JoinHandle<Result<()>>> {
+        info!("Connect to clickhouse database: {}", config.url);
         let client = Client::default()
-            .with_url(url)
-            .with_user("user")
-            .with_password("password")
-            .with_database("default");
+            .with_url(config.url.as_str())
+            .with_database(config.db.as_str())
+            .with_user(config.user.as_str())
+            .with_password(config.password.as_str());
         Ok(std::thread::spawn(move || {
             let runtime = Runtime::new()?;
             runtime.block_on(async {

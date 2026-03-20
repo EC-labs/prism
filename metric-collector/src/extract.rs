@@ -24,7 +24,7 @@ use tokio::sync::broadcast;
 use crate::{
     configure::Config,
     event::{Event, LinuxConstsEvent},
-    sinkmanager::{Manager, SinkConfig},
+    sink::Manager,
     sub::{
         self,
         aio::Aio,
@@ -133,11 +133,9 @@ impl Extractor {
 
         sub::bump_memlock_rlimit()?;
 
-        let sink_config = SinkConfig::DuckDB(config.prism_store.to_string());
-        // let sink_config = SinkConfig::Clickhouse("http://localhost:8123".into());
         let (sink_tx, sink_rx) = mpsc::channel();
         let terminate_flag = Arc::new(Mutex::new(false));
-        let sink_manager = Manager::new(terminate_flag.clone(), sink_config, sink_rx)?;
+        let sink_manager = Manager::new(terminate_flag.clone(), &config.sink_config, sink_rx)?;
 
         if let Err(e) = std::fs::write("/proc/sys/kernel/sched_schedstats", b"1") {
             warn!("Could not enable sched_schedstats: {e}");
@@ -246,14 +244,13 @@ impl Extractor {
         let (tx_timer, rx_timer) = std::sync::mpsc::channel::<bool>();
         self.rx_timer = Some(rx_timer);
 
-        let period = self.config.period;
         let terminate_flag = self.terminate_flag.clone();
 
         thread::Builder::new()
             .name("interval-timer".to_string())
             .spawn(move || {
                 while !(*terminate_flag.lock().unwrap()) {
-                    thread::sleep(Duration::from_millis(period));
+                    thread::sleep(Duration::from_millis(1000));
                     if tx_timer.send(true).is_err() {
                         break;
                     };
@@ -365,7 +362,7 @@ impl Extractor {
 
         TimeSensitive::init_thread(
             self.terminate_flag.clone(),
-            Duration::from_millis(self.config.period),
+            Duration::from_millis(1000),
             pid_map,
             pid_rb,
             pid_tx,

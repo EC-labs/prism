@@ -12,7 +12,7 @@ pub struct DuckdbSink;
 impl DuckdbSink {
     pub fn new(
         terminate_flag: Arc<Mutex<bool>>,
-        path_string: String,
+        path_string: &str,
         sink_rx: Receiver<Event>,
     ) -> Result<JoinHandle<Result<()>>> {
         let euid = unsafe { geteuid() };
@@ -22,9 +22,9 @@ impl DuckdbSink {
         unsafe { seteuid(uid) };
         let path = Path::new(&*path_string);
         let prefix = path.parent().unwrap();
+        info!("Duckdb database connection {path_string}");
         std::fs::create_dir_all(prefix).unwrap();
         let conn = Connection::open(&*path_string)?;
-        info!("Connected to duckdb datastore");
         unsafe { seteuid(euid) };
         Self::init_schema(&conn)?;
 

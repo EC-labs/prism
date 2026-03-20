@@ -16,11 +16,11 @@ pub struct KafkaSink {
 impl KafkaSink {
     pub fn new(
         terminate_flag: Arc<Mutex<bool>>,
-        address: String,
+        address: &str,
         sink_rx: Receiver<Event>,
     ) -> Result<JoinHandle<Result<()>>> {
         let producer: BaseProducer = ClientConfig::new()
-            .set("bootstrap.servers", &address)
+            .set("bootstrap.servers", address)
             .set("message.timeout.ms", "5000")
             .create()?;
         info!("Kafka sink initialized, routing events to {}", address);

@@ -32,7 +32,7 @@ anyhow = "1.0"
 libbpf-rs = { version = "0.24.8" }
 plain = "0.2"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"]}
-clap = { version = "4.0.32", default-features = false, features = ["std", "derive", "help", "usage", "cargo"] }
+clap = { version = "4.0.32", default-features = false, features = ["std", "derive", "help", "usage", "cargo", "env"] }
 pnet = "0.35.0"
 
 rdkafka = { version = "=0.34", features = ["dynamic-linking"] }
