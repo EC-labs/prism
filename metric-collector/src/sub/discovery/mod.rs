@@ -107,58 +107,57 @@ impl Discovery {
             let runtime = tokio::runtime::Runtime::new().unwrap();
 
             loop {
-                loop {
-                    let Ok(res) = runtime.block_on(async {
-                        timeout(Duration::from_millis(100), pid_rx.recv()).await
-                    }) else {
-                        break;
-                    };
-
-                    let pid = match res {
-                        Ok(pid) => pid,
-                        Err(e) => {
-                            return Err(e.into());
-                        }
-                    };
-
-                    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
-                    if pidfd < 0 {
-                        continue;
-                    }
-
-                    let ret = unsafe { libc::setns(pidfd as i32, libc::CLONE_NEWNET) };
-                    if ret == 0 {
-                        for iface in pnet::datalink::interfaces() {
-                            let mut tc_builder = TcHookBuilder::new(skel.progs.tc_egress.as_fd());
-                            tc_builder
-                                .ifindex(iface.index as i32)
-                                .replace(true)
-                                .handle(1)
-                                .priority(1);
-
-                            if let Ok(mut hook) = tc_builder.hook(TC_EGRESS).create() {
-                                let Ok(hook) = hook.attach() else {
-                                    let _ = hook.destroy();
-                                    continue;
-                                };
-                                if let Err(e) = hook_tx.send(TcHook_ { pidfd, hook }) {
-                                    error!("failed to send hook");
-                                    panic!("{e}");
-                                };
-                            }
-
-                            debug!(
-                                "register interface for pid {}: {} {}",
-                                pid, iface.name, iface.index
-                            );
-                        }
-                    }
-                }
                 if let Err(e) = tcp_discovery_rb.consume() {
                     warn!("Failed to consume tcp_discovery_rb: `{e}`");
                 }
                 if let Err(e) = rb.consume() {
                     warn!("Failed to consume rb_skb_data: `{e}`");
+                }
+
+                let Ok(res) = runtime
+                    .block_on(async { timeout(Duration::from_millis(100), pid_rx.recv()).await })
+                else {
+                    continue;
+                };
+
+                let pid = match res {
+                    Ok(pid) => pid,
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                };
+
+                let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+                if pidfd < 0 {
+                    continue;
+                }
+
+                let ret = unsafe { libc::setns(pidfd as i32, libc::CLONE_NEWNET) };
+                if ret == 0 {
+                    for iface in pnet::datalink::interfaces() {
+                        let mut tc_builder = TcHookBuilder::new(skel.progs.tc_egress.as_fd());
+                        tc_builder
+                            .ifindex(iface.index as i32)
+                            .replace(true)
+                            .handle(1)
+                            .priority(1);
+
+                        if let Ok(mut hook) = tc_builder.hook(TC_EGRESS).create() {
+                            let Ok(hook) = hook.attach() else {
+                                let _ = hook.destroy();
+                                continue;
+                            };
+                            if let Err(e) = hook_tx.send(TcHook_ { pidfd, hook }) {
+                                error!("failed to send hook");
+                                panic!("{e}");
+                            };
+                        }
+
+                        debug!(
+                            "register interface for pid {}: {} {}",
+                            pid, iface.name, iface.index
+                        );
+                    }
                 }
             }
         });

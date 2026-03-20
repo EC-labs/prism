@@ -13,3 +13,7 @@ exclude = [
     "artifcats/paper-1/benchmarks/dependencies/solr-benchmark", 
     "artifcats/paper-1/benchmarks/kafka/scrape-cc2023-producer"
 ]
+
+[profile.release.package.metric-collector]
+debug=1
+incremental = true
