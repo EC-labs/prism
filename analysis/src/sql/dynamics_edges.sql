@@ -113,7 +113,7 @@ WITH
             tid, op, lc.const_name as fs_desc, device_id, inode_id
         FROM vfs
         LEFT JOIN linux_consts lc
-            ON const_type = 'fs_magic' AND const_name = 'SOCKFS_MAGIC'
+            ON const_type = 'fs_magic' AND lc.value = vfs.fs_magic
         WHERE {{ pid_filter }}
             AND {{ compare_filter("ts_s") }}
     ),

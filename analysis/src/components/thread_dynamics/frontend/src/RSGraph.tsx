@@ -11,6 +11,7 @@ import lockIcon from '../assets/lock.svg';
 import diskIcon from '../assets/disk.svg';
 import socketIcon from '../assets/socket.svg';
 import scheduleIcon from '../assets/schedule.svg';
+import vfsIcon from '../assets/vfs.svg';
 
 const NodePaddedImageProgram = createNodeImageProgram({
     padding: 0.1,
@@ -33,6 +34,7 @@ const NODE_COLORS: Record<string, string> = {
   contention: "rgba(0, 0, 0, 0)",
   socket: "rgba(0, 0, 0, 0)",
   schedule: "rgba(0, 0, 0, 0)",
+  vfs: "rgba(0, 0, 0, 0)",
 };
 
 const NODE_TYPES: Record<string, string> = {
@@ -40,6 +42,7 @@ const NODE_TYPES: Record<string, string> = {
     disk: "image",
     socket: "image",
     schedule: "image",
+    vfs: "image",
     thread: "border",
 };
 
@@ -48,6 +51,7 @@ const ICON_TYPES: Record<string, string> = {
     contention: lockIcon,
     socket: socketIcon,
     schedule: scheduleIcon,
+    vfs: vfsIcon,
 };
 
 function iconFor(nodeId: string): string {
