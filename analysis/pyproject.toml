@@ -26,3 +26,7 @@ dev = [
     "jupyter>=1.1.1",
     "ruff>=0.14.6",
 ]
+
+[[tool.streamlit.component.components]]
+name = "thread_dynamics"
+asset_dir = "components/thread_dynamics/frontend/build"

@@ -111,6 +111,7 @@
                         ];
                     };
                     analysis = analysis.devShell;
+                    analysisComponents.threadDynamics = (pkgs.callPackage ./analysis/src/components/thread_dynamics/frontend {}).devShell;
                     graph = pkgs.mkShell {
                         packages = with pkgs; [
                             (python3.withPackages (python-pkgs: with python-pkgs; [
