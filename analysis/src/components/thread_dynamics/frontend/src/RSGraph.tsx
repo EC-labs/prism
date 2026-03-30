@@ -96,13 +96,17 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
         });
 
         graph.setNodeAttribute(e.node, 'highlighted', true);
+
+        const toRemove: string[] = [];
         graph.forEachEdge((edgeId) => {
           const source = graph.source(edgeId);
           const target = graph.target(edgeId);
-          const edge = graph.getEdgeAttributes(edgeId);
-          
+
           if (source === e.node || target === e.node) {
-            if (edge.type !== "line") {
+            toRemove.push(edgeId);
+
+            let attribs = graph.getEdgeAttributes(edgeId)
+            if (attribs.type !== "line") {
                 graph.setEdgeAttribute(edgeId, 'color', source === e.node ? "#9333ea" : "#0891b1" );
             } else {
                 graph.setEdgeAttribute(edgeId, 'color', "#000000");
@@ -111,7 +115,18 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
             const connectedNode = source === e.node ? target : source;
             graph.setNodeAttribute(connectedNode, 'highlighted', true);
           }
+
         });
+
+        toRemove.forEach((edgeId) => {
+            // bring edge to front
+            const source = graph.source(edgeId);
+            const target = graph.target(edgeId);
+            let attribs = graph.getEdgeAttributes(edgeId);
+            graph.dropEdge(edgeId);
+            graph.addEdgeWithKey(edgeId, source, target, attribs);
+        });
+        sigma.refresh();
       },
       
       // On mouse move, if the drag mode is enabled, we change the position of the draggedNode
@@ -237,8 +252,6 @@ export const DisplayGraph = ({ graphData }: { graphData: GraphData }) => {
         nodeReducer: (_, attrs) => ({
           ...attrs,
           size: attrs.highlighted ? attrs.size * 1.2 : attrs.size,
-          // borderSize: attrs.highlighted ? 2 : 0,
-          // borderColor: "#000000",
         }),
       }}
     >
