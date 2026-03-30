@@ -12,10 +12,29 @@ import diskIcon from '../assets/disk.svg';
 import socketIcon from '../assets/socket.svg';
 import scheduleIcon from '../assets/schedule.svg';
 import vfsIcon from '../assets/vfs.svg';
+import { createNodeCompoundProgram } from "sigma/rendering";
+
+import { createNodeBorderProgram } from "@sigma/node-border";
+
+const NodeRingProgram = createNodeBorderProgram({
+    borders: [
+        { size: { value: 0.1, mode: "relative" }, color: { attribute: "borderColor" } },
+        { size: { fill: true }, color: { attribute: "pictogramColor" } },
+    ],
+});
 
 const NodePaddedImageProgram = createNodeImageProgram({
-    padding: 0.1,
+    padding: 0.3,
+    size: { mode: "force", value: 256 },
+    correctCentering: true,
+    keepWithinCircle: true,
 });
+
+
+const NodeCustomImageProgram = createNodeCompoundProgram([
+    NodeRingProgram,         // border ring + white fill
+    NodePaddedImageProgram,  // image on top
+]);
 
 interface Edge {
   source: string;
@@ -92,30 +111,42 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
           graph.setEdgeAttribute(edgeId, 'color', "#cccccc");
           graph.setEdgeAttribute(edgeId, 'size', 1.5);
           graph.setNodeAttribute(source, 'highlighted', false);
+          graph.setNodeAttribute(source, 'borderColor', "#000");
           graph.setNodeAttribute(target, 'highlighted', false);
+          graph.setNodeAttribute(target, 'borderColor', "#000");
         });
 
         graph.setNodeAttribute(e.node, 'highlighted', true);
+        graph.setNodeAttribute(e.node, 'borderColor', "#f0c807");
 
         const toRemove: string[] = [];
         graph.forEachEdge((edgeId) => {
           const source = graph.source(edgeId);
           const target = graph.target(edgeId);
 
-          if (source === e.node || target === e.node) {
-            toRemove.push(edgeId);
-
-            let attribs = graph.getEdgeAttributes(edgeId)
-            if (attribs.type !== "line") {
-                graph.setEdgeAttribute(edgeId, 'color', source === e.node ? "#9333ea" : "#0891b1" );
-            } else {
-                graph.setEdgeAttribute(edgeId, 'color', "#000000");
-            }
-            graph.setEdgeAttribute(edgeId, 'size', 2);
-            const connectedNode = source === e.node ? target : source;
-            graph.setNodeAttribute(connectedNode, 'highlighted', true);
+          if (source !== e.node && target !== e.node) {
+              return;
           }
 
+          let attribs = graph.getEdgeAttributes(edgeId)
+          graph.setEdgeAttribute(edgeId, 'size', 2);
+          const connectedNode = source === e.node ? target : source;
+          graph.setNodeAttribute(connectedNode, 'highlighted', true);
+          if (attribs.type === "line") {
+              graph.setEdgeAttribute(edgeId, "color", "#000");
+              graph.setNodeAttribute(target, "borderColor", "#000");
+              return;
+          }
+
+          if (source === e.node) {
+            graph.setEdgeAttribute(edgeId, "color", "#9333ea");
+            graph.setNodeAttribute(target, "borderColor", "#9333ea");
+          } else {
+            graph.setEdgeAttribute(edgeId, "color", "#0891b1");
+            graph.setNodeAttribute(source, "borderColor", "#0891b1");
+          }
+
+          toRemove.push(edgeId);
         });
 
         toRemove.forEach((edgeId) => {
@@ -126,6 +157,8 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
             graph.dropEdge(edgeId);
             graph.addEdgeWithKey(edgeId, source, target, attribs);
         });
+
+        // This is required because we are modifying the graph structure
         sigma.refresh();
       },
       
@@ -192,7 +225,8 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
       const attributes = {
         label: undefined,
         size: 10,
-        color: colorFor(id),
+        color: "rgba(0, 0, 0, 0)",
+        pictogramColor: "#fff",
         borderColor: "#000000",
         borderSize: 1,
         type: nodeTypeFor(id),
@@ -242,8 +276,8 @@ export const DisplayGraph = ({ graphData }: { graphData: GraphData }) => {
           curvedArrow: EdgeCurvedArrowProgram,
         },
         nodeProgramClasses: {
-            image: NodePaddedImageProgram,
-            border: NodeBorderProgram,
+            image: NodeCustomImageProgram,
+            border: NodeRingProgram,
         },
 
         // defaultEdgeType: "curve", // Curved edges show relationships better
