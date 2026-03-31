@@ -48,27 +48,25 @@ interface GraphData {
 }
 
 const NODE_COLORS: Record<string, string> = {
-  disk: "rgba(0, 0, 0, 0)",
-  thread: "#ffffff",
-  contention: "rgba(0, 0, 0, 0)",
-  socket: "rgba(0, 0, 0, 0)",
-  schedule: "rgba(0, 0, 0, 0)",
-  vfs: "rgba(0, 0, 0, 0)",
+  ext: "#F1E0FF",
 };
 
 const NODE_TYPES: Record<string, string> = {
     contention: "image",
     disk: "image",
     socket: "image",
+    inet: "image",
     schedule: "image",
     vfs: "image",
     thread: "border",
+    ext: "border",
 };
 
 const ICON_TYPES: Record<string, string> = {
     disk: diskIcon,
     contention: lockIcon,
     socket: socketIcon,
+    inet: socketIcon,
     schedule: scheduleIcon,
     vfs: vfsIcon,
 };
@@ -83,9 +81,9 @@ function nodeTypeFor(nodeId: string): string {
   return NODE_TYPES[prefix] ?? undefined;
 }
 
-function colorFor(nodeId: string): string {
+function pictogramColorFor(nodeId: string): string {
   const prefix = nodeId.split("-")[0];
-  return NODE_COLORS[prefix] ?? "#999999";
+  return NODE_COLORS[prefix] ?? "#fff";
 }
 
 export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
@@ -139,11 +137,13 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
           }
 
           if (source === e.node) {
-            graph.setEdgeAttribute(edgeId, "color", "#9333ea");
-            graph.setNodeAttribute(target, "borderColor", "#9333ea");
+            graph.setEdgeAttribute(edgeId, "color", "#FFA300");
+            const borderColor = graph.getNodeAttribute(target, "borderColor");
+            graph.setNodeAttribute(target, "borderColor", borderColor === "#0891B1" ? "#849A59" : "#FFA300");
           } else {
-            graph.setEdgeAttribute(edgeId, "color", "#0891b1");
-            graph.setNodeAttribute(source, "borderColor", "#0891b1");
+            graph.setEdgeAttribute(edgeId, "color", "#0891B1");
+            const borderColor = graph.getNodeAttribute(source, "borderColor");
+            graph.setNodeAttribute(source, "borderColor", borderColor === "#FFA300" ? "#849A59" : "#0891B1");
           }
 
           toRemove.push(edgeId);
@@ -226,7 +226,7 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
         label: undefined,
         size: 10,
         color: "rgba(0, 0, 0, 0)",
-        pictogramColor: "#fff",
+        pictogramColor: pictogramColorFor(id),
         borderColor: "#000000",
         borderSize: 1,
         type: nodeTypeFor(id),

@@ -107,29 +107,98 @@ WITH
         HAVING waiters = 1 AND wakers = 1
     ),
 
-    -- VFS inodes
-    vfs AS (
-        SELECT DISTINCT
-            tid, op, lc.const_name as fs_desc, device_id, inode_id
-        FROM vfs
-        LEFT JOIN linux_consts lc
-            ON const_type = 'fs_magic' AND lc.value = vfs.fs_magic
-        WHERE {{ pid_filter }}
-            AND {{ compare_filter("ts_s") }}
+    -- SOCKETS
+    socket_context_ AS (
+        SELECT sc.machine_id AS machine_id, sc.inode_id, fdesc.const_name as family_desc, tdesc.const_name as type_desc, pdesc.const_name as protocol_desc 
+        FROM socket_context sc
+        LEFT JOIN linux_consts fdesc
+            ON fdesc.const_type = 'socket_family' AND fdesc.value = sc.family
+        LEFT JOIN linux_consts tdesc
+            ON tdesc.const_type = 'socket_type' AND tdesc.value = sc.type
+        LEFT JOIN linux_consts pdesc
+            ON pdesc.const_type = 'family_protocol' AND pdesc.value = sc.protocol
     ),
-    sockets AS (
+    sockets_vfs AS (
         SELECT DISTINCT
-            fs_desc, device_id, inode_id
+            vfs.machine_id AS machine_id, pid, tid, op, fs_desc.const_name as fs_desc, device_id, vfs.inode_id
         FROM vfs
-        LEFT JOIN socket_context sc
-            USING (inode_id)
-        WHERE fs_desc = 'SOCKFS_MAGIC'
+        LEFT JOIN linux_consts fs_desc
+            ON fs_desc.const_type = 'fs_magic' AND fs_desc.value = vfs.fs_magic
+        WHERE {{ compare_filter("ts_s") }}
     ),
-    other_vfs AS (
-        SELECT DISTINCT fs_desc, device_id, inode_id FROM vfs
-        EXCEPT ALL 
-        SELECT DISTINCT fs_desc, device_id, inode_id FROM sockets
+    -- AF_INET[6] sockets
+    sockets_inet AS (
+        SELECT DISTINCT
+            svfs.machine_id, svfs.pid, svfs.inode_id
+        FROM sockets_vfs svfs
+        LEFT JOIN socket_context_ sc
+            ON sc.machine_id = svfs.machine_id AND sc.inode_id = svfs.inode_id AND svfs.fs_desc = 'SOCKFS_MAGIC'
+        WHERE sc.machine_id = {{ machine_id }} AND svfs.pid = {{ pid }}
+            AND family_desc LIKE 'AF_INET%'       
+    ),
+    inet_mapping AS (
+        SELECT 
+            si.machine_id AS local_machine_id, 
+            si.pid AS local_pid, 
+            si.inode_id AS local_inode_id, 
+            td.remote_machine_id, 
+            rpid.pid as remote_pid, 
+            td.remote_inode_id, 
+            sic.src_address, 
+            sic.src_port, 
+            sic.dst_address,
+            sic.dst_port,
+            CASE 
+                WHEN local_pid = remote_pid THEN 'inet-internal-' || local_inode_id || '-' || remote_inode_id
+                WHEN remote_pid IS NOT NULL THEN 'inet-mapped-' || remote_pid
+                WHEN dst_address <> '0' THEN 'inet-unmapped-' || dst_address
+                ELSE 'inet-listen-' || src_address || '-' || src_port
+            END as signature,
+        FROM sockets_inet si
+        LEFT JOIN (SELECT * FROM tcp_discovery WHERE remote_machine_id <> 0 AND remote_inode_id <> 0) td
+            ON si.machine_id = td.local_machine_id AND si.inode_id = td.local_inode_id
+        LEFT JOIN (SELECT DISTINCT machine_id, pid, inode_id FROM vfs WHERE {{ compare_filter("ts_s") }}) rpid
+            ON td.remote_machine_id = rpid.machine_id AND td.remote_inode_id = rpid.inode_id 
+        LEFT JOIN socket_inet sic
+            ON si.machine_id = sic.machine_id AND si.inode_id = sic.inode_id
+    ),
+    signature_vinet AS (
+        SELECT 
+            signature, 
+            ROW_NUMBER() OVER (ORDER BY signature) AS vinet
+        FROM inet_mapping
+        GROUP BY signature
+    ),
+    inet_mapping_vinet AS (
+        SELECT * 
+        FROM inet_mapping im
+        LEFT JOIN signature_vinet sv
+            USING (signature)
     )
+
+    -- -- VFS inodes
+    -- vfs AS (
+    --     SELECT DISTINCT
+    --         tid, op, lc.const_name as fs_desc, device_id, inode_id
+    --     FROM vfs
+    --     LEFT JOIN linux_consts lc
+    --         ON const_type = 'fs_magic' AND lc.value = vfs.fs_magic
+    --     WHERE {{ pid_filter }}
+    --         AND {{ compare_filter("ts_s") }}
+    -- ),
+    -- sockets AS (
+    --     SELECT DISTINCT
+    --         fs_desc, device_id, inode_id
+    --     FROM vfs
+    --     LEFT JOIN socket_context sc
+    --         USING (inode_id)
+    --     WHERE fs_desc = 'SOCKFS_MAGIC'
+    -- ),
+    -- other_vfs AS (
+    --     SELECT DISTINCT fs_desc, device_id, inode_id FROM vfs
+    --     EXCEPT ALL 
+    --     SELECT DISTINCT fs_desc, device_id, inode_id FROM sockets
+    -- )
 
 -- disk
 SELECT  
@@ -189,42 +258,94 @@ WHERE direct.vfkey IS NULL
 
 UNION ALL
 
--- sockets
-SELECT 
-    'socket-' || v.inode_id AS source,
-    'thread-' || v.tid AS target,
+SELECT DISTINCT 
+    'inet-' || vinet AS source, 
+    'thread-' || tid AS target,
     'directed' AS edge_type
-FROM vfs v
-INNER JOIN sockets s
-    ON s.inode_id = v.inode_id AND v.fs_desc = s.fs_desc
-WHERE op = 0 -- READ
-UNION ALL
-SELECT 
-    'thread-' || v.tid AS source,
-    'socket-' || v.inode_id AS target,
-    'directed' AS edge_type
-FROM vfs v
-INNER JOIN sockets s
-    ON s.inode_id = v.inode_id AND v.fs_desc = s.fs_desc
-WHERE op = 1 -- WRITE
+FROM sockets_vfs v
+INNER JOIN inet_mapping_vinet im
+    ON v.machine_id = im.local_machine_id AND v.pid = im.local_pid AND v.inode_id = im.local_inode_id
+WHERE pid = {{ pid }}
+    AND machine_id = {{ machine_id }}
+    AND op = 0
 
 UNION ALL
 
--- other vfs
-SELECT 
-    'vfs-' || v.inode_id AS source,
-    'thread-' || v.tid AS target,
+SELECT DISTINCT 
+    'thread-' || tid AS source,
+    'inet-' || vinet AS target, 
     'directed' AS edge_type
-FROM vfs v
-INNER JOIN other_vfs o
-    ON o.inode_id = v.inode_id AND v.fs_desc = o.fs_desc
-WHERE op = 0 -- READ
+FROM sockets_vfs v
+INNER JOIN inet_mapping_vinet im
+    ON v.machine_id = im.local_machine_id AND v.pid = im.local_pid AND v.inode_id = im.local_inode_id
+WHERE pid = {{ pid }}
+    AND machine_id = {{ machine_id }}
+    AND op = 1
+
 UNION ALL
-SELECT 
-    'thread-' || v.tid AS source,
-    'vfs-' || v.inode_id AS target,
-    'directed' AS edge_type
-FROM vfs v
-INNER JOIN other_vfs o
-    ON o.inode_id = v.inode_id AND v.fs_desc = o.fs_desc
-WHERE op = 1 -- WRITE
+
+SELECT DISTINCT 
+    'inet-' || LEAST(s.vinet, t.vinet) AS source, 
+    'inet-' || GREATEST(s.vinet, t.vinet) AS target,
+    'undirected' AS edge_type
+FROM inet_mapping_vinet s
+INNER JOIN inet_mapping_vinet t
+    ON s.local_machine_id = t.remote_machine_id AND s.local_inode_id = t.remote_inode_id
+
+UNION ALL
+
+SELECT DISTINCT
+    'inet-' || vinet AS source,
+    'ext-' || remote_machine_id || '-' || remote_pid AS target,
+    'undirected' AS edge_type
+FROM inet_mapping_vinet s
+WHERE local_machine_id <> remote_machine_id OR local_pid <> remote_pid
+
+UNION ALL
+
+SELECT DISTINCT
+    'inet-' || vinet AS source,
+    'ext-' || dst_address AS target,
+    'undirected' AS edge_type
+FROM inet_mapping_vinet s
+WHERE remote_pid IS NULL AND dst_address <> '0'
+
+-- -- sockets
+-- SELECT 
+--     'socket-' || v.inode_id AS source,
+--     'thread-' || v.tid AS target,
+--     'directed' AS edge_type
+-- FROM vfs v
+-- INNER JOIN sockets s
+--     ON s.inode_id = v.inode_id AND v.fs_desc = s.fs_desc
+-- WHERE op = 0 -- READ
+-- UNION ALL
+-- SELECT 
+--     'thread-' || v.tid AS source,
+--     'socket-' || v.inode_id AS target,
+--     'directed' AS edge_type
+-- FROM vfs v
+-- INNER JOIN sockets s
+--     ON s.inode_id = v.inode_id AND v.fs_desc = s.fs_desc
+-- WHERE op = 1 -- WRITE
+
+-- UNION ALL
+
+-- -- other vfs
+-- SELECT 
+--     'vfs-' || v.inode_id AS source,
+--     'thread-' || v.tid AS target,
+--     'directed' AS edge_type
+-- FROM vfs v
+-- INNER JOIN other_vfs o
+--     ON o.inode_id = v.inode_id AND v.fs_desc = o.fs_desc
+-- WHERE op = 0 -- READ
+-- UNION ALL
+-- SELECT 
+--     'thread-' || v.tid AS source,
+--     'vfs-' || v.inode_id AS target,
+--     'directed' AS edge_type
+-- FROM vfs v
+-- INNER JOIN other_vfs o
+--     ON o.inode_id = v.inode_id AND v.fs_desc = o.fs_desc
+-- WHERE op = 1 -- WRITE

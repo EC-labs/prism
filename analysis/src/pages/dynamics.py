@@ -59,7 +59,7 @@ def main():
 
     query_template = Template((sql_dir / "dynamics_edges.sql").read_text())
 
-    query = query_template.render({**template_variables(), "pid_filter": pid_filter})
+    query = query_template.render({**template_variables(), "pid_filter": pid_filter, "pid": pid, "machine_id": machine_id})
     result = db.custom_query(query)
     nodes = list(set(result["source"].tolist() + result["target"].tolist()))
     edges = result.to_dict(orient="records")
