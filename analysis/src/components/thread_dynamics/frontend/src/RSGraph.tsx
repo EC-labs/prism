@@ -4,7 +4,6 @@ import { useSigma, SigmaContainer, useLoadGraph, useRegisterEvents } from "@reac
 import "@react-sigma/core/lib/style.css";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import { EdgeCurvedArrowProgram } from "@sigma/edge-curve";
-import { NodeBorderProgram } from "@sigma/node-border";
 import { createNodeImageProgram } from "@sigma/node-image";
 
 import lockIcon from '../assets/lock.svg';
@@ -73,6 +72,14 @@ const ICON_TYPES: Record<string, string> = {
     vfs: vfsIcon,
 };
 
+function hashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (Math.imul(31, hash) + str.charCodeAt(i)) | 0;
+  }
+  return hash;
+}
+
 function iconFor(nodeId: string): string {
   const prefix = nodeId.split("-")[0];
   return ICON_TYPES[prefix] ?? undefined;
@@ -134,7 +141,6 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
           graph.setNodeAttribute(connectedNode, 'highlighted', true);
           if (attribs.type === "line") {
               graph.setEdgeAttribute(edgeId, "color", "#000");
-              graph.setNodeAttribute(target, "borderColor", "#000");
               return;
           }
 
@@ -224,6 +230,7 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
     const graph = new Graph({ multi: false, type: "directed" });
 
     graphData.nodes.forEach((id) => {
+      const h = hashCode(id);
       const attributes = {
         label: undefined,
         size: id.startsWith("schedule") ? 5 : 10,
@@ -233,8 +240,8 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
         borderSize: 1,
         type: nodeTypeFor(id),
         image: iconFor(id),
-        x: Math.random(),
-        y: Math.random(),
+        x: ((h & 0xffff) / 0xffff) * 2 - 1,
+        y: (((h >> 16) & 0xffff) / 0xffff) * 2 - 1,
         hightlighted: false,
       };
       graph.addNode(id, attributes);
@@ -256,7 +263,7 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
         gravity: 1,
         scalingRatio: 2,
         slowDown: 10,
-        barnesHutOptimize: true,
+        barnesHutOptimize: false,
         barnesHutTheta: 0.5,
       },
     });
