@@ -129,7 +129,7 @@ WITH
     -- AF_INET[6] sockets
     sockets_inet AS (
         SELECT DISTINCT
-            svfs.machine_id, svfs.pid, svfs.inode_id
+            svfs.machine_id, svfs.pid, svfs.inode_id, family_desc, protocol_desc
         FROM sockets_vfs svfs
         LEFT JOIN socket_context_ sc
             ON sc.machine_id = svfs.machine_id AND sc.inode_id = svfs.inode_id AND svfs.fs_desc = 'SOCKFS_MAGIC'
@@ -144,16 +144,23 @@ WITH
             td.remote_machine_id, 
             rpid.pid as remote_pid, 
             td.remote_inode_id, 
+            si.family_desc,
+            si.protocol_desc,
             sic.src_address, 
             sic.src_port, 
             sic.dst_address,
             sic.dst_port,
             CASE 
-                WHEN local_pid = remote_pid THEN 'inet-internal-' || local_inode_id || '-' || remote_inode_id
-                WHEN remote_pid IS NOT NULL THEN 'inet-mapped-' || remote_pid
-                WHEN dst_address <> '0' THEN 'inet-unmapped-' || dst_address
-                ELSE 'inet-listen-' || src_address || '-' || src_port
-            END as signature,
+                WHEN protocol_desc = 'IPPROTO_TCP' THEN
+                    CASE 
+                        WHEN local_pid = remote_pid THEN 'inet-tcp-internal-' || local_inode_id || '-' || remote_inode_id
+                        WHEN remote_pid IS NOT NULL THEN 'inet-tcp-mapped-' || remote_pid
+                    WHEN dst_address NOT IN ('0', '::') THEN 'inet-tcp-unmapped-' || dst_address
+                        ELSE 'inet-tcp-listen-' || src_address || '-' || src_port
+                    END
+                WHEN protocol_desc = 'IPPROTO_UDP' THEN 'inet-udp-' || src_address || ':' || src_port || '-' || dst_address || ':' || dst_port
+                ELSE 'inet-' || src_address || ':' || src_port || '-' || dst_address || ':' || dst_port
+            END AS signature
         FROM sockets_inet si
         LEFT JOIN (SELECT * FROM tcp_discovery WHERE remote_machine_id <> 0 AND remote_inode_id <> 0) td
             ON si.machine_id = td.local_machine_id AND si.inode_id = td.local_inode_id
@@ -173,6 +180,46 @@ WITH
         SELECT * 
         FROM inet_mapping im
         LEFT JOIN signature_vinet sv
+            USING (signature)
+    ),
+    -- AF_UNIX sockets
+    sockets_unix AS (
+        SELECT DISTINCT
+            svfs.machine_id, svfs.pid, svfs.inode_id, family_desc, protocol_desc
+        FROM sockets_vfs svfs
+        LEFT JOIN socket_context_ sc
+            ON sc.machine_id = svfs.machine_id AND sc.inode_id = svfs.inode_id AND svfs.fs_desc = 'SOCKFS_MAGIC'
+        WHERE sc.machine_id = {{ machine_id }} AND svfs.pid = {{ pid }}
+            AND family_desc LIKE 'AF_UNIX%'       
+    ),
+    unix_mapping AS (
+        SELECT 
+            su.machine_id AS local_machine_id, 
+            su.pid AS local_pid, 
+            su.inode_id AS local_inode_id, 
+            sm.sock2_inode_id AS remote_inode_id,
+            sv.pid AS remote_pid,
+            CASE
+                WHEN remote_pid IS NOT NULL THEN 'unix-mapped-' || remote_pid
+                ELSE 'unix-unmapped-' || local_inode_id
+            END AS signature
+        FROM sockets_unix su
+        LEFT JOIN socket_map sm
+            ON su.machine_id = sm.machine_id AND su.inode_id = sm.sock1_inode_id
+        LEFT JOIN (SELECT DISTINCT machine_id, pid, inode_id FROM sockets_vfs) sv
+            ON su.machine_id = sv.machine_id AND sm.sock2_inode_id = sv.inode_id
+    ),
+    signature_vunix AS (
+        SELECT 
+            signature, 
+            ROW_NUMBER() OVER (ORDER BY signature) AS vunix
+        FROM unix_mapping
+        GROUP BY signature
+    ),
+    unix_mapping_vunix AS (
+        SELECT * 
+        FROM unix_mapping um
+        LEFT JOIN signature_vunix sv
             USING (signature)
     )
 
@@ -258,6 +305,7 @@ WHERE direct.vfkey IS NULL
 
 UNION ALL
 
+-- AF_INET sockets
 SELECT DISTINCT 
     'inet-' || vinet AS source, 
     'thread-' || tid AS target,
@@ -267,7 +315,7 @@ INNER JOIN inet_mapping_vinet im
     ON v.machine_id = im.local_machine_id AND v.pid = im.local_pid AND v.inode_id = im.local_inode_id
 WHERE pid = {{ pid }}
     AND machine_id = {{ machine_id }}
-    AND op = 0
+    AND op = 0 OR op = 2 -- read and listen
 
 UNION ALL
 
@@ -308,7 +356,55 @@ SELECT DISTINCT
     'ext-' || dst_address AS target,
     'undirected' AS edge_type
 FROM inet_mapping_vinet s
-WHERE remote_pid IS NULL AND dst_address <> '0'
+WHERE 
+remote_pid IS NULL AND dst_address NOT IN ('0', '::') AND protocol_desc = 'IPPROTO_TCP'
+
+UNION ALL 
+
+-- AF_UNIX sockets
+SELECT DISTINCT 
+    'unix-' || vunix AS source, 
+    'thread-' || tid AS target,
+    'directed' AS edge_type
+FROM sockets_vfs v
+INNER JOIN unix_mapping_vunix um
+    ON v.machine_id = um.local_machine_id AND v.pid = um.local_pid AND v.inode_id = um.local_inode_id
+WHERE pid = {{ pid }}
+    AND machine_id = {{ machine_id }}
+    AND op = 0 OR op = 2 -- read and listen
+
+UNION ALL 
+
+SELECT DISTINCT 
+    'thread-' || tid AS source,
+    'unix-' || vunix AS target, 
+    'directed' AS edge_type
+FROM sockets_vfs v
+INNER JOIN unix_mapping_vunix um
+    ON v.machine_id = um.local_machine_id AND v.pid = um.local_pid AND v.inode_id = um.local_inode_id
+WHERE pid = {{ pid }}
+    AND machine_id = {{ machine_id }}
+    AND op = 1
+
+UNION ALL 
+
+SELECT DISTINCT 
+    'unix-' || s.vunix AS source,
+    'unix-' || t.vunix AS target, 
+    'undirected' AS edge_type
+FROM unix_mapping_vunix s
+INNER JOIN unix_mapping_vunix t
+    ON s.local_machine_id = t.local_machine_id AND s.remote_inode_id = t.local_inode_id
+WHERE s.local_pid = s.remote_pid
+
+UNION ALL
+
+SELECT DISTINCT
+    'unix-' || vunix AS source,
+    'ext-' || local_machine_id || '-' || remote_pid AS target, 
+    'undirected' AS edge_type
+FROM unix_mapping_vunix
+WHERE local_pid <> remote_pid
 
 -- -- sockets
 -- SELECT 

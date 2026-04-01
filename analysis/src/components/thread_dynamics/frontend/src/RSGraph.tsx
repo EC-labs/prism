@@ -56,6 +56,7 @@ const NODE_TYPES: Record<string, string> = {
     disk: "image",
     socket: "image",
     inet: "image",
+    unix: "image",
     schedule: "image",
     vfs: "image",
     thread: "border",
@@ -67,6 +68,7 @@ const ICON_TYPES: Record<string, string> = {
     contention: lockIcon,
     socket: socketIcon,
     inet: socketIcon,
+    unix: socketIcon,
     schedule: scheduleIcon,
     vfs: vfsIcon,
 };
@@ -107,7 +109,7 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
           const source = graph.source(edgeId);
           const target = graph.target(edgeId);
           graph.setEdgeAttribute(edgeId, 'color', "#cccccc");
-          graph.setEdgeAttribute(edgeId, 'size', 1.5);
+          graph.setEdgeAttribute(edgeId, 'size', 1);
           graph.setNodeAttribute(source, 'highlighted', false);
           graph.setNodeAttribute(source, 'borderColor', "#000");
           graph.setNodeAttribute(target, 'highlighted', false);
@@ -224,7 +226,7 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
     graphData.nodes.forEach((id) => {
       const attributes = {
         label: undefined,
-        size: 10,
+        size: id.startsWith("schedule") ? 5 : 10,
         color: "rgba(0, 0, 0, 0)",
         pictogramColor: pictogramColorFor(id),
         borderColor: "#000000",
@@ -241,7 +243,7 @@ export const LoadGraph = ({ graphData }: { graphData: GraphData }) => {
     graphData.edges.forEach(({ source, target, edge_type }) => {
       if (!graph.hasEdge(source, target)) {
         graph.addEdge(source, target, { 
-          size: 1.5, 
+          size: 1, 
           color: "#cccccc",
           type: edge_type === "directed" ? "curvedArrow" : "line",
         });
