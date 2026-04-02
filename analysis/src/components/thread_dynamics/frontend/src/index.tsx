@@ -10,7 +10,7 @@ const reactRoots: WeakMap<FrontendRendererArgs["parentElement"], Root> =
   new WeakMap();
 
 const MyComponentRoot: FrontendRenderer<any, { graph_data: any }> = (args) => {
-  const { data, parentElement } = args;
+  const { data, parentElement, setTriggerValue } = args;
 
   const rootElement = parentElement.querySelector(".react-root");
   if (!rootElement) throw new Error("React root element not found");
@@ -27,7 +27,7 @@ const MyComponentRoot: FrontendRenderer<any, { graph_data: any }> = (args) => {
   reactRoot.render(
     <>
       <style>{`.sigma-container { height: 800px !important; width: 800px !important; }`}</style>
-      <ThreadDynamics graphData={graphData} />
+      <ThreadDynamics graphData={graphData} setTriggerValue={setTriggerValue} />
     </>
   );
 

@@ -10,7 +10,7 @@ def thread_dynamics(graph_data, key=None):
     component_value = out(
         key=key,
         default={},
-        data={"graph_data": graph_data},  # <-- pass graph_data here
+        data={"graph_data": graph_data},
         height=900,
         width=1600,
     )

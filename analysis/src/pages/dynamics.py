@@ -63,9 +63,12 @@ def main():
     result = db.custom_query(query)
     nodes = list(set(result["source"].tolist() + result["target"].tolist()))
     edges = result.to_dict(orient="records")
+    nodes.sort()
+    edges.sort(key=lambda x: (x["source"], x["target"], x["edge_type"]))
 
     graph_data = {"nodes": nodes, "edges": edges}
-    result = thread_dynamics(graph_data)
+    result = thread_dynamics(graph_data, key="thread_dynamics")
+    print(result)
 
 
 
