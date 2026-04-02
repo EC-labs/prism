@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState } from "react";
 import Graph from "graphology";
 import { useSigma, SigmaContainer, useLoadGraph, useRegisterEvents } from "@react-sigma/core";
 import "@react-sigma/core/lib/style.css";
@@ -95,63 +95,18 @@ function pictogramColorFor(nodeId: string): string {
   return NODE_COLORS[prefix] ?? "#fff";
 }
 
-export const LoadGraph = ({ graphData, setTriggerValue }: { graphData: GraphData, setTriggerValue: "setTriggerValue" }) => {
+export const LoadGraph = ({ graphData, setStateValue }: { graphData: GraphData, setStateValue: "setStateValue" }) => {
   const loadGraph = useLoadGraph();
   const registerEvents = useRegisterEvents();
   const sigma = useSigma();
   const [draggedNode, setDraggedNode] = useState<string | null>(null);
-
-  const laidOutGraph = useMemo(() => {
-    if (!graphData?.nodes?.length) return null;
-    const graph = new Graph({ multi: false, type: "directed" });
-
-    graphData.nodes.forEach((id) => {
-      const h = hashCode(id);
-      graph.addNode(id, {
-        label: undefined,
-        size: id.startsWith("schedule") ? 5 : 10,
-        color: "rgba(0, 0, 0, 0)",
-        pictogramColor: pictogramColorFor(id),
-        borderColor: "#000000",
-        borderSize: 1,
-        type: nodeTypeFor(id),
-        image: iconFor(id),
-        x: ((h & 0xffff) / 0xffff) * 2 - 1,
-        y: (((h >> 16) & 0xffff) / 0xffff) * 2 - 1,
-        highlighted: false,
-      });
-    });
-
-    graphData.edges.forEach(({ source, target, edge_type }) => {
-      if (!graph.hasEdge(source, target)) {
-        graph.addEdge(source, target, {
-          size: 1,
-          color: "#cccccc",
-          type: edge_type === "directed" ? "curvedArrow" : "line",
-        });
-      }
-    });
-
-    forceAtlas2.assign(graph, {
-      iterations: 150,
-      settings: {
-        gravity: 1,
-        scalingRatio: 2,
-        slowDown: 10,
-        barnesHutOptimize: false,
-        barnesHutTheta: 0.5,
-      },
-    });
-
-    return graph;
-  }, [graphData]);
 
   useEffect(() => {
     registerEvents({
       downNode: (e) => {
         setDraggedNode(e.node);
         const graph = sigma.getGraph();
-        setTriggerValue("request", e.node);
+        setStateValue("request", e.node);
         document.body.style.cursor = 'grabbing';
 
 
@@ -264,12 +219,6 @@ export const LoadGraph = ({ graphData, setTriggerValue }: { graphData: GraphData
   }, [registerEvents, sigma, draggedNode]);
 
   useEffect(() => {
-    if (laidOutGraph) {
-      loadGraph(laidOutGraph);
-    }
-  }, [loadGraph, laidOutGraph]);
-
-  useEffect(() => {
     if (!graphData?.nodes?.length) return;
 
     const graph = new Graph({ multi: false, type: "directed" });
@@ -305,25 +254,25 @@ export const LoadGraph = ({ graphData, setTriggerValue }: { graphData: GraphData
     forceAtlas2.assign(graph, {
       iterations: 150,
       settings: {
-        gravity: 1,
-        scalingRatio: 2,
+        gravity: 5,
+        scalingRatio: 0.5,
         slowDown: 10,
         barnesHutOptimize: false,
         barnesHutTheta: 0.5,
+        strongGravityMode: true,
       },
     });
 
     loadGraph(graph);
-  }, [graphData]);
+  }, [loadGraph, graphData]);
 
   return null;
 };
 
-export const DisplayGraph = ({ graphData, setTriggerValue }: { graphData: GraphData, setTriggerValue: "setTriggerValue" }) => {
+export const DisplayGraph = React.memo(({ graphData, setStateValue }: { graphData: GraphData, setStateValue: "setStateValue" }) => {
   return (
-    <>
     <SigmaContainer
-      style={{ background: "white", width: "800px", }}
+      style={{ background: "white", width: "700px" }}
       settings={{
         renderEdgeLabels: false,
         defaultEdgeColor: "#cccccc",
@@ -334,7 +283,7 @@ export const DisplayGraph = ({ graphData, setTriggerValue }: { graphData: GraphD
             image: NodeCustomImageProgram,
             border: NodeRingProgram,
         },
-
+        allowInvalidContainer: true,
         edgeLabelSize: 10,
 
         nodeReducer: (_, attrs) => ({
@@ -343,11 +292,11 @@ export const DisplayGraph = ({ graphData, setTriggerValue }: { graphData: GraphD
         }),
       }}
     >
-      <LoadGraph graphData={graphData} setTriggerValue={setTriggerValue}/>
+      <LoadGraph graphData={graphData} setStateValue={setStateValue}/>
     </SigmaContainer>
-    <button onClick={(e) => {setTriggerValue("request", "clickeeeeed")}}>Click Me!</button>
-    </>
   );
-};
+}, (prevProps, nextProps) => {
+    return JSON.stringify(prevProps.graphData) === JSON.stringify(nextProps.graphData);
+});
 
 export default DisplayGraph;

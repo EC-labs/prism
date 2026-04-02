@@ -15,6 +15,10 @@ def store_value(key):
 def load_value(key):
     st.session_state["_"+key] = st.session_state.get(key)
 
+def on_request_cb():
+    request = st.session_state["thread_dynamics_state"]["request"]
+    st.session_state["thread_dynamics_state"]["response"] = f"Response {request}"
+
 if "dynamics_init" not in st.session_state: 
     st.session_state.service_index = None
 
@@ -67,16 +71,17 @@ def main():
     edges.sort(key=lambda x: (x["source"], x["target"], x["edge_type"]))
 
     graph_data = {"nodes": nodes, "edges": edges}
-    result = thread_dynamics(graph_data, key="thread_dynamics")
-    print(result)
+    result = thread_dynamics(graph_data, on_request_cb, key="thread_dynamics_state")
+    # request = result.get("request")
+    # if request:
+    #     st.session_state["thread_dynamics_state"]["response"] = f"Requested {request}"
+    # print(result)
 
 
 
 st.set_page_config(page_title="Thread Dynamics", layout="wide")
 st.markdown("""
     # Service Thread Dynamics
-
-    Display a process' thread interactions with kernel resources.    
 """)
 
 main()
