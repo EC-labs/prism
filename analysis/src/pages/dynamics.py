@@ -1,9 +1,11 @@
 from pathlib import Path
 from jinja2 import Template
 
+import json
 import networkx as nx
 import streamlit as st
 import pandas as pd
+import re
 
 from src.components.thread_dynamics import thread_dynamics
 from src.variables import template_variables
@@ -15,9 +17,31 @@ def store_value(key):
 def load_value(key):
     st.session_state["_"+key] = st.session_state.get(key)
 
+def request_handler_thread(request_arg): 
+    return {
+        "type": "thread",
+        "inner": {
+            "id": request_arg
+        }
+    }
+
+def request_dispatcher(request_type, request_arg):
+    if request_type == "thread":
+        return request_handler_thread(request_arg) 
+    else:
+        return {
+            "type": request_type,
+            "inner": {
+                "id": request_arg,
+            },
+        }
+
+
 def on_request_cb():
-    request = st.session_state["thread_dynamics_state"]["request"]
-    st.session_state["thread_dynamics_state"]["response"] = f"Response {request}"
+    graph_element_id = st.session_state["thread_dynamics_state"]["request"]
+    request_type, request_arg = re.search(r"^(\w+)-([\w-]+)$", graph_element_id).groups()
+    
+    st.session_state["thread_dynamics_state"]["response"] = request_dispatcher(request_type, request_arg)
 
 if "dynamics_init" not in st.session_state: 
     st.session_state.service_index = None

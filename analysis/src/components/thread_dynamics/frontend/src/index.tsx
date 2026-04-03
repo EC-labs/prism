@@ -2,31 +2,31 @@
 import {
     FrontendRenderer,
     FrontendRendererArgs,
-} from '@streamlit/component-v2-lib'
-import { createRoot, Root } from 'react-dom/client'
-import ThreadDynamics from './RSGraph'
+} from '@streamlit/component-v2-lib';
+import { createRoot, Root } from 'react-dom/client';
+import ThreadDynamics from './RSGraph';
+import NodeContext from './NodeContext';
 
 const reactRoots: WeakMap<FrontendRendererArgs['parentElement'], Root> =
-    new WeakMap()
+    new WeakMap();
 
 const MyComponentRoot: FrontendRenderer<
     any,
-    { graph_data: any; response: string }
+    { graph_data: any; response: any }
 > = (args) => {
-    const { data, parentElement, setStateValue } = args
+    const { data, parentElement, setStateValue } = args;
 
-    const rootElement = parentElement.querySelector('.react-root')
-    if (!rootElement) throw new Error('React root element not found')
+    const rootElement = parentElement.querySelector('.react-root');
+    if (!rootElement) throw new Error('React root element not found');
 
-    let reactRoot = reactRoots.get(parentElement)
+    let reactRoot = reactRoots.get(parentElement);
     if (!reactRoot) {
-        reactRoot = createRoot(rootElement)
-        reactRoots.set(parentElement, reactRoot)
+        reactRoot = createRoot(rootElement);
+        reactRoots.set(parentElement, reactRoot);
     }
 
-    // ← pull graph_data out of the Python-supplied data object
-    const graphData = data?.graph_data ?? { nodes: [], edges: [] }
-    const response = data?.response ?? null
+    const graphData = data?.graph_data ?? { nodes: [], edges: [] };
+    const response = data?.response ?? null;
 
     reactRoot.render(
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -35,17 +35,17 @@ const MyComponentRoot: FrontendRenderer<
                 graphData={graphData}
                 setStateValue={setStateValue}
             />
-            <span>{response}</span>
+            <NodeContext response={response} />
         </div>
-    )
+    );
 
     return () => {
-        const root = reactRoots.get(parentElement)
+        const root = reactRoots.get(parentElement);
         if (root) {
-            root.unmount()
-            reactRoots.delete(parentElement)
+            root.unmount();
+            reactRoots.delete(parentElement);
         }
-    }
-}
+    };
+};
 
-export default MyComponentRoot
+export default MyComponentRoot;
