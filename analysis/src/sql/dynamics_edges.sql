@@ -241,6 +241,7 @@ WITH
         WHERE
             vfs.machine_id = {{ machine_id }}
             AND vfs.pid = {{ pid }}
+            AND {{ compare_filter("vfs.ts_s") }}
             AND (sin.machine_id IS NULL AND sin.inode_id IS NULL)
     )
 
