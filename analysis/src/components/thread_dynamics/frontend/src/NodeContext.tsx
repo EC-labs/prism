@@ -3,21 +3,87 @@ import React, { useState, useEffect } from 'react';
 type SocketProps = string;
 type VFSProps = string;
 
+type ThreadSample = {
+    ts: string;
+    futex_share: number;
+    run_share: number;
+    rq_share: number;
+    muxio_share: number;
+    aio_share: number;
+    uninterruptible_share: number;
+    vfs_share: number;
+};
+
 type ThreadProps = {
-    id: string,
-}
+    data: ThreadSample[];
+};
 
 type Response = {
-    type: string,
+    type: string;
     inner: ThreadProps | SocketProps | VFSProps;
-}
+};
 
 type NodeContextProps = {
     response: Response | null;
 };
 
-function ThreadView({ id }: ThreadProps) {
-    return <span>display thread: {id}</span>;
+import {
+    LineChart,
+    Line,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    Legend,
+    ResponsiveContainer,
+} from 'recharts';
+
+const metrics = [
+    { key: 'futex_share', color: '#8884d8' },
+    { key: 'run_share', color: '#ff8042' },
+    { key: 'rq_share', color: '#0088FE' },
+    { key: 'muxio_share', color: '#ffc658' },
+    { key: 'vfs_share', color: '#82ca9d' },
+    { key: 'aio_share', color: '#00C49F' },
+    { key: 'uninterruptible_share', color: '#FFBB28' },
+];
+
+function ThreadView({ data }: ThreadProps) {
+    return (
+        <div style={{ width: '100%', height: 400 }}>
+            <ResponsiveContainer>
+                <LineChart
+                    data={data}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                        dataKey="ts"
+                        tickFormatter={(timeStr) => timeStr.split(' ')[1]}
+                    />
+                    <YAxis
+                        tickFormatter={(val) => `${(val * 100).toFixed(0)}%`}
+                    />
+                    <Tooltip
+                        labelFormatter={(label) => `Time: ${label}`}
+                    />
+                    <Legend />
+
+                    {metrics.map((m) => (
+                        <Line
+                            key={m.key}
+                            type="monotone"
+                            dataKey={m.key}
+                            stroke={m.color}
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                        />
+                    ))}
+                </LineChart>
+            </ResponsiveContainer>
+        </div>
+    );
 }
 
 function NullView() {
@@ -26,7 +92,7 @@ function NullView() {
 
 export function NodeContext({ response }: NodeContextProps) {
     const [responseValue, setResponseValue] = useState<null | string>(null);
-    const [view, setView] = useState(<NullView/>);
+    const [view, setView] = useState(<NullView />);
 
     useEffect(() => {
         if (response === null) {
@@ -42,11 +108,11 @@ export function NodeContext({ response }: NodeContextProps) {
         const responseType = response.type;
         const responseInner = response.inner;
         switch (responseType) {
-            case "thread": 
-                setView(<ThreadView {...responseInner as ThreadProps}/>);
+            case 'thread':
+                setView(<ThreadView data={responseInner as ThreadProps} />);
                 break;
-            default: 
-                setView(<NullView/>);
+            default:
+                setView(<NullView />);
         }
     }, [response]);
 

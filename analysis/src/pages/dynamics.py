@@ -11,23 +11,34 @@ from src.components.thread_dynamics import thread_dynamics
 from src.variables import template_variables
 
 
+SQL_DIR = Path(__file__).parent / "../sql"
+
+
 def store_value(key):
     st.session_state[key] = st.session_state["_"+key]
 
 def load_value(key):
     st.session_state["_"+key] = st.session_state.get(key)
 
-def request_handler_thread(request_arg): 
-    return {
-        "type": "thread",
-        "inner": {
-            "id": request_arg
-        }
-    }
+def request_handler_thread(machine_id, tid): 
+    db = st.session_state.db
 
-def request_dispatcher(request_type, request_arg):
+    tid_filter = f"(machine_id = {machine_id} AND tid = {tid})"
+    query_template = Template((SQL_DIR / "thread_dynamics/thread_view.sql").read_text())
+    query = query_template.render({ "tid_filter": tid_filter })
+    result = db.custom_query(query)
+    result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
+
+    res = {
+        "type": "thread",
+        "inner": result.to_dict(orient="records")
+
+    }
+    return res
+
+def request_dispatcher(machine_id,request_type, request_arg):
     if request_type == "thread":
-        return request_handler_thread(request_arg) 
+        return request_handler_thread(machine_id, request_arg) 
     else:
         return {
             "type": request_type,
@@ -37,11 +48,12 @@ def request_dispatcher(request_type, request_arg):
         }
 
 
-def on_request_cb():
-    graph_element_id = st.session_state["thread_dynamics_state"]["request"]
-    request_type, request_arg = re.search(r"^(\w+)-([\w-]+)$", graph_element_id).groups()
-    
-    st.session_state["thread_dynamics_state"]["response"] = request_dispatcher(request_type, request_arg)
+def on_request_cb(machine_id):
+    def cb():
+        graph_element_id = st.session_state["thread_dynamics_state"]["request"]
+        request_type, request_arg = re.search(r"^(\w+)-(.*)$", graph_element_id).groups()
+        st.session_state["thread_dynamics_state"]["response"] = request_dispatcher(machine_id, request_type, request_arg)
+    return cb
 
 if "dynamics_init" not in st.session_state: 
     st.session_state.service_index = None
@@ -65,7 +77,6 @@ def main():
 
         return
 
-    sql_dir = Path(__file__).parent / "../sql"
     db = st.session_state.db
     graph = st.session_state.ripple_graph
     services = [node for node, attr in graph.nodes().data() if attr["machine"] != -1]
@@ -85,7 +96,7 @@ def main():
     machine_id, pid = node["machine"], node["pid"]
     pid_filter = f"((machine_id = {machine_id}) AND (pid = {pid}))"
 
-    query_template = Template((sql_dir / "dynamics_edges.sql").read_text())
+    query_template = Template((SQL_DIR / "dynamics_edges.sql").read_text())
 
     query = query_template.render({**template_variables(), "pid_filter": pid_filter, "pid": pid, "machine_id": machine_id})
     result = db.custom_query(query)
@@ -95,12 +106,7 @@ def main():
     edges.sort(key=lambda x: (x["source"], x["target"], x["edge_type"]))
 
     graph_data = {"nodes": nodes, "edges": edges}
-    result = thread_dynamics(graph_data, on_request_cb, key="thread_dynamics_state")
-    # request = result.get("request")
-    # if request:
-    #     st.session_state["thread_dynamics_state"]["response"] = f"Requested {request}"
-    # print(result)
-
+    result = thread_dynamics(graph_data, on_request_cb(machine_id), key="thread_dynamics_state")
 
 
 st.set_page_config(page_title="Thread Dynamics", layout="wide")
