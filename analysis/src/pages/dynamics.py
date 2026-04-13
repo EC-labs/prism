@@ -20,12 +20,13 @@ def store_value(key):
 def load_value(key):
     st.session_state["_"+key] = st.session_state.get(key)
 
-def request_handler_thread(machine_id, tid): 
+def request_handler_thread(machine_id, pid, tid): 
     db = st.session_state.db
 
+    pid_filter = f"(machine_id = {machine_id} AND pid = {pid})"
     tid_filter = f"(machine_id = {machine_id} AND tid = {tid})"
     query_template = Template((SQL_DIR / "thread_dynamics/thread_view.sql").read_text())
-    query = query_template.render({ "tid_filter": tid_filter })
+    query = query_template.render({ "tid_filter": tid_filter, "pid_filter": pid_filter})
     result = db.custom_query(query)
     result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
 
@@ -36,9 +37,9 @@ def request_handler_thread(machine_id, tid):
     }
     return res
 
-def request_dispatcher(machine_id,request_type, request_arg):
+def request_dispatcher(machine_id, pid, request_type, request_arg):
     if request_type == "thread":
-        return request_handler_thread(machine_id, request_arg) 
+        return request_handler_thread(machine_id, pid, request_arg) 
     else:
         return {
             "type": request_type,
@@ -48,11 +49,11 @@ def request_dispatcher(machine_id,request_type, request_arg):
         }
 
 
-def on_request_cb(machine_id):
+def on_request_cb(machine_id, pid):
     def cb():
         graph_element_id = st.session_state["thread_dynamics_state"]["request"]
         request_type, request_arg = re.search(r"^(\w+)-(.*)$", graph_element_id).groups()
-        st.session_state["thread_dynamics_state"]["response"] = request_dispatcher(machine_id, request_type, request_arg)
+        st.session_state["thread_dynamics_state"]["response"] = request_dispatcher(machine_id, pid, request_type, request_arg)
     return cb
 
 if "dynamics_init" not in st.session_state: 
@@ -106,7 +107,7 @@ def main():
     edges.sort(key=lambda x: (x["source"], x["target"], x["edge_type"]))
 
     graph_data = {"nodes": nodes, "edges": edges}
-    result = thread_dynamics(graph_data, on_request_cb(machine_id), key="thread_dynamics_state")
+    result = thread_dynamics(graph_data, on_request_cb(machine_id, pid), key="thread_dynamics_state")
 
 
 st.set_page_config(page_title="Thread Dynamics", layout="wide")

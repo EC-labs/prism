@@ -5,7 +5,8 @@ type VFSProps = string;
 
 type ThreadSample = {
     ts: string;
-    futex_share: number;
+    contention_share: number;
+    schedule_share: number;
     run_share: number;
     rq_share: number;
     muxio_share: number;
@@ -38,14 +39,15 @@ import {
     ResponsiveContainer,
 } from 'recharts';
 
-const metrics = [
-    { key: 'futex_share', color: '#8884d8' },
-    { key: 'run_share', color: '#ff8042' },
-    { key: 'rq_share', color: '#0088FE' },
-    { key: 'muxio_share', color: '#ffc658' },
-    { key: 'vfs_share', color: '#82ca9d' },
-    { key: 'aio_share', color: '#00C49F' },
-    { key: 'uninterruptible_share', color: '#FFBB28' },
+const metricsOrder = [
+    'contention_share',
+    'rq_share',
+    'uninterruptible_share',
+    'vfs_share',
+    'run_share',
+    'muxio_share',
+    'aio_share',
+    'schedule_share',
 ];
 
 function ThreadView({ data }: ThreadProps) {
@@ -65,27 +67,34 @@ function ThreadView({ data }: ThreadProps) {
                         domain={[0, 1]}
                         tickFormatter={(val) => `${(val * 100).toFixed(0)}%`}
                         allowDataOverflow={true}
-                        ticks={[0, 0.25, 0.5, 0.75, 1]} 
+                        ticks={[0, 0.25, 0.5, 0.75, 1]}
                     />
                     <Tooltip
                         labelFormatter={(label) => `Time: ${label}`}
+                        itemSorter={(item) => {
+                            return metricsOrder.indexOf(item.dataKey);
+                        }}
                         contentStyle={{
                             backgroundColor: 'rgba(255, 255, 255, 0.1)',
                             border: 'none',
                             borderRadius: '8px',
                             backdropFilter: 'blur(4px)',
-                            color: '#fff'
+                            color: '#fff',
                         }}
                         itemStyle={{ color: '#fff' }}
                     />
-                    <Legend />
+                    <Legend
+                        itemSorter={(item) => {
+                            return metricsOrder.indexOf(item.dataKey);
+                        }}
+                    />
 
-                    {metrics.map((m) => (
+                    {metricsOrder.map((m) => (
                         <Line
-                            key={m.key}
+                            key={m}
                             type="monotone"
-                            dataKey={m.key}
-                            stroke={m.color}
+                            dataKey={m}
+                            stroke={`hsl(${metricsOrder.indexOf(m) * (360 / (metricsOrder.length + 1))}, 100%, 50%)`}
                             strokeWidth={2}
                             dot={false}
                             activeDot={{ r: 4 }}
