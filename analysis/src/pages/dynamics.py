@@ -34,6 +34,19 @@ def request_handler_contention(machine_id, pid, vfkey):
     }
     return res
 
+def request_handler_disk(machine_id, pid, part0): 
+    db = st.session_state.db
+    pid_filter = f"(machine_id = {machine_id} AND pid = {pid})"
+    query_template = Template((SQL_DIR / "thread_dynamics/disk_view.sql").read_text())
+    query = query_template.render({**template_variables(), "part0": part0, "pid_filter": pid_filter})
+    result = db.custom_query(query)
+    result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
+    res = {
+        "type": "disk",
+        "inner": result.pivot(index="ts", columns="tid", values="sectors").replace({np.nan: 0}).reset_index().to_dict(orient="records")
+    }
+    return res
+
 def request_handler_thread(machine_id, pid, tid): 
     db = st.session_state.db
 
@@ -56,6 +69,8 @@ def request_dispatcher(machine_id, pid, request_type, request_arg):
         return request_handler_thread(machine_id, pid, request_arg) 
     elif request_type == "contention":
         return request_handler_contention(machine_id, pid, request_arg)
+    elif request_type == "disk":
+        return request_handler_disk(machine_id, pid, request_arg)
     else:
         return {
             "type": request_type,

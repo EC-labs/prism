@@ -110,7 +110,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
                                 fontFamily: 'monospace',
                             }}
                         >
-                            {(entry.value * 100).toFixed(2)}%
+                            {entry.value.toFixed(3)}
                         </span>
                     </div>
                 ))}
@@ -173,6 +173,54 @@ const renderScrollableLegend = (props: any) => {
         </div>
     );
 };
+
+function DiskView({ data }: { data: any[] }) {
+    const tids = useMemo(() => {
+        if (!data || data.length === 0) return [];
+        return Object.keys(data[0]).filter((key) => key !== 'ts');
+    }, [data]);
+
+    return (
+        <div style={{ width: '100%', height: 400 }}>
+            <ResponsiveContainer>
+                <LineChart
+                    data={data}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                >
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        vertical={false}
+                        stroke="#444"
+                    />
+                    <XAxis
+                        dataKey="ts"
+                        tickFormatter={(timeStr) => timeStr.split(' ')[1]}
+                        stroke="#888"
+                    />
+                    <YAxis stroke="#888" />
+
+                    <Tooltip content={<CustomTooltip />} />
+
+                    <Legend content={renderScrollableLegend} />
+
+                    {tids.map((tid, index) => (
+                        <Line
+                            key={tid}
+                            name={tid}
+                            type="monotone"
+                            dataKey={tid}
+                            stroke={`hsl(${(index * 137.5) % 360}, 70%, 60%)`}
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                            connectNulls
+                        />
+                    ))}
+                </LineChart>
+            </ResponsiveContainer>
+        </div>
+    );
+}
 
 function ContentionView({ data }: { data: any[] }) {
     const tids = useMemo(() => {
@@ -312,6 +360,9 @@ export function NodeContext({ response }: NodeContextProps) {
                 setView(
                     <ContentionView data={responseInner as ContentionProps} />
                 );
+                break;
+            case 'disk':
+                setView(<DiskView data={responseInner as ContentionProps} />);
                 break;
             default:
                 setView(<NullView />);
