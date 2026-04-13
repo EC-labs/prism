@@ -62,10 +62,21 @@ function ThreadView({ data }: ThreadProps) {
                         tickFormatter={(timeStr) => timeStr.split(' ')[1]}
                     />
                     <YAxis
+                        domain={[0, 1]}
                         tickFormatter={(val) => `${(val * 100).toFixed(0)}%`}
+                        allowDataOverflow={true}
+                        ticks={[0, 0.25, 0.5, 0.75, 1]} 
                     />
                     <Tooltip
                         labelFormatter={(label) => `Time: ${label}`}
+                        contentStyle={{
+                            backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                            border: 'none',
+                            borderRadius: '8px',
+                            backdropFilter: 'blur(4px)',
+                            color: '#fff'
+                        }}
+                        itemStyle={{ color: '#fff' }}
                     />
                     <Legend />
 
