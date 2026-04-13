@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 type SocketProps = string;
 type VFSProps = string;
@@ -17,6 +17,15 @@ type ThreadSample = {
 
 type ThreadProps = {
     data: ThreadSample[];
+};
+
+// keys are either ts: string or {tid: number}: number | null
+type ContentionSample = {
+    [key: string | number]: string | number | null;
+};
+
+type ContentionProps = {
+    data: ContentionSample[];
 };
 
 type Response = {
@@ -49,6 +58,174 @@ const metricsOrder = [
     'aio_share',
     'schedule_share',
 ];
+
+const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+        const topTen = [...payload]
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 10);
+
+        return (
+            <div
+                style={{
+                    border: '1px solid #555',
+                    padding: '12px',
+                    color: '#fff',
+                    boxShadow: '0 4px 10px rgba(0,0,0,0.5)',
+                    minWidth: '180px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                    borderRadius: '8px',
+                    backdropFilter: 'blur(4px)',
+                }}
+            >
+                <p
+                    style={{
+                        margin: '0 0 8px 0',
+                        fontWeight: 'bold',
+                        borderBottom: '1px solid #555',
+                        fontSize: '13px',
+                        paddingBottom: '4px',
+                    }}
+                >
+                    {`Time: ${label}`}
+                </p>
+
+                {topTen.map((entry: any, index: number) => (
+                    <div
+                        key={`item-${index}`}
+                        style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: '20px',
+                            fontSize: '12px',
+                            marginBottom: '4px',
+                        }}
+                    >
+                        <span style={{ color: entry.color }}>
+                            TID {entry.name}:
+                        </span>
+                        <span
+                            style={{
+                                fontWeight: 'bold',
+                                fontFamily: 'monospace',
+                            }}
+                        >
+                            {(entry.value * 100).toFixed(2)}%
+                        </span>
+                    </div>
+                ))}
+
+                {payload.length > 10 && (
+                    <div
+                        style={{
+                            fontSize: '10px',
+                            color: '#888',
+                            textAlign: 'center',
+                            marginTop: '8px',
+                            fontStyle: 'italic',
+                        }}
+                    >
+                        + {payload.length - 10} more threads
+                    </div>
+                )}
+            </div>
+        );
+    }
+    return null;
+};
+
+const renderScrollableLegend = (props: any) => {
+    const { payload } = props;
+
+    return (
+        <div
+            style={{
+                display: 'flex',
+                flexDirection: 'row',
+                overflowY: 'auto',
+                paddingLeft: '10px',
+                scrollbarWidth: 'thin',
+                fontSize: '12px',
+            }}
+        >
+            {payload.map((entry: any, index: number) => (
+                <div
+                    key={`item-${index}`}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        marginBottom: '4px',
+                    }}
+                >
+                    <div
+                        style={{
+                            width: 12,
+                            height: 12,
+                            backgroundColor: entry.color,
+                            marginLeft: 8,
+                            marginRight: 2,
+                            borderRadius: '2px',
+                        }}
+                    />
+                    <span style={{ color: '#ccc' }}>{entry.value}</span>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+function ContentionView({ data }: { data: any[] }) {
+    const tids = useMemo(() => {
+        if (!data || data.length === 0) return [];
+        return Object.keys(data[0]).filter((key) => key !== 'ts');
+    }, [data]);
+
+    return (
+        <div style={{ width: '100%', height: 400 }}>
+            <ResponsiveContainer>
+                <LineChart
+                    data={data}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                >
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        vertical={false}
+                        stroke="#444"
+                    />
+                    <XAxis
+                        dataKey="ts"
+                        tickFormatter={(timeStr) => timeStr.split(' ')[1]}
+                        stroke="#888"
+                    />
+                    <YAxis
+                        domain={[0, 1]}
+                        tickFormatter={(val) => `${(val * 100).toFixed(0)}%`}
+                        stroke="#888"
+                    />
+
+                    {/* The Scrollable Tooltip */}
+                    <Tooltip content={<CustomTooltip />} />
+
+                    <Legend content={renderScrollableLegend} />
+
+                    {tids.map((tid, index) => (
+                        <Line
+                            key={tid}
+                            name={tid}
+                            type="monotone"
+                            dataKey={tid}
+                            stroke={`hsl(${(index * 137.5) % 360}, 70%, 60%)`}
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                            connectNulls
+                        />
+                    ))}
+                </LineChart>
+            </ResponsiveContainer>
+        </div>
+    );
+}
 
 function ThreadView({ data }: ThreadProps) {
     return (
@@ -89,12 +266,12 @@ function ThreadView({ data }: ThreadProps) {
                         }}
                     />
 
-                    {metricsOrder.map((m) => (
+                    {metricsOrder.map((m, index) => (
                         <Line
                             key={m}
                             type="monotone"
                             dataKey={m}
-                            stroke={`hsl(${metricsOrder.indexOf(m) * (360 / (metricsOrder.length + 1))}, 100%, 50%)`}
+                            stroke={`hsl(${index * (360 / (metricsOrder.length + 1))}, 70%, 60%)`}
                             strokeWidth={2}
                             dot={false}
                             activeDot={{ r: 4 }}
@@ -130,6 +307,11 @@ export function NodeContext({ response }: NodeContextProps) {
         switch (responseType) {
             case 'thread':
                 setView(<ThreadView data={responseInner as ThreadProps} />);
+                break;
+            case 'contention':
+                setView(
+                    <ContentionView data={responseInner as ContentionProps} />
+                );
                 break;
             default:
                 setView(<NullView />);

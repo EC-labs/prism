@@ -112,12 +112,12 @@ export const LoadGraph = ({
     const loadGraph = useLoadGraph();
     const registerEvents = useRegisterEvents();
     const sigma = useSigma();
-    const [draggedNode, setDraggedNode] = useState<string | null>(null);
+    // const [draggedNode, setDraggedNode] = useState<string | null>(null);
 
     useEffect(() => {
         registerEvents({
             downNode: (e) => {
-                setDraggedNode(e.node);
+                // setDraggedNode(e.node);
                 const graph = sigma.getGraph();
                 setStateValue('request', e.node);
                 document.body.style.cursor = 'grabbing';
@@ -196,23 +196,21 @@ export const LoadGraph = ({
             },
 
             mousemovebody: (e) => {
-                if (!draggedNode) return;
-
-                const pos = sigma.viewportToGraph(e);
-                sigma.getGraph().setNodeAttribute(draggedNode, 'x', pos.x);
-                sigma.getGraph().setNodeAttribute(draggedNode, 'y', pos.y);
-
+                // if (!draggedNode) return;
+                // const pos = sigma.viewportToGraph(e);
+                // sigma.getGraph().setNodeAttribute(draggedNode, 'x', pos.x);
+                // sigma.getGraph().setNodeAttribute(draggedNode, 'y', pos.y);
                 // Prevent sigma to move camera
-                e.preventSigmaDefault();
-                e.original.preventDefault();
-                e.original.stopPropagation();
+                // e.preventSigmaDefault();
+                // e.original.preventDefault();
+                // e.original.stopPropagation();
             },
 
             mouseup: () => {
-                if (draggedNode) {
-                    setDraggedNode(null);
-                    document.body.style.cursor = 'default';
-                }
+                // if (draggedNode) {
+                //     setDraggedNode(null);
+                //     document.body.style.cursor = 'default';
+                // }
             },
 
             // Disable the autoscale at the first down interaction
@@ -222,18 +220,18 @@ export const LoadGraph = ({
             },
 
             enterNode: (e) => {
-                if (!draggedNode) {
-                    document.body.style.cursor = 'grab';
-                }
+                // if (!draggedNode) {
+                //     document.body.style.cursor = 'grab';
+                // }
 
                 const graph = sigma.getGraph();
                 graph.setNodeAttribute(e.node, 'label', e.node);
             },
 
             leaveNode: (e) => {
-                if (!draggedNode) {
-                    document.body.style.cursor = 'default';
-                }
+                // if (!draggedNode) {
+                //     document.body.style.cursor = 'default';
+                // }
 
                 const graph = sigma.getGraph();
                 graph.setNodeAttribute(e.node, 'label', undefined);
@@ -243,7 +241,7 @@ export const LoadGraph = ({
         return () => {
             document.body.style.cursor = 'default';
         };
-    }, [registerEvents, sigma, draggedNode]);
+    }, [registerEvents, sigma]); // [registerEvents, sigma, draggedNode]
 
     useEffect(() => {
         if (!graphData?.nodes?.length) return;
