@@ -2,95 +2,99 @@ WITH
     sched_states AS (
         SELECT 
             tid, 
-            AVG(run_share) AS run_share, 
-            AVG(rq_share) AS rq_share, 
-            AVG(uninterruptible_share) AS uninterruptible_share,
-            AVG(interruptible_share) AS interruptible_share
+            date_trunc('second', ts) AS ts,
+            run_share AS run_share, 
+            rq_share AS rq_share, 
+            uninterruptible_share AS uninterruptible_share,
+            interruptible_share AS interruptible_share
         FROM taskstats_view
-        WHERE pid = 1337657
-        GROUP BY tid
+        WHERE {{ pid_filter }}
     ),
     futex_state AS (
         SELECT
-            tid, AVG(total_time/1e9) as futex_share
+            tid, 
+            date_trunc('second', ts_s) AS ts,
+            total_time as futex_share
         FROM (
-            SELECT ts_s, tid, SUM(total_time) as total_time
+            SELECT ts_s, tid, SUM(total_time)/1e9 as total_time
             FROM futex_wait
-            WHERE pid = 1337657
+            WHERE {{ pid_filter }}
             GROUP BY ts_s, tid
         )
-        GROUP BY tid
     ),
     vfs_state AS (
-        SELECT 
-            tid, AVG(total_time/1e9) as vfs_share    
-        FROM (    
-            SELECT ts_s, tid, SUM(total_time) as total_time
+        SELECT
+            tid, 
+            date_trunc('second', ts_s) AS ts, 
+            total_time as vfs_share
+        FROM (
+            SELECT ts_s, tid, SUM(total_time)/1e9 as total_time
             FROM vfs
-            WHERE pid = 1337657
+            WHERE {{ pid_filter }}
             GROUP BY ts_s, tid
         )
-        GROUP BY tid
     ),
     muxio_state AS (
         SELECT
-            tid, AVG(total_time/1e9) as muxio_share
+            tid, 
+            date_trunc('second', ts_s) AS ts, 
+            total_time as muxio_share
         FROM (
-            SELECT ts_s, tid, SUM(total_time) as total_time
+            SELECT ts_s, tid, SUM(total_time)/1e9 as total_time
             FROM muxio_wait
-            WHERE pid = 1337657
+            WHERE {{ pid_filter }}
             GROUP BY ts_s, tid
         )
-        GROUP BY tid
     ),
     aio_state AS (
         SELECT
-            tid, AVG(total_time/1e9) as aio_share
+            tid, 
+            date_trunc('second', ts_s) AS ts, 
+            total_time as aio_share
         FROM (
-            SELECT ts_s, tid, SUM(total_time) as total_time
+            SELECT ts_s, tid, SUM(total_time)/1e9 as total_time
             FROM aio_getevents
-            WHERE pid = 1337657
+            WHERE {{ pid_filter }}
             GROUP BY ts_s, tid
         )
-        GROUP BY tid
     ),
     thread_states AS (
         SELECT 
-            tid,
-            ss.run_share,
-            ss.rq_share, 
-            ss.uninterruptible_share,
-            CASE WHEN fs.futex_share IS NOT NULL THEN
-                fs.futex_share
-            ELSE                    0
-            END AS futex_share, 
-            CASE WHEN vs.vfs_share IS NOT NULL THEN
-                vs.vfs_share
-            ELSE
-                0
-            END AS vfs_share,
-            CASE WHEN ms.muxio_share IS NOT NULL THEN
-                ms.muxio_share
-            ELSE
-                0
-            END AS muxio_share,
-            CASE WHEN aio.aio_share IS NOT NULL THEN
-                aio.aio_share
-            ELSE
-                0
-            END AS aio_share
-        FROM sched_states ss
-        LEFT JOIN futex_state fs 
-            USING (tid)
-        LEFT JOIN vfs_state vs 
-            USING (tid)
-        LEFT JOIN muxio_state ms 
-            USING (tid)
-        LEFT JOIN aio_state aio 
-            USING (tid)
+            *,
+            run_share + rq_share + uninterruptible_share + futex_share + vfs_share + muxio_share + aio_share as total
+        FROM (
+            SELECT 
+                tid, 
+                ts, 
+                COALESCE(run_share, 0) AS run_share,
+                COALESCE(rq_share, 0) AS rq_share,
+                COALESCE(uninterruptible_share, 0) AS uninterruptible_share,
+                COALESCE(interruptible_share, 0) AS interruptible_share,
+                COALESCE(futex_share, 0) AS futex_share,
+                COALESCE(vfs_share, 0) AS vfs_share,
+                COALESCE(muxio_share, 0) AS muxio_share,
+                COALESCE(aio_share, 0) AS aio_share
+            FROM sched_states
+            FULL JOIN futex_state
+                USING (tid, ts)
+            FULL JOIN vfs_state
+                USING (tid, ts)
+            FULL JOIN muxio_state
+                USING (tid, ts)
+            FULL JOIN aio_state
+                USING (tid, ts)
+        )
     )
 SELECT 
-    *,
-    run_share + rq_share + uninterruptible_share + futex_share + vfs_share + muxio_share + aio_share AS total_time 
+    tid, 
+    AVG(run_share) AS run_share, 
+    AVG(rq_share) AS rq_share, 
+    AVG(uninterruptible_share) AS uninterruptible_share, 
+    AVG(futex_share) AS futex_share, 
+    AVG(vfs_share) AS vfs_share, 
+    AVG(muxio_share) AS muxio_share, 
+    AVG(aio_share) AS aio_share, 
+    AVG(total) AS total
 FROM thread_states
-ORDER BY total_time DESC, tid ASC
+GROUP BY tid
+ORDER BY total DESC
