@@ -103,8 +103,24 @@ WITH
     FROM process_context pc
     LEFT JOIN docker d USING (machine_id, cgroup)
     LEFT JOIN k8s k USING(machine_id, cgroup)
-    RIGHT JOIN 
-        (SELECT DISTINCT machine_id, pid, tid, comm from taskstats where pid = tid) tv 
+    RIGHT JOIN (
+        SELECT DISTINCT machine_id, pid, tid, comm FROM (
+            SELECT 
+                machine_id, 
+                pid,
+                tid, 
+                comm, 
+                ROW_NUMBER() OVER(PARTITION BY machine_id, pid, tid ORDER BY ts DESC) AS rn
+            FROM (
+                SELECT 
+                    machine_id, pid, tid, comm, max(ts) AS ts
+                FROM taskstats 
+                WHERE pid = tid 
+                GROUP BY machine_id, pid, tid, comm
+            )
+        )
+        WHERE rn = 1 
+    ) tv 
         ON (pc.pid = tv.pid) and (pc.pid = tv.tid) and (pc.machine_id = tv.machine_id)
   ),
   -- pids that do not have any connections to other processes
