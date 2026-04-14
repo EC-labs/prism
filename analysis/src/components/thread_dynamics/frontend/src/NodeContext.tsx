@@ -20,12 +20,12 @@ type ThreadProps = {
 };
 
 // keys are either ts: string or {tid: number}: number | null
-type ContentionSample = {
+type FutexSample = {
     [key: string | number]: string | number | null;
 };
 
-type ContentionProps = {
-    data: ContentionSample[];
+type FutexProps = {
+    data: FutexSample[];
 };
 
 type Response = {
@@ -110,7 +110,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
                                 fontFamily: 'monospace',
                             }}
                         >
-                            {entry.value.toFixed(3)}
+                            {entry.value.toFixed(5)}
                         </span>
                     </div>
                 ))}
@@ -378,7 +378,7 @@ function VfsView({ data }: { data: any[] }) {
     );
 }
 
-function ContentionView({ data }: { data: any[] }) {
+function FutexView({ data }: { data: any[] }) {
     const tids = useMemo(() => {
         if (!data || data.length === 0) return [];
         return Object.keys(data[0]).filter((key) => key !== 'ts');
@@ -512,10 +512,8 @@ export function NodeContext({ response }: NodeContextProps) {
             case 'thread':
                 setView(<ThreadView data={responseInner as ThreadProps} />);
                 break;
-            case 'contention':
-                setView(
-                    <ContentionView data={responseInner as ContentionProps} />
-                );
+            case 'futex':
+                setView(<FutexView data={responseInner as FutexProps} />);
                 break;
             case 'disk':
                 setView(<DiskView data={responseInner as any} />);

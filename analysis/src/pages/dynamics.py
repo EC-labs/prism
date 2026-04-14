@@ -20,16 +20,16 @@ def store_value(key):
 def load_value(key):
     st.session_state["_"+key] = st.session_state.get(key)
 
-def request_handler_contention(machine_id, pid, vfkey): 
+def request_handler_futex(machine_id, pid, vfkey): 
     db = st.session_state.db
 
     pid_filter = f"(machine_id = {machine_id} AND pid = {pid})"
-    query_template = Template((SQL_DIR / "thread_dynamics/contention_view.sql").read_text())
+    query_template = Template((SQL_DIR / "thread_dynamics/futex_view.sql").read_text())
     query = query_template.render({**template_variables(), "vfkey": vfkey, "pid_filter": pid_filter})
     result = db.custom_query(query)
     result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
     res = {
-        "type": "contention",
+        "type": "futex",
         "inner": result.pivot(index="ts", columns="tid", values="total_time").replace({np.nan: 0}).reset_index().to_dict(orient="records")
     }
     return res
@@ -107,7 +107,9 @@ def request_dispatcher(machine_id, pid, request_type, request_arg):
     if request_type == "thread":
         return request_handler_thread(machine_id, pid, request_arg) 
     elif request_type == "contention":
-        return request_handler_contention(machine_id, pid, request_arg)
+        return request_handler_futex(machine_id, pid, request_arg)
+    elif request_type == "schedule":
+        return request_handler_futex(machine_id, pid, request_arg)
     elif request_type == "disk":
         return request_handler_disk(machine_id, pid, request_arg)
     elif request_type == "inet":
