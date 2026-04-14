@@ -34,6 +34,35 @@ def request_handler_futex(machine_id, pid, vfkey):
     }
     return res
 
+def request_handler_external(machine_id, pid, ext): 
+    db = st.session_state.db
+
+    pid_filter = f"(machine_id = {machine_id} AND pid = {pid})"
+    query_template = Template((SQL_DIR / "thread_dynamics/external_view.sql").read_text())
+    query = query_template.render({**template_variables(), "ext": 'ext-' + ext})
+    result = db.custom_query(query)
+    result = result.melt(
+        id_vars=['machine_id', 'pid'], 
+        var_name='attribute', 
+        value_name='value'
+    ).replace({np.nan: None})
+    grouped = result.groupby(['machine_id', 'pid'])
+
+    serialized_data = []
+
+    for (m_id, pid), group in grouped:
+        # Create a list of attribute/value pairs for this specific process
+        attributes = group[['attribute', 'value']].to_dict(orient='records')
+        
+        serialized_data.append({
+            "machine_id": int(m_id),
+            "pid": int(pid),
+            "attributes": attributes
+        })
+    res = { "type": "ext", "inner": serialized_data }
+
+    return res
+
 def request_handler_disk(machine_id, pid, part0): 
     db = st.session_state.db
     pid_filter = f"(machine_id = {machine_id} AND pid = {pid})"
@@ -118,6 +147,8 @@ def request_dispatcher(machine_id, pid, request_type, request_arg):
         return request_handler_unix(machine_id, pid, request_arg)
     elif request_type == "vfs":
         return request_handler_vfs(machine_id, pid, request_arg)
+    elif request_type == "ext":
+        return request_handler_external(machine_id, pid, request_arg)
     else:
         return {
             "type": request_type,

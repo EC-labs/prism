@@ -59,6 +59,135 @@ const metricsOrder = [
     'schedule_share',
 ];
 
+const styles = {
+    container: {
+        flex: 1,
+        flexGrow: 1,
+        padding: '24px',
+        backgroundColor: '#0d1117',
+        color: '#c9d1d9',
+        fontFamily:
+            'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
+    },
+    tableHeader: {
+        fontSize: '14px',
+        fontWeight: '600',
+        marginBottom: '8px',
+        marginTop: '24px',
+        color: '#58a6ff',
+        display: 'flex',
+        gap: '12px',
+    },
+    table: {
+        width: '100%',
+        borderCollapse: 'separate',
+        borderSpacing: 0,
+        border: '1px solid #30363d',
+        borderRadius: '6px',
+        overflow: 'hidden',
+        marginBottom: '32px',
+    },
+    th: {
+        backgroundColor: '#161b22',
+        color: '#8b949e',
+        padding: '10px 16px',
+        textAlign: 'left',
+        fontSize: '11px',
+        textTransform: 'uppercase',
+        letterSpacing: '0.5px',
+        borderBottom: '1px solid #30363d',
+    },
+    td: {
+        padding: '8px 16px',
+        fontSize: '13px',
+        borderBottom: '1px solid #21262d',
+        verticalAlign: 'top',
+    },
+    attrCell: {
+        color: '#8b949e',
+        width: '25%',
+        backgroundColor: '#0d1117',
+    },
+    valueCell: {
+        width: '75%',
+    },
+    scrollContainer: {
+        maxHeight: '60px',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        wordBreak: 'break-all',
+        lineHeight: '1.4',
+        paddingRight: '4px',
+        fontSize: '12px',
+    },
+    nullValue: { color: '#484f58', fontStyle: 'italic' },
+};
+
+const ProcessTable = ({ data }) => {
+    return (
+        <div style={styles.container}>
+            <h1
+                style={{
+                    color: '#f0f6fc',
+                    fontSize: '22px',
+                    marginBottom: '10px',
+                }}
+            >
+                Process Attribute Manifest
+            </h1>
+
+            {data.map((process) => (
+                <div key={`${process.machine_id}-${process.pid}`}>
+                    <div style={styles.tableHeader}>
+                        <span>MACHINE_ID: {process.machine_id}</span>
+                        <span>PID: {process.pid}</span>
+                    </div>
+
+                    <table style={styles.table}>
+                        <thead>
+                            <tr>
+                                <th style={styles.th}>Attribute</th>
+                                <th style={styles.th}>Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {process.attributes
+                                .filter((attr) => attr.value !== null)
+                                .map((attr) => (
+                                    <tr
+                                        key={`${process.pid}-${attr.attribute}`}
+                                    >
+                                        <td
+                                            style={{
+                                                ...styles.td,
+                                                ...styles.attrCell,
+                                            }}
+                                        >
+                                            {attr.attribute}
+                                        </td>
+
+                                        <td
+                                            style={{
+                                                ...styles.td,
+                                                ...styles.valueCell,
+                                            }}
+                                        >
+                                            <div style={styles.scrollContainer}>
+                                                {
+                                                    attr.value
+                                                }
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                        </tbody>
+                    </table>
+                </div>
+            ))}
+        </div>
+    );
+};
+
 const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
         const topTen = [...payload]
@@ -175,6 +304,54 @@ const renderScrollableLegend = (props: any) => {
 };
 
 function DiskView({ data }: { data: any[] }) {
+    const tids = useMemo(() => {
+        if (!data || data.length === 0) return [];
+        return Object.keys(data[0]).filter((key) => key !== 'ts');
+    }, [data]);
+
+    return (
+        <div style={{ width: '100%', height: 400 }}>
+            <ResponsiveContainer>
+                <LineChart
+                    data={data}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                >
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        vertical={false}
+                        stroke="#444"
+                    />
+                    <XAxis
+                        dataKey="ts"
+                        tickFormatter={(timeStr) => timeStr.split(' ')[1]}
+                        stroke="#888"
+                    />
+                    <YAxis stroke="#888" />
+
+                    <Tooltip content={<CustomTooltip />} />
+
+                    <Legend content={renderScrollableLegend} />
+
+                    {tids.map((tid, index) => (
+                        <Line
+                            key={tid}
+                            name={tid}
+                            type="monotone"
+                            dataKey={tid}
+                            stroke={`hsl(${(index * 137.5) % 360}, 70%, 60%)`}
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                            connectNulls
+                        />
+                    ))}
+                </LineChart>
+            </ResponsiveContainer>
+        </div>
+    );
+}
+
+function ExternalView({ data }: { data: any[] }) {
     const tids = useMemo(() => {
         if (!data || data.length === 0) return [];
         return Object.keys(data[0]).filter((key) => key !== 'ts');
@@ -526,6 +703,9 @@ export function NodeContext({ response }: NodeContextProps) {
                 break;
             case 'vfs':
                 setView(<VfsView data={responseInner as any} />);
+                break;
+            case 'ext':
+                setView(<ProcessTable data={responseInner as any} />);
                 break;
             default:
                 setView(<NullView />);

@@ -351,7 +351,7 @@ UNION ALL
 
 SELECT DISTINCT
     'inet-' || vinet AS source,
-    'ext-' || dst_address AS target,
+    'extip-' || dst_address AS target,
     'undirected' AS edge_type
 FROM inet_mapping_vinet s
 WHERE

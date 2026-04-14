@@ -55,6 +55,7 @@ interface GraphData {
 
 const NODE_COLORS: Record<string, string> = {
     ext: '#F1E0FF',
+    extip: '#F1E0FF',
 };
 
 const NODE_TYPES: Record<string, string> = {
@@ -67,6 +68,7 @@ const NODE_TYPES: Record<string, string> = {
     vfs: 'image',
     thread: 'border',
     ext: 'border',
+    extip: 'border',
 };
 
 const ICON_TYPES: Record<string, string> = {
