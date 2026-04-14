@@ -274,6 +274,58 @@ function InetView({ data }: { data: any[] }) {
     );
 }
 
+function UnixView({ data }: { data: any[] }) {
+    const tids = useMemo(() => {
+        if (!data || data.length === 0) return [];
+        return Object.keys(data[0]).filter((key) => key !== 'ts');
+    }, [data]);
+
+    return (
+        <div style={{ width: '100%', height: 400 }}>
+            <ResponsiveContainer>
+                <LineChart
+                    data={data}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                >
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        vertical={false}
+                        stroke="#444"
+                    />
+                    <XAxis
+                        dataKey="ts"
+                        tickFormatter={(timeStr) => timeStr.split(' ')[1]}
+                        stroke="#888"
+                    />
+                    <YAxis
+                        tickFormatter={(val) => `${(val * 100).toFixed(0)}%`}
+                        domain={[0, 1]}
+                        stroke="#888"
+                    />
+
+                    <Tooltip content={<CustomTooltip />} />
+
+                    <Legend content={renderScrollableLegend} />
+
+                    {tids.map((tid, index) => (
+                        <Line
+                            key={tid}
+                            name={tid}
+                            type="monotone"
+                            dataKey={tid}
+                            stroke={`hsl(${(index * 137.5) % 360}, 70%, 60%)`}
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                            connectNulls
+                        />
+                    ))}
+                </LineChart>
+            </ResponsiveContainer>
+        </div>
+    );
+}
+
 function ContentionView({ data }: { data: any[] }) {
     const tids = useMemo(() => {
         if (!data || data.length === 0) return [];
@@ -418,6 +470,9 @@ export function NodeContext({ response }: NodeContextProps) {
                 break;
             case 'inet':
                 setView(<InetView data={responseInner as any} />);
+                break;
+            case 'unix':
+                setView(<UnixView data={responseInner as any} />);
                 break;
             default:
                 setView(<NullView />);
