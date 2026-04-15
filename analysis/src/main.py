@@ -5,6 +5,7 @@ def main():
         st.Page("pages/home.py", title="Home"),
         st.Page("pages/kpi.py", title="KPI"),
         st.Page("pages/ripple.py", title="Ripple"),
+        st.Page("pages/dynamics.py", title="Dynamics"),
         st.Page("pages/debug.py", title="Debug"),
     ]
 
