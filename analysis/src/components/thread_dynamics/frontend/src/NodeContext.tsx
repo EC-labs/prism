@@ -188,6 +188,102 @@ const ProcessTable = ({ data }) => {
     );
 };
 
+const network_styles = {
+    container: {
+        flex: 1,
+        flexGrow: 1,
+        padding: '24px',
+        backgroundColor: '#0d1117',
+        color: '#c9d1d9',
+        fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
+    },
+    table: {
+        width: '100%',
+        borderCollapse: 'separate',
+        borderSpacing: 0,
+        border: '1px solid #30363d',
+        borderRadius: '6px',
+        overflow: 'hidden',
+        marginBottom: '32px',
+    },
+    th: {
+        backgroundColor: '#161b22',
+        color: '#8b949e',
+        padding: '12px 16px',
+        textAlign: 'left',
+        fontSize: '11px',
+        textTransform: 'uppercase',
+        letterSpacing: '0.5px',
+        borderBottom: '1px solid #30363d',
+        whiteSpace: 'nowrap',
+    },
+    td: {
+        padding: '10px 16px',
+        fontSize: '13px',
+        borderBottom: '1px solid #21262d',
+        verticalAlign: 'middle',
+    },
+    // Distinctive color for IP addresses and Ports
+    addressText: {
+        color: '#58a6ff',
+        fontWeight: '500',
+    },
+    protocolText: {
+        color: '#7ee787', // Green for protocols/types
+    }
+};
+
+const NetworkTable = ({ data }) => {
+    if (!data || data.length === 0) return null;
+
+    // Dynamically get column headers from the keys of the first object
+    const columns = Object.keys(data[0]);
+
+    return (
+        <div style={network_styles.container}>
+            <h1 style={{ color: '#f0f6fc', fontSize: '22px', marginBottom: '10px' }}>
+                Network Connections Manifest
+            </h1>
+
+            <table style={network_styles.table}>
+                <thead>
+                    <tr>
+                        {columns.map((col) => (
+                            <th key={col} style={network_styles.th}>
+                                {col.replace('_', ' ')}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {data.map((row, rowIndex) => (
+                        <tr key={rowIndex}>
+                            {columns.map((col) => {
+                                const value = row[col];
+                                
+                                // Apply specific styling based on column name for better UX
+                                let customStyle = {};
+                                if (col.includes('address')) customStyle = network_styles.addressText;
+                                if (col.includes('protocol') || col.includes('family')) customStyle = network_styles.protocolText;
+
+                                return (
+                                    <td key={col} style={{ ...network_styles.td, ...customStyle }}>
+                                        {value === null ? (
+                                            <span style={{ color: '#484f58', fontStyle: 'italic' }}>null</span>
+                                        ) : (
+                                            value.toString()
+                                        )}
+                                    </td>
+                                );
+                            })}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+};
+
 const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
         const topTen = [...payload]
@@ -304,54 +400,6 @@ const renderScrollableLegend = (props: any) => {
 };
 
 function DiskView({ data }: { data: any[] }) {
-    const tids = useMemo(() => {
-        if (!data || data.length === 0) return [];
-        return Object.keys(data[0]).filter((key) => key !== 'ts');
-    }, [data]);
-
-    return (
-        <div style={{ width: '100%', height: 400 }}>
-            <ResponsiveContainer>
-                <LineChart
-                    data={data}
-                    margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
-                >
-                    <CartesianGrid
-                        strokeDasharray="3 3"
-                        vertical={false}
-                        stroke="#444"
-                    />
-                    <XAxis
-                        dataKey="ts"
-                        tickFormatter={(timeStr) => timeStr.split(' ')[1]}
-                        stroke="#888"
-                    />
-                    <YAxis stroke="#888" />
-
-                    <Tooltip content={<CustomTooltip />} />
-
-                    <Legend content={renderScrollableLegend} />
-
-                    {tids.map((tid, index) => (
-                        <Line
-                            key={tid}
-                            name={tid}
-                            type="monotone"
-                            dataKey={tid}
-                            stroke={`hsl(${(index * 137.5) % 360}, 70%, 60%)`}
-                            strokeWidth={2}
-                            dot={false}
-                            activeDot={{ r: 4 }}
-                            connectNulls
-                        />
-                    ))}
-                </LineChart>
-            </ResponsiveContainer>
-        </div>
-    );
-}
-
-function ExternalView({ data }: { data: any[] }) {
     const tids = useMemo(() => {
         if (!data || data.length === 0) return [];
         return Object.keys(data[0]).filter((key) => key !== 'ts');
@@ -706,6 +754,9 @@ export function NodeContext({ response }: NodeContextProps) {
                 break;
             case 'ext':
                 setView(<ProcessTable data={responseInner as any} />);
+                break;
+            case 'extip':
+                setView(<NetworkTable data={responseInner as any} />);
                 break;
             default:
                 setView(<NullView />);

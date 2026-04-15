@@ -158,8 +158,8 @@ WITH
                     WHEN dst_address NOT IN ('0', '::') THEN 'inet-tcp-unmapped-' || dst_address
                         ELSE 'inet-tcp-listen-' || src_address || '-' || src_port
                     END
-                WHEN protocol_desc = 'IPPROTO_UDP' THEN 'inet-udp-' || src_address || ':' || src_port || '-' || dst_address || ':' || dst_port
-                ELSE 'inet-' || src_address || ':' || src_port || '-' || dst_address || ':' || dst_port
+                WHEN protocol_desc = 'IPPROTO_UDP' THEN 'inet-udp-' || src_address || '-' || dst_address
+                ELSE 'inet-unknown' || src_address || ':' || src_port || '-' || dst_address || ':' || dst_port
             END AS signature
         FROM sockets_inet si
         LEFT JOIN (SELECT * FROM tcp_discovery WHERE remote_machine_id <> 0 AND remote_inode_id <> 0) td
@@ -354,8 +354,9 @@ SELECT DISTINCT
     'extip-' || dst_address AS target,
     'undirected' AS edge_type
 FROM inet_mapping_vinet s
-WHERE
-remote_pid IS NULL AND dst_address NOT IN ('0', '::') AND protocol_desc = 'IPPROTO_TCP'
+WHERE remote_pid IS NULL 
+    AND dst_address NOT IN ('0', '::') 
+    AND (protocol_desc = 'IPPROTO_TCP' OR protocol_desc = 'IPPROTO_UDP')
 
 UNION ALL
 

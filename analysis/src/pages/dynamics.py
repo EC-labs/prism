@@ -37,7 +37,6 @@ def request_handler_futex(machine_id, pid, vfkey):
 def request_handler_external(machine_id, pid, ext): 
     db = st.session_state.db
 
-    pid_filter = f"(machine_id = {machine_id} AND pid = {pid})"
     query_template = Template((SQL_DIR / "thread_dynamics/external_view.sql").read_text())
     query = query_template.render({**template_variables(), "ext": 'ext-' + ext})
     result = db.custom_query(query)
@@ -51,7 +50,6 @@ def request_handler_external(machine_id, pid, ext):
     serialized_data = []
 
     for (m_id, pid), group in grouped:
-        # Create a list of attribute/value pairs for this specific process
         attributes = group[['attribute', 'value']].to_dict(orient='records')
         
         serialized_data.append({
@@ -60,6 +58,18 @@ def request_handler_external(machine_id, pid, ext):
             "attributes": attributes
         })
     res = { "type": "ext", "inner": serialized_data }
+
+    return res
+
+def request_handler_externalip(machine_id, pid, extip): 
+    db = st.session_state.db
+
+    query_template = Template((SQL_DIR / "thread_dynamics/externalip_view.sql").read_text())
+    query = query_template.render({**template_variables(), "machine_id": machine_id, "pid": pid, "dst_address": extip })
+    result = db.custom_query(query)
+
+    res = { "type": "extip", "inner": result.to_dict(orient='records') }
+    print(res)
 
     return res
 
@@ -149,6 +159,8 @@ def request_dispatcher(machine_id, pid, request_type, request_arg):
         return request_handler_vfs(machine_id, pid, request_arg)
     elif request_type == "ext":
         return request_handler_external(machine_id, pid, request_arg)
+    elif request_type == "extip":
+        return request_handler_externalip(machine_id, pid, request_arg)
     else:
         return {
             "type": request_type,

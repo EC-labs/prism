@@ -73,20 +73,10 @@ WITH
         LEFT JOIN signature_vinet sv
             USING (signature)
     )
-SELECT 
-    ts, 
-    tid, 
-    SUM(total_time)/1e9 AS total_time
-FROM (
-    SELECT 
-        date_trunc('second', ts_s) AS ts, machine_id, pid, tid, inode_id, total_time
-    FROM inet_mapping_vinet imv
-    INNER JOIN vfs
-        ON vfs.machine_id = imv.local_machine_id AND vfs.pid = imv.local_pid AND vfs.inode_id = imv.local_inode_id
-    LEFT JOIN linux_consts sockfs_desc
-        ON vfs.fs_magic = sockfs_desc.value AND sockfs_desc.const_type = 'fs_magic' AND sockfs_desc.const_name = 'SOCKFS_MAGIC'
-    WHERE vinet = {{ vinet }} 
-        AND sockfs_desc.const_name IS NOT NULL
-)
-GROUP BY ts, tid
-ORDER BY ts, tid
+SELECT family_desc, protocol_desc, src_address, src_port, dst_address, dst_port
+FROM inet_mapping_vinet s
+WHERE remote_pid IS NULL 
+    AND dst_address NOT IN ('0', '::') 
+    AND (protocol_desc = 'IPPROTO_TCP' OR protocol_desc = 'IPPROTO_UDP')
+    AND dst_address = '{{ dst_address }}'
+-- SELECT * FROM 3141780
