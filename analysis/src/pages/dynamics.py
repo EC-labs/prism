@@ -69,7 +69,6 @@ def request_handler_externalip(machine_id, pid, extip):
     result = db.custom_query(query)
 
     res = { "type": "extip", "inner": result.to_dict(orient='records') }
-    print(res)
 
     return res
 

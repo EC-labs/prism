@@ -30,3 +30,6 @@ dev = [
 [[tool.streamlit.component.components]]
 name = "thread_dynamics"
 asset_dir = "components/thread_dynamics/frontend/build"
+
+[tool.hatch.build.targets.wheel.force-include]
+"pyproject.toml" = "src/pyproject.toml"
