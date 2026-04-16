@@ -7,12 +7,18 @@ Provides core DuckDB connectivity without application-specific logic.
 
 import duckdb
 
+from pathlib import Path
+
+SQL_DIR = Path(__file__).parent / "sql"
+
 class DatabaseClient:
     """Lightweight database client for debugging purposes."""
 
     def __init__(self, uri: str):
         """Initialize the debugging database client."""
         self.conn = duckdb.connect(database=uri)
+        ddl = (SQL_DIR / "ddl.sql").read_text()
+        self.conn.execute(ddl)
 
     def custom_query(self, query: str):
         """

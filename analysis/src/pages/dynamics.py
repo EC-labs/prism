@@ -20,13 +20,17 @@ def store_value(key):
 def load_value(key):
     st.session_state["_"+key] = st.session_state.get(key)
 
-def request_handler_futex(machine_id, pid, vfkey): 
+def request_handler_futex(machine_id, pid, vfkey):
     db = st.session_state.db
 
     pid_filter = f"(machine_id = {machine_id} AND pid = {pid})"
     query_template = Template((SQL_DIR / "thread_dynamics/futex_view.sql").read_text())
     query = query_template.render({**template_variables(), "vfkey": vfkey, "pid_filter": pid_filter})
-    result = db.custom_query(query)
+    try:
+        result = db.custom_query(query)
+    except Exception as e:
+        print(e)
+        return None
     result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
     res = {
         "type": "futex",
@@ -34,15 +38,19 @@ def request_handler_futex(machine_id, pid, vfkey):
     }
     return res
 
-def request_handler_external(machine_id, pid, ext): 
+def request_handler_external(machine_id, pid, ext):
     db = st.session_state.db
 
     query_template = Template((SQL_DIR / "thread_dynamics/external_view.sql").read_text())
     query = query_template.render({**template_variables(), "ext": 'ext-' + ext})
-    result = db.custom_query(query)
+    try:
+        result = db.custom_query(query)
+    except Exception as e:
+        print(e)
+        return None
     result = result.melt(
-        id_vars=['machine_id', 'pid'], 
-        var_name='attribute', 
+        id_vars=['machine_id', 'pid'],
+        var_name='attribute',
         value_name='value'
     ).replace({np.nan: None})
     grouped = result.groupby(['machine_id', 'pid'])
@@ -51,7 +59,7 @@ def request_handler_external(machine_id, pid, ext):
 
     for (m_id, pid), group in grouped:
         attributes = group[['attribute', 'value']].to_dict(orient='records')
-        
+
         serialized_data.append({
             "machine_id": int(m_id),
             "pid": int(pid),
@@ -61,23 +69,31 @@ def request_handler_external(machine_id, pid, ext):
 
     return res
 
-def request_handler_externalip(machine_id, pid, extip): 
+def request_handler_externalip(machine_id, pid, extip):
     db = st.session_state.db
 
     query_template = Template((SQL_DIR / "thread_dynamics/externalip_view.sql").read_text())
     query = query_template.render({**template_variables(), "machine_id": machine_id, "pid": pid, "dst_address": extip })
-    result = db.custom_query(query)
+    try:
+        result = db.custom_query(query)
+    except Exception as e:
+        print(e)
+        return None
 
     res = { "type": "extip", "inner": result.to_dict(orient='records') }
 
     return res
 
-def request_handler_disk(machine_id, pid, part0): 
+def request_handler_disk(machine_id, pid, part0):
     db = st.session_state.db
     pid_filter = f"(machine_id = {machine_id} AND pid = {pid})"
     query_template = Template((SQL_DIR / "thread_dynamics/disk_view.sql").read_text())
     query = query_template.render({**template_variables(), "part0": part0, "pid_filter": pid_filter})
-    result = db.custom_query(query)
+    try:
+        result = db.custom_query(query)
+    except Exception as e:
+        print(e)
+        return None
     result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
     res = {
         "type": "disk",
@@ -85,12 +101,16 @@ def request_handler_disk(machine_id, pid, part0):
     }
     return res
 
-def request_handler_inet(machine_id, pid, vinet): 
+def request_handler_inet(machine_id, pid, vinet):
     db = st.session_state.db
 
     query_template = Template((SQL_DIR / "thread_dynamics/inet_view.sql").read_text())
     query = query_template.render({**template_variables(),"machine_id": machine_id, "pid": pid, "vinet": vinet })
-    result = db.custom_query(query)
+    try:
+        result = db.custom_query(query)
+    except Exception as e:
+        print(e)
+        return None
     result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
     res = {
         "type": "inet",
@@ -98,12 +118,16 @@ def request_handler_inet(machine_id, pid, vinet):
     }
     return res
 
-def request_handler_unix(machine_id, pid, vunix): 
+def request_handler_unix(machine_id, pid, vunix):
     db = st.session_state.db
 
     query_template = Template((SQL_DIR / "thread_dynamics/unix_view.sql").read_text())
     query = query_template.render({**template_variables(),"machine_id": machine_id, "pid": pid, "vunix": vunix })
-    result = db.custom_query(query)
+    try:
+        result = db.custom_query(query)
+    except Exception as e:
+        print(e)
+        return None
     result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
     res = {
         "type": "unix",
@@ -111,12 +135,16 @@ def request_handler_unix(machine_id, pid, vunix):
     }
     return res
 
-def request_handler_vfs(machine_id, pid, inode): 
+def request_handler_vfs(machine_id, pid, inode):
     db = st.session_state.db
 
     query_template = Template((SQL_DIR / "thread_dynamics/vfs_view.sql").read_text())
     query = query_template.render({**template_variables(),"machine_id": machine_id, "pid": pid, "inode": 'vfs-' + inode })
-    result = db.custom_query(query)
+    try:
+        result = db.custom_query(query)
+    except Exception as e:
+        print(e)
+        return None
     result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
     res = {
         "type": "vfs",
@@ -124,14 +152,18 @@ def request_handler_vfs(machine_id, pid, inode):
     }
     return res
 
-def request_handler_thread(machine_id, pid, tid): 
+def request_handler_thread(machine_id, pid, tid):
     db = st.session_state.db
 
     pid_filter = f"(machine_id = {machine_id} AND pid = {pid})"
     tid_filter = f"(machine_id = {machine_id} AND tid = {tid})"
     query_template = Template((SQL_DIR / "thread_dynamics/thread_view.sql").read_text())
     query = query_template.render({ "tid_filter": tid_filter, "pid_filter": pid_filter})
-    result = db.custom_query(query)
+    try:
+        result = db.custom_query(query)
+    except Exception as e:
+        print(e)
+        return None
     result["ts"] = result["ts"].dt.strftime('%Y-%m-%d %X')
 
     res = {
@@ -143,7 +175,7 @@ def request_handler_thread(machine_id, pid, tid):
 
 def request_dispatcher(machine_id, pid, request_type, request_arg):
     if request_type == "thread":
-        return request_handler_thread(machine_id, pid, request_arg) 
+        return request_handler_thread(machine_id, pid, request_arg)
     elif request_type == "contention":
         return request_handler_futex(machine_id, pid, request_arg)
     elif request_type == "schedule":
@@ -176,7 +208,7 @@ def on_request_cb(machine_id, pid):
         st.session_state["thread_dynamics_state"]["response"] = request_dispatcher(machine_id, pid, request_type, request_arg)
     return cb
 
-if "dynamics_init" not in st.session_state: 
+if "dynamics_init" not in st.session_state:
     st.session_state.service_index = None
 
 st.session_state.dynamics_init = True
@@ -211,8 +243,13 @@ def main():
         args=["service_index"],
         placeholder="Select a service from the ripple graph",
     )
-    if service is None: 
-        return 
+
+    if service is None:
+        return
+
+    if service not in graph.nodes():
+        return
+
     node = graph.nodes()[service]
     machine_id, pid = node["machine"], node["pid"]
     pid_filter = f"((machine_id = {machine_id}) AND (pid = {pid}))"
