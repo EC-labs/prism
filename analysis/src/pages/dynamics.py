@@ -243,8 +243,13 @@ def main():
         args=["service_index"],
         placeholder="Select a service from the ripple graph",
     )
+
     if service is None:
         return
+
+    if service not in graph.nodes():
+        return
+
     node = graph.nodes()[service]
     machine_id, pid = node["machine"], node["pid"]
     pid_filter = f"((machine_id = {machine_id}) AND (pid = {pid}))"
