@@ -103,11 +103,30 @@ Visit the analysis UI at `http://localhost:8501/`. The UI includes some template
 1. Select a process you want to create a service dependency graph for
    <details><summary>Example</summary>
 
-   For the example dataset ([data/oboutique-k8s.db3](data/oboutique-k8s.db3)), selecting the process with `(machine_id : pid)` -> `(3 : 853159)` shows the service dependency graph for online boutique, including the system processes that also interact with the online boutique services for operations such as healthchecks.
+   For the example dataset ([data/oboutique-k8s.db3](data/oboutique-k8s.db3)), selecting the process with `(machine_id : pid)` -> `(3 : 853159)` shows the service dependency graph for online boutique, including the system processes that also interact with the online boutique services for operations such as healthchecks:
+
+   <img width="729" height="760" alt="Screenshot From 2026-04-17 10-43-24" src="https://github.com/user-attachments/assets/7fae3116-fad8-4b92-b771-6fa615796c2f" />
 
    </details>
    
-1. Visualise the service dependency graph for that process
+1. Navigate to the Thread Dynamics page
+1. Select a process that is part of the dependency graph
+   <details><summary>Example</summary>
+
+   Selecting the `recommendationservice-5767cf4d97-wjq4q (2:100162)` from the example online-boutique dataset generates the following thread dynamics graph:
+
+   <img width="1519" height="762" alt="Screenshot From 2026-04-17 10-51-15" src="https://github.com/user-attachments/assets/9c2cadf0-1d6a-44ed-acce-ac27e89233c6" />
+   
+   </details>
+1. Interact with the thread dynamics graph to visualise statistics on the selected resouces
+   <details><summary>Example</summary>
+
+   The following screenshots are, respectively, for a contention and a thread resource for the `recommendationservice-5767cf4d97-wjq4q (2:100162)` from the example online-boutique dataset:
+
+   <img width="1519" height="762" alt="Screenshot From 2026-04-17 10-51-26" src="https://github.com/user-attachments/assets/5045e159-34de-4f6a-8f4a-05731dcbe5c3" />
+   <img width="1519" height="762" alt="Screenshot From 2026-04-17 10-53-08" src="https://github.com/user-attachments/assets/075f7c6f-a4a2-4703-b784-6c744662c94e" />
+
+   </details>
 1. Run custom queries in the `Debug` page
    <details><summary>Example</summary>
 

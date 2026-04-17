@@ -1,15 +1,26 @@
-{ pkgs, pyproject-build-systems, pyproject-nix, lib, uv2nix }:
+{ pkgs, pyproject-build-systems, pyproject-nix, lib, uv2nix, threadDynamics }:
 let 
       python = pkgs.python312;
       workspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./.; };
       overlay = workspace.mkPyprojectOverlay {
         sourcePreference = "wheel";
       };
+      pyprojectOverrides = final: prev: {
+        src = prev.src.overrideAttrs(old: {
+          inherit threadDynamics;
+          preBuild = ''
+            pushd src/components/thread_dynamics/frontend
+            cp -r $threadDynamics ./build
+            popd
+          '';
+        });
+      };
       pythonSet = (pkgs.callPackage pyproject-nix.build.packages { inherit python; }).overrideScope
           (
             lib.composeManyExtensions [
               pyproject-build-systems.overlays.wheel
               overlay
+              pyprojectOverrides
             ]
           );
       virtualenv = pythonSet.mkVirtualEnv "dev-env" workspace.deps.all;

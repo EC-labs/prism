@@ -34,9 +34,11 @@
                 pkgs = nixpkgs.legacyPackages.${system};
                 crate2nixTools = crate2nix.lib.tools;
                 generatedBuild = import ./default.nix { inherit pkgs crate2nixTools; };
+                threadDynamicsComponent = (pkgs.callPackage ./analysis/src/components/thread_dynamics/frontend {});
                 analysis = import ./analysis { 
                     inherit pkgs pyproject-build-systems pyproject-nix uv2nix; 
                     lib = pkgs.lib; 
+                    threadDynamics = threadDynamicsComponent.package;
                 };
                 scripts = import ./scripts { inherit pkgs; };
             in {
@@ -45,6 +47,7 @@
                     default = self.packages.${system}.prism;
                     ripple = self.packages.${system}.prism;
                     analysis = analysis.package;
+                    analysisComponents.threadDynamics = threadDynamicsComponent.package;
                     combinedbs = scripts.packages.combinedbs;
                 };
 
@@ -113,6 +116,7 @@
                         ];
                     };
                     analysis = analysis.devShell;
+                    analysisComponents.threadDynamics = threadDynamicsComponent.devShell;
                     graph = pkgs.mkShell {
                         packages = with pkgs; [
                             (python3.withPackages (python-pkgs: with python-pkgs; [

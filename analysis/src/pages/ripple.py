@@ -107,6 +107,7 @@ def draw_network(graph: nx.Graph, bootstrap: int):
         r, g, b = colorsys.hls_to_rgb(h, l, s)
         machine_color[m] = (r, g, b, 0.3)
 
+
     # Flatten services in order by machine
     clustered_services = []
     machine_angle_ranges = {}  # machine_id -> (start_idx, end_idx)
@@ -116,6 +117,7 @@ def draw_network(graph: nx.Graph, bootstrap: int):
         clustered_services.extend(services)
         machine_angle_ranges[machine] = (angle_index, angle_index + len(services) - 1)
         angle_index += len(services)
+
 
     # Assign positions on circle
     n = len(clustered_services)
@@ -137,14 +139,19 @@ def draw_network(graph: nx.Graph, bootstrap: int):
     for machine, (start_idx, end_idx) in machine_angle_ranges.items():
         first_service_angle = normalise_angle_degrees(np.degrees(angles[start_idx].item()))
         previous_service_angle = normalise_angle_degrees(np.degrees(angles[(start_idx-1)%len(angles)].item()))
+        if first_service_angle <= previous_service_angle:
+            first_service_angle += 360
+
         last_service_angle = normalise_angle_degrees(np.degrees(angles[end_idx].item()))
         next_service_angle = normalise_angle_degrees(np.degrees(angles[(end_idx+1)%len(angles)].item()))
+        if next_service_angle <= last_service_angle:
+            next_service_angle += 360
 
         theta_start = first_service_angle - (first_service_angle - previous_service_angle) / 2
         theta_end = last_service_angle + (next_service_angle - last_service_angle) / 2
+
         if theta_end <= theta_start:
             theta_end += 360
-
 
         # Draw the wedge (filled arc)
         wedge = Wedge(center=(0, 0),
