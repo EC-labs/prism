@@ -64,11 +64,17 @@ impl ClickhouseSink {
                     // It has been 1 second since we last committed.
                     // Check if there is new data to commit
                     match inserter.commit().await {
-                        Err(Error::TimedOut) | Err(Error::Network(_)) => {
-                            todo!()
+                        Err(Error::TimedOut) => {
+                            error!("Clickhouse commit timed out. Retrying...");
+                        }
+                        Err(Error::Network(e)) => {
+                            // TODO: Add retry logic
+                            error!("Clickhouse commit network error {e:?}");
+                            panic!();
                         }
                         Err(e) => {
-                            error!("Clickhouse commit failed: {e}");
+                            error!("Clickhouse commit failed: {e:?}");
+                            panic!()
                         }
                         Ok(()) => {}
                     };

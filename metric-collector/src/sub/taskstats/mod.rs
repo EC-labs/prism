@@ -250,7 +250,13 @@ impl<'obj> TaskStatsTrace<'obj> {
             .pid_rb
             .reuse_fd(pid_rb.as_fd())
             .expect("TaskStatsTrace pid_rb reuse failed");
-        let mut skel = open_skel.load().expect("TaskStatsTrace skel load failed");
+        let mut skel = match open_skel.load() {
+            Ok(skel) => skel,
+            Err(e) => {
+                warn!("Failed to load TaskStatsTrace programs:\n{e:?}");
+                return Err(e.into());
+            }
+        };
         let mut builder = RingBufferBuilder::new();
         builder
             .add(
@@ -262,9 +268,11 @@ impl<'obj> TaskStatsTrace<'obj> {
             .build()
             .expect("TaskStatsTrace failed to build taskstats_rb handler");
         if let Err(e) = skel.attach() {
-            warn!("Failed to attach TaskStatsTrace programs:\n{e}");
+            warn!("Failed to attach TaskStatsTrace programs:\n{e:?}");
             return Err(e.into());
         }
+
+        info!("Successfully registered TaskStatsTrace");
 
         Ok(Self {
             _skel: skel,

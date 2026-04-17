@@ -4,7 +4,7 @@ use libbpf_rs::{
     OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
-use log::warn;
+use log::{info, warn};
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -191,12 +191,14 @@ impl<'obj> Vfs<'obj> {
             .reuse_fd(pid_rb)
             .expect("Vfs pid_rb reuse failed");
 
-        let mut skel = open_skel.load().expect("Vfs skel load failed");
+        let mut skel = open_skel.load().expect("Failed to load Vfs programs");
         samples_init::<granularity, stats>(&skel.maps.samples)
             .expect("Vfs samples map initialisation failed");
 
         if let Err(e) = skel.attach() {
-            warn!("Vfs bpf programs attach failed:\n{e}");
+            warn!("Failed to attach Vfs programs:\n{e:?}");
+        } else {
+            info!("Successfully registered Vfs");
         }
 
         Self {

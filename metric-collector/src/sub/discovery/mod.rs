@@ -3,7 +3,7 @@ use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     MapHandle, RingBufferBuilder, TcHook, TcHookBuilder, TC_EGRESS,
 };
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use std::{
     mem::MaybeUninit,
     os::fd::AsFd,
@@ -82,7 +82,14 @@ impl Discovery {
                 .reuse_fd(net_rb.as_fd())
                 .expect("Discovery net_rb reuse failed");
 
-            let mut skel = open_skel.load().expect("Discovery skel load failed");
+            let mut skel = match open_skel.load() {
+                Ok(skel) => skel,
+                Err(e) => {
+                    warn!("Failed to load Discovery programs:\n{e:?}");
+                    return Err(e.into());
+                }
+            };
+
             let mut builder = RingBufferBuilder::new();
             builder
                 .add(&skel.maps.rb_skb_data, |_: &[u8]| 0)
@@ -100,9 +107,11 @@ impl Discovery {
                 .expect("Discovery failed to build tcp_discovery_rb handler");
 
             if let Err(e) = skel.attach() {
-                warn!("Failed to attach Discovery programs:\n{e}");
+                warn!("Failed to attach Discovery programs:\n{e:?}");
                 return Err(e.into());
             }
+
+            info!("Successfully registered Discovery");
 
             let runtime = tokio::runtime::Runtime::new().unwrap();
 

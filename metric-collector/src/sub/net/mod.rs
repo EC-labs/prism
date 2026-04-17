@@ -4,7 +4,7 @@ use libbpf_rs::{
     OpenObject, RingBuffer, RingBufferBuilder,
 };
 use libc::{AF_INET, AF_INET6, AF_UNIX, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use net_skel::{types::socket_context_value, NetSkel, NetSkelBuilder};
 use std::{
     fmt::Debug,
@@ -139,7 +139,7 @@ impl<'obj> Net<'obj> {
             .reuse_fd(pid_rb)
             .expect("Net pid_rb reuse failed");
 
-        let mut skel = open_skel.load().expect("Net skel open failed");
+        let mut skel = open_skel.load().expect("Failed to load Net programs");
         let mut builder = RingBufferBuilder::new();
         builder
             .add(&skel.maps.rb, wrapped_callback(sink_tx.clone(), machine_id))
@@ -159,6 +159,8 @@ impl<'obj> Net<'obj> {
 
         if let Err(e) = skel.attach() {
             warn!("Failed to attach Net programs:\n{e}");
+        } else {
+            info!("Successfully registered Net");
         }
 
         Self {

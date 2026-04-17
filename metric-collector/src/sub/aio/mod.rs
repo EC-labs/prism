@@ -11,7 +11,7 @@ use libbpf_rs::{
     OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
-use log::{error, warn};
+use log::{error, info, warn};
 use std::{
     cmp::{Eq, PartialEq},
     collections::HashMap,
@@ -174,15 +174,24 @@ impl<'obj> Aio<'obj> {
             .reuse_fd(pid_map)
             .expect("Aio pid_map reuse failed");
 
-        let mut skel = open_skel.load().expect("Aio skel load failed");
+        let mut skel = match open_skel.load() {
+            Ok(skel) => skel,
+            Err(e) => {
+                warn!("Failed to load Aio programs:\n{e:?}");
+                return Err(e.into());
+            }
+        };
         super::samples_init::<granularity, stats>(&skel.maps.samples)
             .expect("Aio samples map initialisation failed");
         super::samples_init::<file_granularity, file_stats>(&skel.maps.file_samples)
             .expect("Aio file_samples map initialisation failed");
+
         if let Err(e) = skel.attach() {
-            warn!("Failed to attach Aio programs:\n{e}");
+            warn!("Failed to attach Aio programs:\n{e:?}");
             return Err(e.into());
         }
+
+        info!("Successfully registered Aio");
 
         Ok(Aio {
             machine_id,

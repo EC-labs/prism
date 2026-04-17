@@ -3,7 +3,7 @@ use libbpf_rs::{
     skel::{OpenSkel, Skel, SkelBuilder},
     OpenObject,
 };
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::{
     mem::MaybeUninit,
     sync::mpsc::{SendError, Sender},
@@ -42,14 +42,22 @@ impl<'obj> IOWait<'obj> {
             .open(open_object)
             .expect("Iowait skel open failed");
 
-        let mut skel = open_skel.load().expect("Iowait skel load failed");
+        let mut skel = match open_skel.load() {
+            Ok(skel) => skel,
+            Err(e) => {
+                warn!("Failed to load Iowait programs:\n{e:?}");
+                return Err(e.into());
+            }
+        };
         super::samples_init::<granularity, stats>(&skel.maps.samples)
             .expect("Iowait samples map initialisation failed");
 
         if let Err(e) = skel.attach() {
-            warn!("Failed to attach Iowait programs:\n{e}");
+            warn!("Failed to attach Iowait programs:\n{e:?}");
             return Err(e.into());
         };
+
+        info!("Successfully registered IOWait");
 
         Ok(Self {
             skel,

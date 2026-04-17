@@ -5,7 +5,7 @@ use libbpf_rs::{
     OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME};
-use log::warn;
+use log::{info, warn};
 use std::{
     cmp::{Eq, PartialEq},
     collections::HashMap,
@@ -210,15 +210,25 @@ impl<'obj> Muxio<'obj> {
             .reuse_fd(pid_rb)
             .expect("Muxio pid_rb reuse failed");
 
-        let mut skel = open_skel.load().expect("Muxio skel load failed");
+        let mut skel = match open_skel.load() {
+            Ok(skel) => skel,
+            Err(e) => {
+                warn!("Failed to load Muxio programs:\n{e:?}");
+                return Err(e.into());
+            }
+        };
+
         super::samples_init::<granularity, stats>(&skel.maps.samples)
             .expect("Muxio samples map initialisation failed");
         super::samples_init::<file_granularity, file_stats>(&skel.maps.file_samples)
             .expect("Muxio file_samples map initialisation failed");
+
         if let Err(e) = skel.attach() {
-            warn!("Failed to attach Muxio programs:\n{e}");
+            warn!("Failed to attach Muxio programs:\n{e:?}");
             return Err(e.into());
         }
+
+        info!("Successfully registered Muxio");
 
         Ok(Self {
             skel,

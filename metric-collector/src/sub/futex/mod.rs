@@ -4,7 +4,7 @@ use libbpf_rs::{
     OpenObject,
 };
 use libc::{clock_gettime, timespec, CLOCK_BOOTTIME, FUTEX_WAIT, FUTEX_WAKE};
-use log::{error, warn};
+use log::{error, info, warn};
 use std::{
     cmp::{Eq, PartialEq},
     collections::HashMap,
@@ -205,14 +205,23 @@ impl<'obj> Futex<'obj> {
             .reuse_fd(pid_rb)
             .expect("Futex pid_rb reuse failed");
 
-        let mut skel = open_skel.load().expect("Futex skel load failed");
+        let mut skel = match open_skel.load() {
+            Ok(skel) => skel,
+            Err(e) => {
+                warn!("Failed to load Futex programs:\n{e:?}");
+                return Err(e.into());
+            }
+        };
+
         samples_init::<granularity, stats>(&skel.maps.samples)
             .expect("Futex samples map initialisation failed");
 
         if let Err(e) = skel.attach() {
-            warn!("Failed to attach Futex programs:\n{e}");
+            warn!("Failed to attach Futex programs:\n{e:?}");
             return Err(e.into());
         }
+
+        info!("Successfully registered Futex");
 
         Ok(Self {
             skel,
