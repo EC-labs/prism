@@ -42,3 +42,4 @@ containerd-client = "0.8.0"
 tonic = "0.12"
 signal-hook = "0.4.3"
 clickhouse = { version = "0.13.2", features = ["inserter"] }
+rand = "0.10.1"

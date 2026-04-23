@@ -1,6 +1,7 @@
 use chrono::prelude::*;
 use clap::ArgMatches;
 use log::error;
+use rand::RngExt;
 
 use crate::sink::{ClickhouseConfig, SinkConfig};
 
@@ -20,9 +21,12 @@ impl TryFrom<ArgMatches> for Config {
 
         let process_name = matches.remove_one::<String>("process-name");
 
+        let mut rng = rand::rng();
+        let random_machine_id: u32 = rng.random();
+
         let machine_id = matches
             .remove_one::<u32>("machine-id")
-            .expect("Missing machine-id");
+            .unwrap_or(random_machine_id);
 
         let sink_config = match matches
             .remove_one::<String>("backend")
