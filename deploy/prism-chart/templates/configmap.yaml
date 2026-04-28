@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-init-sql
+data:
+  init.sql: |
+{{ .Files.Get "files/init.sql" | indent 4 }}

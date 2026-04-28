@@ -1,0 +1,9 @@
+dependencies:
+- name: cert-manager
+  repository: oci://quay.io/jetstack/charts
+  version: v1.19.2
+- name: clickhouse-operator-helm
+  repository: oci://ghcr.io/clickhouse
+  version: 0.0.4
+digest: sha256:5f4d51435a68ce91d313116ef965730db406d9a1c7f8cd70fde9b256bc048f49
+generated: "2026-04-26T15:23:31.359560094+02:00"

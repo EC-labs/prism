@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: prism-agent
+  labels:
+    app: prism-agent
+spec:
+  selector:
+    matchLabels:
+      app: prism-agent
+  template:
+    metadata:
+      labels:
+        app: prism-agent
+    spec:
+      tolerations:
+        - key: "node-role.kubernetes.io/master"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+        - key: "unschedulable"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      hostPID: true
+      initContainers:
+        - name: wait-for-ch
+          image: clickhouse/clickhouse-server:25.12
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                result=$(clickhouse-client -h sample-clickhouse-headless --port 9000 --user default -q "select count(*) from information_schema.tables where table_schema = 'default'" 2>/dev/null | tr -d '[:space:]')
+                
+                if [ -n "$result" ] && [ "$result" -eq "36" ]; then
+                  echo "Found 36 tables. Schema is ready."
+                  break
+                fi
+                
+                echo "Waiting for schema... Currently found ${result:-0} tables (Expected 36)."
+                sleep 5
+              done
+      containers:
+        - name: prism-agent
+          image: "{{ .Values.prism.imageRepository }}:{{ .Values.prism.tag }}"
+          args: ["--backend", "clickhouse", "--clickhouse-db", "default", "--clickhouse-user", "default", "--clickhouse-password", "", "--clickhouse-url", "http://sample-clickhouse-headless:8123"]
+          env: 
+            - name: RUST_LOG
+              value: info
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          volumeMounts:
+            - mountPath: /sys/fs/cgroup
+              name: cgroupfs
+              readOnly: true
+            - mountPath: /sys/kernel/tracing
+              name: tracefs
+              readOnly: false
+            - mountPath: /sys/kernel/debug
+              name: debugfs
+              readOnly: false
+      volumes:
+        - hostPath:
+            path: /sys/fs/cgroup
+          name: cgroupfs
+        - hostPath:
+            path: /sys/kernel/tracing
+          name: tracefs
+        - hostPath:
+            path: /sys/kernel/debug
+          name: debugfs

@@ -1,0 +1,20 @@
+# Default values for prism-chart.
+
+certManager:
+  install: false
+clickhouseOperator:
+  install: false
+
+prism: 
+  tag: "latest"
+  imageRepository: "dclandau/prism-agent"
+
+clickhouse:
+  storageClassName: local-path
+
+  clickhouseShards: 2
+  clickhouseReplicas: 1
+  clickhouseStorage: 10Gi
+
+  keeperStorage: 1Gi
+  keeperReplicas: 3

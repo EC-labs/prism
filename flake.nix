@@ -35,12 +35,14 @@
                 crate2nixTools = crate2nix.lib.tools;
                 generatedBuild = import ./default.nix { inherit pkgs crate2nixTools; };
                 threadDynamicsComponent = (pkgs.callPackage ./analysis/src/components/thread_dynamics/frontend {});
+                tag = self.shortRev or self.dirtyShortRev;
                 analysis = import ./analysis { 
-                    inherit pkgs pyproject-build-systems pyproject-nix uv2nix; 
+                    inherit tag pkgs pyproject-build-systems pyproject-nix uv2nix;
                     lib = pkgs.lib; 
                     threadDynamics = threadDynamicsComponent.package;
                 };
                 scripts = import ./scripts { inherit pkgs; };
+                deploy = pkgs.callPackage ./deploy { inherit tag; };
             in {
                 packages = {
                     prism = generatedBuild.workspaceMembers.metric-collector.build;
@@ -49,20 +51,21 @@
                     analysis = analysis.package;
                     analysisComponents.threadDynamics = threadDynamicsComponent.package;
                     combinedbs = scripts.packages.combinedbs;
+                    prism-chart = deploy.packages.helmChart;
                 };
 
                 images = {
-                    prism = pkgs.dockerTools.buildImage {
-                        name = "dclandau/prism";
-                        tag = "latest";
+                    prism-agent = pkgs.dockerTools.buildImage {
+                        name = "prism-agent";
+                        inherit tag;
                         copyToRoot = [ self.packages.${system}.prism ];
                         config = {
                             Entrypoint = [ "/bin/metric-collector" ];
                         };
                     };
-                    ripple = pkgs.dockerTools.buildImage {
-                        name = "dclandau/ripple";
-                        tag = "latest";
+                    ripple-agent = pkgs.dockerTools.buildImage {
+                        name = "ripple-agent";
+                        inherit tag;
                         copyToRoot = [ self.packages.${system}.ripple ];
                         config = {
                             Entrypoint = [ "/bin/metric-collector" ];
@@ -130,6 +133,7 @@
                             ]))
                         ] ++ [ duckdb ];
                     };
+                    deploy = deploy.devShell;
                 };
 
                 apps = {
@@ -153,7 +157,8 @@
                         let
                             loadPush = imageDerivation: ''
                                 image=$(docker load < ${imageDerivation} | sed -nE 's/Loaded image: (\w+)/\1/p')
-                                docker push $image
+                                docker tag "$image" "$repository/$image"
+                                docker push "$repository/$image"
                             '';
                             joined = 
                                 builtins.concatStringsSep "\n" (
@@ -162,6 +167,13 @@
                             scriptContents = 
                                 ''
                                 set -e
+
+                                if (( $# != 1 )); then
+                                    echo "Missing repository argument (e.g. dclandau/)";
+                                    exit 1;
+                                fi
+
+                                repository="$1"
                                 '' 
                                 + joined;
                             script = pkgs.writeShellScript "push-images" scriptContents;

@@ -87,7 +87,6 @@ impl ClickhouseSink {
 }
 
 pub struct ClickhouseInserter {
-    inserter_linux_consts: Inserter<LinuxConstsEvent>,
     inserter_iowait: Inserter<IoWaitEvent>,
     inserter_aio_getevents: Inserter<AioGeteventsEvent>,
     inserter_aio_submit: Inserter<AioSubmitEvent>,
@@ -109,7 +108,6 @@ pub struct ClickhouseInserter {
 
 impl ClickhouseInserter {
     pub fn new(client: &Client) -> Self {
-        let inserter_linux_consts = Self::create_default_inserter(client, "linux_consts");
         let inserter_iowait = Self::create_default_inserter(client, "iowait");
         let inserter_aio_getevents = Self::create_default_inserter(client, "aio_getevents");
         let inserter_aio_submit = Self::create_default_inserter(client, "aio_submit");
@@ -128,7 +126,6 @@ impl ClickhouseInserter {
         let inserter_process_context = Self::create_default_inserter(client, "process_context");
         let inserter_taskstats = Self::create_default_inserter(client, "taskstats");
         Self {
-            inserter_linux_consts,
             inserter_iowait,
             inserter_aio_getevents,
             inserter_aio_submit,
@@ -161,9 +158,7 @@ impl ClickhouseInserter {
 
     async fn produce(&mut self, event: Event) {
         match event {
-            Event::LinuxConsts(e, _) => {
-                self.inserter_linux_consts.write(&e).unwrap();
-            }
+            Event::LinuxConsts(e, _) => {}
             Event::IoWait(e) => {
                 self.inserter_iowait.write(&e).unwrap();
             }
@@ -220,7 +215,6 @@ impl ClickhouseInserter {
 
     async fn commit(&mut self) -> Result<(), Error> {
         let mut nrows = 0;
-        nrows += self.inserter_linux_consts.commit().await?.rows;
         nrows += self.inserter_iowait.commit().await?.rows;
         nrows += self.inserter_aio_getevents.commit().await?.rows;
         nrows += self.inserter_aio_submit.commit().await?.rows;
@@ -245,7 +239,6 @@ impl ClickhouseInserter {
     async fn end(self) {
         info!("Run ClickhouseInserter End");
         let mut handles = Vec::new();
-        handles.push(tokio::spawn(self.inserter_linux_consts.end()));
         handles.push(tokio::spawn(self.inserter_iowait.end()));
         handles.push(tokio::spawn(self.inserter_aio_getevents.end()));
         handles.push(tokio::spawn(self.inserter_aio_submit.end()));

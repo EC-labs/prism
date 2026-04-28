@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ch-prism-schema
+spec:
+  completions: 1
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: wait-for-clickhouse
+          image: clickhouse/clickhouse-server:25.12
+          command:
+            - sh
+            - -c
+            - |
+              while ! wget --spider --no-check-certificate -T 1 -q "http://sample-clickhouse-headless:8123/ping" 2>/dev/null; do
+                echo "Waiting for ClickHouse..."
+                sleep 1
+              done
+              echo "ClickHouse is up — applying schema..."
+              sleep 10
+              clickhouse-client -h sample-clickhouse-headless --port 9000 --user default -n < /sql-init.d/init.sql
+
+              result=$(clickhouse-client -h 10.0.0.1 --port 30900 --user default -q "select count(*) from information_schema.tables where table_schema = 'default'" 2>/dev/null | tr -d '[:space:]')
+              
+              if [[ "$result" -eq "36" ]]; then
+                echo "Default schema has 36 tables. Success"
+                exit 0
+              else
+                echo "Default schema has $result tables. Expected 36"
+                exit 1
+              fi
+          volumeMounts:
+            - mountPath: /sql-init.d
+              name: sql-init
+              readOnly: true
+      volumes:
+        - name: sql-init
+          configMap:
+            name: clickhouse-init-sql
