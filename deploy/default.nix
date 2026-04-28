@@ -30,8 +30,6 @@ in
             kubernetes-helm
             kubectl
         ];
-
-        KUBECONFIG = "./remote-admin.conf";
     };
     packages = rec {
         # helmRelease is the zipped helm chart

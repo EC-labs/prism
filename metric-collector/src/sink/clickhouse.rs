@@ -1,8 +1,8 @@
 use crate::event::{
     AioFileEvent, AioGeteventsEvent, AioSubmitEvent, DockerEvent, Event, FutexWaitEvent,
-    FutexWakeEvent, IoWaitEvent, K8sEvent, LinuxConstsEvent, MuxioFileEvent, MuxioWaitEvent,
-    ProcessContextEvent, SocketContextEvent, SocketInetEvent, SocketMapEvent, TaskstatsEvent,
-    TcpDiscoveryEvent, VfsEvent,
+    FutexWakeEvent, IoWaitEvent, K8sEvent, MuxioFileEvent, MuxioWaitEvent, ProcessContextEvent,
+    SocketContextEvent, SocketInetEvent, SocketMapEvent, TaskstatsEvent, TcpDiscoveryEvent,
+    VfsEvent,
 };
 use crate::sink::ClickhouseConfig;
 
@@ -158,7 +158,7 @@ impl ClickhouseInserter {
 
     async fn produce(&mut self, event: Event) {
         match event {
-            Event::LinuxConsts(e, _) => {}
+            Event::LinuxConsts(_, _) => {}
             Event::IoWait(e) => {
                 self.inserter_iowait.write(&e).unwrap();
             }
