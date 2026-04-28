@@ -16,5 +16,10 @@ clickhouse:
   clickhouseReplicas: 1
   clickhouseStorage: 10Gi
 
+  # echo -n secret_password | sha256sum -z | awk '{print $1}'
+  readerPassword: "8e67dd1355714239acde098b6f1cf906bde45be6db826dc2caca7536e07ae844"
+  # echo -n secret-password | base64
+  defaultUserPassword: "c2VjcmV0LXBhc3N3b3Jk"
+
   keeperStorage: 1Gi
   keeperReplicas: 3

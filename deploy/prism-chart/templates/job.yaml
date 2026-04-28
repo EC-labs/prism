@@ -10,6 +10,12 @@ spec:
       containers:
         - name: wait-for-clickhouse
           image: clickhouse/clickhouse-server:25.12
+          env:
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: default-password
+                  key: password
           command:
             - sh
             - -c
@@ -20,9 +26,9 @@ spec:
               done
               echo "ClickHouse is up — applying schema..."
               sleep 10
-              clickhouse-client -h sample-clickhouse-headless --port 9000 --user default -n < /sql-init.d/init.sql
+              clickhouse-client -h sample-clickhouse-headless --port 9000 --user default --password "$(echo $CLICKHOUSE_PASSWORD)" -n < /sql-init.d/init.sql
 
-              result=$(clickhouse-client -h 10.0.0.1 --port 30900 --user default -q "select count(*) from information_schema.tables where table_schema = 'default'" 2>/dev/null | tr -d '[:space:]')
+              result=$(clickhouse-client -h 10.0.0.1 --port 30900 --user default --password "$(echo $CLICKHOUSE_PASSWORD)" -q "select count(*) from information_schema.tables where table_schema = 'default'" 2>/dev/null | tr -d '[:space:]')
               
               if [[ "$result" -eq "36" ]]; then
                 echo "Default schema has 36 tables. Success"

@@ -26,12 +26,18 @@ spec:
       initContainers:
         - name: wait-for-ch
           image: clickhouse/clickhouse-server:25.12
+          env: 
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: default-password
+                  key: password
           command:
             - sh
             - -c
             - |
               while true; do
-                result=$(clickhouse-client -h sample-clickhouse-headless --port 9000 --user default -q "select count(*) from information_schema.tables where table_schema = 'default'" 2>/dev/null | tr -d '[:space:]')
+                result=$(clickhouse-client -h sample-clickhouse-headless --port 9000 --user default --password "$(echo $CLICKHOUSE_PASSWORD)" -q "select count(*) from information_schema.tables where table_schema = 'default'" 2>/dev/null | tr -d '[:space:]')
                 
                 if [ -n "$result" ] && [ "$result" -eq "36" ]; then
                   echo "Found 36 tables. Schema is ready."
@@ -44,8 +50,13 @@ spec:
       containers:
         - name: prism-agent
           image: "{{ .Values.prism.imageRepository }}:{{ .Values.prism.tag }}"
-          args: ["--backend", "clickhouse", "--clickhouse-db", "default", "--clickhouse-user", "default", "--clickhouse-password", "", "--clickhouse-url", "http://sample-clickhouse-headless:8123"]
-          env: 
+          args: ["--backend", "clickhouse", "--clickhouse-db", "default", "--clickhouse-user", "default", "--clickhouse-url", "http://sample-clickhouse-headless:8123"]
+          env:
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: default-password
+                  key: password
             - name: RUST_LOG
               value: info
           securityContext:
