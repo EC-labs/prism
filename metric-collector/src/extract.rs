@@ -272,9 +272,7 @@ impl Extractor {
             init_pids.extend(target::search_targets_regex(process_name, false)?);
         }
 
-        if let Some(pids) = &self.config.pids {
-            init_pids.extend(pids.clone());
-        }
+        init_pids.extend(self.config.pids.clone());
 
         for pid in init_pids {
             pid_map.update(

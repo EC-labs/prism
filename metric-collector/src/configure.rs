@@ -7,7 +7,7 @@ use crate::sink::{ClickhouseConfig, SinkConfig};
 
 pub struct Config {
     pub machine_id: u32,
-    pub pids: Option<Vec<usize>>,
+    pub pids: Vec<usize>,
     pub sink_config: SinkConfig,
     pub process_name: Option<String>,
 }
@@ -18,6 +18,7 @@ impl TryFrom<ArgMatches> for Config {
         let pids: Option<Vec<usize>> = matches
             .remove_many::<usize>("pids")
             .map(|pids| pids.collect());
+        let mut pids = pids.unwrap_or_default();
 
         let process_name = matches.remove_one::<String>("process-name");
 
@@ -69,6 +70,11 @@ impl TryFrom<ArgMatches> for Config {
                 error!("Unsupported backend");
                 panic!()
             }
+        };
+
+        if matches.get_flag("monitor-self") {
+            let mc_pid = std::process::id() as usize;
+            pids.push(mc_pid);
         };
 
         Ok(Self {

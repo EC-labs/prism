@@ -57,4 +57,9 @@ pub fn register_args() -> Command {
             .requires_all(["clickhouse-url", "clickhouse-db", "clickhouse-user", "clickhouse-password"])
             .conflicts_with("duckdb-config")
         )
+        .arg(
+            Arg::new("monitor-self")
+                .long("monitor-self")
+                .action(ArgAction::SetTrue)
+        )
 }
