@@ -269,7 +269,6 @@ impl Extractor {
         let (pid_tx, pid_rx) = broadcast::channel(10_000); // To broadcast when a new pid is registered
         let mut init_pids: Vec<usize> = Vec::new();
 
-
         if let Some(process_name) = &self.config.process_name {
             init_pids.extend(target::search_targets_regex(process_name, false)?);
         }
@@ -291,7 +290,6 @@ impl Extractor {
                 MapFlags::ANY,
             )?
         }
-
 
         let mut iowait_open_object = MaybeUninit::uninit();
         let mut iowait = IOWait::new(

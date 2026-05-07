@@ -151,7 +151,6 @@ impl ContainerRuntimes {
         }
     }
 
-
     async fn containerd_connection() -> Option<Channel> {
         let socks = [
             "/proc/1/root/run/containerd/containerd.sock",
@@ -392,23 +391,19 @@ fn process_context_thread(
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel(1000);
     let container_runtimes = ContainerRuntimes::new();
-    let async_rt = container_runtimes.init_async_runtime(
-        rx,
-        sink_tx.clone(),
-        machine_id,
-    );
+    let async_rt = container_runtimes.init_async_runtime(rx, sink_tx.clone(), machine_id);
 
-    if let Some(containerd_container_filters) = containerd_container_filters {
+    let mut init_pids = Vec::new();
+    if let Some(ref containerd_container_filters) = containerd_container_filters {
         let filters = containerd_container_filters.clone();
-        let pids = async_rt.block_on(async move {
+        init_pids.extend(async_rt.block_on(async move {
             ContainerRuntimes::containerd_processes_in_containers(filters).await
-        });
-
-        if let Err(e) = init_pids_tx.send(pids) {
-            warn!("Failed to announce containerd pids with filter {containerd_container_filters:?}:\n{e:?}");
-        }
+        }));
     }
 
+    if let Err(e) = init_pids_tx.send(init_pids) {
+        warn!("Failed to announce containerd pids with filter {containerd_container_filters:?}:\n{e:?}");
+    }
 
     loop {
         let Ok(terminate) = terminate_flag.lock() else {
@@ -481,7 +476,7 @@ pub fn init_thread(
         Ok(pids) => pids,
         Err(e) => {
             warn!("Failed to receive container init pids: {e:?}");
-            return Err(e.into())
+            return Err(e.into());
         }
     };
     Ok(pids)
