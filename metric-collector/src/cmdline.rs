@@ -62,4 +62,9 @@ pub fn register_args() -> Command {
                 .long("monitor-self")
                 .action(ArgAction::SetTrue)
         )
+        .arg(
+            Arg::new("containerd-container-filters")
+                .long("containerd-container-filters")
+                .action(ArgAction::Append)
+        )
 }
