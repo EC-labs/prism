@@ -96,9 +96,9 @@ int BPF_PROG(vfs_read, struct file *file)
 }
 
 SEC("fexit/vfs_read")
-int BPF_PROG(vfs_read_exit, ssize_t ret)
+int BPF_PROG(vfs_read_exit, struct file *file, char *buf, size_t count, loff_t *pos, ssize_t ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -122,8 +122,8 @@ int BPF_PROG(vfs_write, struct file *file, char *buf, size_t count, loff_t *pos)
 }
 
 SEC("fexit/vfs_write")
-int BPF_PROG(vfs_write_exit, ssize_t ret)
+int BPF_PROG(vfs_write_exit, struct file *file, char *buf, size_t count, loff_t *pos, ssize_t ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }

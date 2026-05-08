@@ -98,6 +98,7 @@
                             netcat-openbsd
                             tcpdump
                             cargo-flamegraph
+                            clickhouse
                         ];
 
                         buildInputs = [ 

@@ -185,9 +185,9 @@ int BPF_PROG(inet_recvmsg, struct socket *sock)
 
 
 SEC("fexit/inet_recvmsg")
-int BPF_PROG(inet_recvmsg_exit)
+int BPF_PROG(inet_recvmsg_exit, struct socket *sock, struct msghdr *msg, size_t size, int flags, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -206,9 +206,9 @@ int BPF_PROG(inet_sendmsg, struct socket *sock)
 }
 
 SEC("fexit/inet_sendmsg")
-int BPF_PROG(inet_sendmsg_exit)
+int BPF_PROG(inet_sendmsg_exit, struct socket *sock, struct msghdr *msg, size_t size, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -228,9 +228,9 @@ int BPF_PROG(inet6_recvmsg, struct socket *sock)
 
 
 SEC("fexit/inet6_recvmsg")
-int BPF_PROG(inet6_recvmsg_exit)
+int BPF_PROG(inet6_recvmsg_exit, struct socket *sock, struct msghdr *msg, size_t size, int flags, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -249,9 +249,9 @@ int BPF_PROG(inet6_sendmsg, struct socket *sock)
 }
 
 SEC("fexit/inet6_sendmsg")
-int BPF_PROG(inet6_sendmsg_exit)
+int BPF_PROG(inet6_sendmsg_exit, struct socket *sock, struct msghdr *msg, size_t size, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -272,9 +272,9 @@ int BPF_PROG(sock_splice_read, struct file *f)
 }
 
 SEC("fexit/sock_splice_read")
-int BPF_PROG(sock_splice_read_exit)
+int BPF_PROG(sock_splice_read_exit, struct file *file, loff_t *ppos, struct pipe_inode_info *pipe, size_t len, unsigned int flags, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -294,9 +294,9 @@ int BPF_PROG(splice_to_socket, struct pipe_inode_info *pipe, struct file *f)
 }
 
 SEC("fexit/splice_to_socket")
-int BPF_PROG(splice_to_socket_exit)
+int BPF_PROG(splice_to_socket_exit, struct pipe_inode_info *pipe, struct file *out, loff_t *ppos, size_t len, unsigned int flags, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -317,9 +317,9 @@ int BPF_PROG(unix_stream_recvmsg, struct socket *sock)
 }
 
 SEC("fexit/unix_stream_recvmsg")
-int BPF_PROG(unix_stream_recvmsg_exit)
+int BPF_PROG(unix_stream_recvmsg_exit, struct socket *sock, struct msghdr *msg, size_t size, int flags, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -340,9 +340,9 @@ int BPF_PROG(unix_stream_sendmsg, struct socket *sending)
 }
 
 SEC("fexit/unix_stream_sendmsg")
-int BPF_PROG(unix_stream_sendmsg_exit)
+int BPF_PROG(unix_stream_sendmsg_exit, struct socket *sock, struct msghdr *msg, size_t len, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -363,9 +363,9 @@ int BPF_PROG(unix_dgram_recvmsg, struct socket *sock)
 }
 
 SEC("fexit/unix_dgram_recvmsg")
-int BPF_PROG(unix_dgram_recvmsg_exit)
+int BPF_PROG(unix_dgram_recvmsg_exit, struct socket *sock, struct msghdr *msg, size_t size, int flags, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -386,9 +386,9 @@ int BPF_PROG(unix_dgram_sendmsg, struct socket *sending)
 }
 
 SEC("fexit/unix_dgram_sendmsg")
-int BPF_PROG(unix_dgram_sendmsg_exit)
+int BPF_PROG(unix_dgram_sendmsg_exit, struct socket *sock, struct msghdr *msg, size_t len, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -409,9 +409,9 @@ int BPF_PROG(unix_seqpacket_recvmsg, struct socket *sock)
 }
 
 SEC("fexit/unix_seqpacket_recvmsg")
-int BPF_PROG(unix_seqpacket_recvmsg_exit)
+int BPF_PROG(unix_seqpacket_recvmsg_exit, struct socket *sock, struct msghdr *msg, size_t size, int flags, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -432,9 +432,9 @@ int BPF_PROG(unix_seqpacket_sendmsg, struct socket *sending)
 }
 
 SEC("fexit/unix_seqpacket_sendmsg")
-int BPF_PROG(unix_seqpacket_sendmsg_exit)
+int BPF_PROG(unix_seqpacket_sendmsg_exit, struct socket *sock, struct msghdr *msg, size_t len, int ret)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, (__u64) (ret >= 0 ? ret : 0));
     return 0;
 }
 
@@ -455,7 +455,7 @@ int BPF_PROG(unix_accept, struct socket *sock)
 SEC("fexit/unix_accept")
 int BPF_PROG(unix_accept_exit)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, 0);
     return 0;
 }
 
@@ -476,6 +476,6 @@ int BPF_PROG(inet_accept, struct socket *sock)
 SEC("fexit/inet_accept")
 int BPF_PROG(inet_accept_exit)
 {
-    vfs_acct_end(&pending, &samples, &to_update);
+    vfs_acct_end(&pending, &samples, &to_update, 0);
     return 0;
 }

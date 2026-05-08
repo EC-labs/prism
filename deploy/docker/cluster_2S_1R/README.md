@@ -6,3 +6,8 @@ Start the cluster with:
 ```
 docker compose up -d 
 ```
+
+You can connect to the clickhouse database with:
+```
+clickhouse-client -h localhost --port 9000 --user cluster_user --password cluster_pass
+```

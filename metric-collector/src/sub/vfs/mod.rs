@@ -241,6 +241,7 @@ impl<'obj> Vfs<'obj> {
                 op: gr.op,
                 total_time: st.total_time,
                 total_requests: st.total_requests,
+                total_bytes: st.total_bytes,
                 hist0: st.hist[0],
                 hist1: st.hist[1],
                 hist2: st.hist[2],

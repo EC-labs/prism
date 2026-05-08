@@ -34,6 +34,7 @@ struct granularity {
 struct stats {
 	__u64 ts_s;
 	__u64 total_time;
+	__u64 total_bytes;
 	__u32 total_requests;
 	__u32 hist[8];
 };
@@ -82,7 +83,7 @@ __always_inline static void vfs_acct_start(void *pending_map, u64 tgid_pid, stru
     bpf_map_update_elem(pending_map, &key, &value, BPF_ANY);
 }
 
-__always_inline static int vfs_acct_end(void *pending_map, void *samples, void *to_update_map) 
+__always_inline static int vfs_acct_end(void *pending_map, void *samples, void *to_update_map, __u64 total_bytes)
 {
     u64 tgid_pid = bpf_get_current_pid_tgid();
     struct inflight_value *value = bpf_map_lookup_elem(pending_map, &tgid_pid);
@@ -126,6 +127,7 @@ __always_inline static int vfs_acct_end(void *pending_map, void *samples, void *
     __u32 bucket = log_base10_bucket(ns_latency);
     __sync_fetch_and_add(&stat->total_requests, 1);
     __sync_fetch_and_add(&stat->total_time, sample_latency);
+    __sync_fetch_and_add(&stat->total_bytes, total_bytes);
     __sync_fetch_and_add(stat->hist + bucket, 1);
 
     to_update_acct(to_update_map, value->ts, ts, gran);

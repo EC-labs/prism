@@ -113,6 +113,7 @@ ON CLUSTER default
     inode_id    UInt64,
     op          UInt8,
     total_time  UInt64,
+    total_bytes UInt64,
     total_requests UInt32,
     hist0 UInt32, hist1 UInt32, hist2 UInt32, hist3 UInt32,
     hist4 UInt32, hist5 UInt32, hist6 UInt32, hist7 UInt32

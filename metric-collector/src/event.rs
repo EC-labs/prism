@@ -129,6 +129,7 @@ pub struct VfsEvent {
     pub inode_id: u64,
     pub op: u8,
     pub total_time: u64,
+    pub total_bytes: u64,
     pub total_requests: u32,
     pub hist0: u32,
     pub hist1: u32,
