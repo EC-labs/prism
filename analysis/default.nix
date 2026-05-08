@@ -1,4 +1,4 @@
-{ pkgs, pyproject-build-systems, pyproject-nix, lib, uv2nix, threadDynamics }:
+{ pkgs, pyproject-build-systems, pyproject-nix, lib, uv2nix, threadDynamics, tag }:
 let 
       python = pkgs.python312;
       workspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./.; };
@@ -52,7 +52,7 @@ rec {
     '';
     image = pkgs.dockerTools.buildImage {
         name = "dclandau/prism-analysis";
-        tag = "latest";
+        inherit tag;
         copyToRoot = [ package pkgs.coreutils ];
         config = {
             Entrypoint = [ "/bin/analysis" ];

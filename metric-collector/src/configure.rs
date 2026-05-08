@@ -1,14 +1,17 @@
 use chrono::prelude::*;
 use clap::ArgMatches;
 use log::error;
+use rand::RngExt;
 
 use crate::sink::{ClickhouseConfig, SinkConfig};
 
 pub struct Config {
     pub machine_id: u32,
-    pub pids: Option<Vec<usize>>,
+    pub pids: Vec<usize>,
     pub sink_config: SinkConfig,
     pub process_name: Option<String>,
+    pub containerd_container_filters: Option<Vec<String>>,
+    pub docker_container_names: Option<Vec<String>>,
 }
 
 impl TryFrom<ArgMatches> for Config {
@@ -17,12 +20,16 @@ impl TryFrom<ArgMatches> for Config {
         let pids: Option<Vec<usize>> = matches
             .remove_many::<usize>("pids")
             .map(|pids| pids.collect());
+        let mut pids = pids.unwrap_or_default();
 
         let process_name = matches.remove_one::<String>("process-name");
 
+        let mut rng = rand::rng();
+        let random_machine_id: u32 = rng.random();
+
         let machine_id = matches
             .remove_one::<u32>("machine-id")
-            .expect("Missing machine-id");
+            .unwrap_or(random_machine_id);
 
         let sink_config = match matches
             .remove_one::<String>("backend")
@@ -67,11 +74,26 @@ impl TryFrom<ArgMatches> for Config {
             }
         };
 
+        if matches.get_flag("monitor-self") {
+            let mc_pid = std::process::id() as usize;
+            pids.push(mc_pid);
+        };
+
+        let containerd_container_filters = matches
+            .remove_many::<String>("containerd-container-filters")
+            .map(|v| v.collect::<Vec<_>>());
+
+        let docker_container_names = matches
+            .remove_many::<String>("docker-container-names")
+            .map(|v| v.collect::<Vec<_>>());
+
         Ok(Self {
             machine_id,
             pids,
             sink_config,
             process_name,
+            containerd_container_filters,
+            docker_container_names,
         })
     }
 }

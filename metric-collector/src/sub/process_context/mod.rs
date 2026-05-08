@@ -1,8 +1,14 @@
 use anyhow::{Context, Result};
-use bollard::{query_parameters::InspectContainerOptions, Docker, API_DEFAULT_VERSION};
+use bollard::{
+    query_parameters::{InspectContainerOptions, ListContainersOptionsBuilder},
+    Docker, API_DEFAULT_VERSION,
+};
 use containerd_client::{
     connect,
-    services::v1::{containers_client::ContainersClient, GetContainerRequest},
+    services::v1::{
+        containers_client::ContainersClient, tasks_client::TasksClient, GetContainerRequest,
+        GetRequest, ListContainersRequest,
+    },
     tonic::transport::Channel,
     with_namespace,
 };
@@ -10,6 +16,7 @@ use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
 use regex::Regex;
 use std::{
+    collections::HashMap,
     ffi::CStr,
     fs::{self, File},
     io::{BufRead, BufReader, Read},
@@ -21,7 +28,7 @@ use std::{
 use tokio::sync::broadcast;
 use tokio::{
     runtime::Runtime,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{self, Receiver},
     time::timeout,
 };
 use tonic::Request;
@@ -30,9 +37,8 @@ use crate::event::{DockerEvent, Event, K8sEvent, ProcessContextEvent};
 
 lazy_static! {
     static ref RE_DOCKER: Regex = Regex::new(r"\/docker-(\w+)").unwrap();
-}
-lazy_static! {
     static ref RE_CONTAINERD: Regex = Regex::new(r"containerd-(\w+)").unwrap();
+    static ref RE_CGROUPV2: Regex = Regex::new(r"^0::(.*)\n$").unwrap();
 }
 
 #[derive(Debug)]
@@ -104,22 +110,24 @@ impl Container {
 
 struct ContainerRuntimes {
     docker_client: Option<Docker>,
-    containerd_client: Option<ContainersClient<Channel>>,
+    containerd_client: Option<Channel>,
 }
 
 impl ContainerRuntimes {
     fn init_async_runtime(
+        mut self,
         mut cgroup_rx: Receiver<Cgroup>,
-        store_object_tx: Sender<ProcessObject>,
+        sink_tx: std::sync::mpsc::Sender<Event>,
+        machine_id: u32,
     ) -> Runtime {
-        let mut runtimes = ContainerRuntimes::new();
-        let async_rt = Runtime::new().unwrap();
+        let async_rt = Runtime::new().expect("Failed to start async runtime");
         async_rt.spawn(async move {
+            // search for containers with provided filter
             loop {
                 let Some(cgroup) = cgroup_rx.recv().await else {
                     break;
                 };
-                let container = match runtimes.get_container_metadata(cgroup).await {
+                let container = match self.get_container_metadata(cgroup).await {
                     Ok(container) => container,
                     Err(e) => {
                         warn!("Failed to get container metadata: {e}");
@@ -127,10 +135,7 @@ impl ContainerRuntimes {
                     }
                 };
 
-                if let Err(e) = store_object_tx
-                    .send(ProcessObject::Container(container))
-                    .await
-                {
+                if let Err(e) = container.append_row(&sink_tx, machine_id) {
                     error!("failed to send process object");
                     panic!("{e}");
                 }
@@ -141,7 +146,12 @@ impl ContainerRuntimes {
     }
 
     fn new() -> Self {
-        let docker_client = Docker::connect_with_socket_defaults().ok();
+        let docker_client = Docker::connect_with_socket(
+            "unix:///proc/1/root/var/run/docker.sock",
+            120,
+            API_DEFAULT_VERSION,
+        )
+        .ok();
         let containerd_client = None;
         Self {
             docker_client,
@@ -149,7 +159,7 @@ impl ContainerRuntimes {
         }
     }
 
-    async fn connect_containerd(&mut self) {
+    async fn containerd_connection() -> Option<Channel> {
         let socks = [
             "/proc/1/root/run/containerd/containerd.sock",
             "/proc/1/root/var/snap/microk8s/common/run/containerd.sock",
@@ -158,11 +168,14 @@ impl ContainerRuntimes {
         ];
         for sock in socks {
             if let Ok(channel) = connect(sock).await {
-                self.containerd_client = Some(ContainersClient::new(channel));
-                return;
+                return Some(channel);
             }
         }
-        warn!("Failed to connect to containerd socket");
+        None
+    }
+
+    async fn connect_containerd(&mut self) {
+        self.containerd_client = Self::containerd_connection().await;
     }
 
     fn connect_docker(&mut self) {
@@ -224,11 +237,12 @@ impl ContainerRuntimes {
             let Some(containerd_client) = &mut self.containerd_client else {
                 return Ok(Container::Unknown);
             };
+            let mut containers_client = ContainersClient::new(containerd_client);
             let req = GetContainerRequest {
                 id: container_id.into(),
             };
             let req = with_namespace!(req, "k8s.io");
-            let resp = containerd_client.get(req).await?;
+            let resp = containers_client.get(req).await?;
             let Some(mut container) = resp.into_inner().container else {
                 warn!("Unexpected `None` in response's `container` attribute");
                 return Ok(Container::Unknown);
@@ -249,6 +263,113 @@ impl ContainerRuntimes {
             warn!("unknown cgroup manager {:?}", cgroup);
             Ok(Container::Unknown)
         }
+    }
+
+    async fn containerd_processes_in_containers(filters: Vec<String>) -> Vec<usize> {
+        let Some(containerd_client) = Self::containerd_connection().await else {
+            return Vec::new();
+        };
+        let mut containers_client = ContainersClient::new(containerd_client.clone());
+
+        let list_req = ListContainersRequest { filters: filters };
+        let list_req = with_namespace!(list_req, "k8s.io");
+        let Ok(res) = containers_client.list(list_req).await else {
+            return Vec::new();
+        };
+        let res = res.into_inner();
+
+        let mut tasks_client = TasksClient::new(containerd_client);
+        let mut pids = Vec::new();
+        for container in res.containers {
+            let id = container.id.clone();
+            let get_task_req = GetRequest {
+                container_id: id.clone(),
+                exec_id: String::new(),
+            };
+            let get_task_req = with_namespace!(get_task_req, "k8s.io");
+            let Ok(res) = tasks_client.get(get_task_req).await else {
+                continue;
+            };
+
+            let res = res.into_inner();
+            let Some(process) = res.process else { continue };
+            pids.extend(Self::pids_sharing_cgroup(
+                process.pid.try_into().expect("Invalid usize pid"),
+            ));
+        }
+
+        pids
+    }
+
+    async fn dockerd_processes_in_containers(names: Vec<String>) -> Vec<usize> {
+        let mut pids = Vec::new();
+
+        let Ok(dockerd_client) = Docker::connect_with_socket(
+            "unix:///proc/1/root/var/run/docker.sock",
+            120,
+            API_DEFAULT_VERSION,
+        ) else {
+            return pids;
+        };
+
+        let params = ListContainersOptionsBuilder::new()
+            .filters(&HashMap::from_iter([(
+                "name",
+                names.into_iter().map(|name| format!(r"^{name}$")).collect(),
+            )]))
+            .build();
+        let Ok(containers) = dockerd_client.list_containers(Some(params)).await else {
+            return pids;
+        };
+        for container in containers {
+            let Some(id) = container.id.as_ref() else {
+                continue;
+            };
+            let Ok(res) = dockerd_client
+                .inspect_container(&id, None as Option<InspectContainerOptions>)
+                .await
+            else {
+                continue;
+            };
+
+            let Some(state) = res.state else { continue };
+            let Some(pid) = state.pid else { continue };
+
+            pids.extend(Self::pids_sharing_cgroup(
+                pid.try_into().expect("Invalid usize pid"),
+            ));
+        }
+
+        pids
+    }
+
+    fn pids_sharing_cgroup(pid: usize) -> Vec<usize> {
+        let mut pids = Vec::new();
+        let Ok(cgroup_path) = std::fs::read_to_string(&format!("/proc/{pid}/cgroup")) else {
+            return vec![pid];
+        };
+
+        if let Some(captures) = RE_CGROUPV2.captures(&cgroup_path) {
+            let Some(group) = captures.iter().last() else {
+                return vec![pid];
+            };
+
+            let Some(cgroup_leaf) = group else {
+                return vec![pid];
+            };
+            let cgroup_leaf = cgroup_leaf.as_str();
+
+            let Ok(cgroup_procs) =
+                std::fs::read_to_string(&format!("/sys/fs/cgroup/{cgroup_leaf}/cgroup.procs"))
+            else {
+                return vec![pid];
+            };
+
+            for pid in cgroup_procs.split_whitespace() {
+                pids.push(pid.parse().expect("Valid utf-8"));
+            }
+        }
+        pids
     }
 }
 
@@ -347,12 +468,31 @@ fn process_context_thread(
     sink_tx: std::sync::mpsc::Sender<Event>,
     mut pid_rx: broadcast::Receiver<u32>,
     machine_id: u32,
+    containerd_container_filters: Option<Vec<String>>,
+    docker_container_names: Option<Vec<String>>,
+    init_pids_tx: std::sync::mpsc::Sender<Vec<usize>>,
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel(1000);
-    let (store_object_tx, store_object_rx) = mpsc::channel(1000);
-    let async_rt = ContainerRuntimes::init_async_runtime(rx, store_object_tx.clone());
+    let container_runtimes = ContainerRuntimes::new();
+    let async_rt = container_runtimes.init_async_runtime(rx, sink_tx.clone(), machine_id);
 
-    thread::spawn(move || start_appender_thread(sink_tx, store_object_rx, machine_id));
+    let mut init_pids = Vec::new();
+    if let Some(containerd_container_filters) = containerd_container_filters {
+        init_pids.extend(async_rt.block_on(async move {
+            ContainerRuntimes::containerd_processes_in_containers(containerd_container_filters)
+                .await
+        }));
+    }
+
+    if let Some(docker_container_names) = docker_container_names {
+        init_pids.extend(async_rt.block_on(async move {
+            ContainerRuntimes::dockerd_processes_in_containers(docker_container_names).await
+        }));
+    }
+
+    if let Err(e) = init_pids_tx.send(init_pids) {
+        warn!("Failed to send container pids: {e:?}");
+    }
 
     loop {
         let Ok(terminate) = terminate_flag.lock() else {
@@ -386,7 +526,7 @@ fn process_context_thread(
         };
         let cgroup = context.cgroup.clone();
         debug!("process context {:?}", context);
-        if let Err(e) = store_object_tx.blocking_send(ProcessObject::ProcessContext(context)) {
+        if let Err(e) = context.append_row(&sink_tx, machine_id) {
             error!("failed to send process object");
             panic!("{e}")
         };
@@ -403,36 +543,32 @@ fn process_context_thread(
     Ok(())
 }
 
-#[derive(Debug)]
-enum ProcessObject {
-    ProcessContext(ProcessContext),
-    Container(Container),
-}
-
-fn start_appender_thread(
-    sink_tx: std::sync::mpsc::Sender<Event>,
-    mut rx: Receiver<ProcessObject>,
-    machine_id: u32,
-) -> Result<()> {
-    while let Some(o) = rx.blocking_recv() {
-        match o {
-            ProcessObject::ProcessContext(pc) => {
-                pc.append_row(&sink_tx, machine_id)?;
-            }
-            ProcessObject::Container(c) => {
-                c.append_row(&sink_tx, machine_id)?;
-            }
-        }
-    }
-    Ok(()) as Result<()>
-}
-
 pub fn init_thread(
     terminate_flag: Arc<Mutex<bool>>,
     sink_tx: std::sync::mpsc::Sender<Event>,
     pid_rx: broadcast::Receiver<u32>,
     machine_id: u32,
-) -> Result<()> {
-    thread::spawn(move || process_context_thread(terminate_flag, sink_tx, pid_rx, machine_id));
-    Ok(())
+    containerd_container_filters: Option<Vec<String>>,
+    docker_container_names: Option<Vec<String>>,
+) -> Result<Vec<usize>> {
+    let (init_pids_tx, init_pids_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        process_context_thread(
+            terminate_flag,
+            sink_tx,
+            pid_rx,
+            machine_id,
+            containerd_container_filters,
+            docker_container_names,
+            init_pids_tx,
+        )
+    });
+    let pids = match init_pids_rx.recv() {
+        Ok(pids) => pids,
+        Err(e) => {
+            warn!("Failed to receive container init pids: {e:?}");
+            return Err(e.into());
+        }
+    };
+    Ok(pids)
 }

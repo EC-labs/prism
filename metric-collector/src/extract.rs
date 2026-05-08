@@ -266,15 +266,23 @@ impl Extractor {
         info!("starting bpf programs");
         let pid_map = create_pid_map()?;
         let pid_rb = create_pid_rb()?;
+        let (pid_tx, pid_rx) = broadcast::channel(10_000); // To broadcast when a new pid is registered
         let mut init_pids: Vec<usize> = Vec::new();
 
         if let Some(process_name) = &self.config.process_name {
             init_pids.extend(target::search_targets_regex(process_name, false)?);
         }
 
-        if let Some(pids) = &self.config.pids {
-            init_pids.extend(pids.clone());
-        }
+        init_pids.extend(self.config.pids.clone());
+
+        init_pids.extend(process_context::init_thread(
+            self.terminate_flag.clone(),
+            self.sink_tx.clone(),
+            pid_rx,
+            self.config.machine_id,
+            self.config.containerd_container_filters.clone(),
+            self.config.docker_container_names.clone(),
+        )?);
 
         for pid in init_pids {
             pid_map.update(
@@ -283,9 +291,6 @@ impl Extractor {
                 MapFlags::ANY,
             )?
         }
-
-        // To broadcast when a new pid is registered
-        let (pid_tx, pid_rx) = broadcast::channel(10_000);
 
         let mut iowait_open_object = MaybeUninit::uninit();
         let mut iowait = IOWait::new(
@@ -369,13 +374,6 @@ impl Extractor {
             self.sink_tx.clone(),
             self.config.machine_id,
         );
-
-        process_context::init_thread(
-            self.terminate_flag.clone(),
-            self.sink_tx.clone(),
-            pid_rx,
-            self.config.machine_id,
-        )?;
 
         let rx_timer = self.rx_timer.take().unwrap();
         info!("starting metric collection loop");
