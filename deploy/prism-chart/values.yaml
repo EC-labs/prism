@@ -8,6 +8,9 @@ clickhouseOperator:
 prism: 
   tag: "latest"
   imageRepository: "dclandau/prism-agent"
+  bootstrap:
+    namespace: ""
+    podSubstring: ""
 
 clickhouse:
   storageClassName: local-path

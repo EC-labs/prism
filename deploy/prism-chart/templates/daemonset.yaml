@@ -1,3 +1,15 @@
+{{- /*
+  Validate required values
+*/}}
+
+{{- if not .Values.prism.bootstrap.namespace }}
+  {{- fail "\n\nERROR: prism.bootstrap.namespace is required.\nPass it with:\n  --set prism.bootstrap.namespace=<your-namespace>\n" }}
+{{- end }}
+
+{{- if not .Values.prism.bootstrap.podSubstring }}
+  {{- fail "\n\nERROR: prism.bootstrap.podSubstring is required.\nPass it with:\n  --set prism.bootstrap.podSubstring=<your-pod-substring>\n" }}
+{{- end }}
+
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -50,7 +62,17 @@ spec:
       containers:
         - name: prism-agent
           image: "{{ .Values.prism.imageRepository }}:{{ .Values.prism.tag }}"
-          args: ["--backend", "clickhouse", "--clickhouse-db", "default", "--clickhouse-user", "default", "--clickhouse-url", "http://sample-clickhouse-headless:8123"]
+          args:
+            - "--backend"
+            - "clickhouse"
+            - "--clickhouse-db"
+            - "default"
+            - "--clickhouse-user"
+            - "default"
+            - "--clickhouse-url"
+            - "http://sample-clickhouse-headless:8123"
+            - --containerd-container-filters
+            - "labels.io.kubernetes.pod.namespace=={{ .Values.prism.bootstrap.namespace }},labels.io.kubernetes.pod.name~={{ .Values.prism.bootstrap.podSubstring }}"
           env:
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
