@@ -85,6 +85,7 @@ impl<'obj> IOWait<'obj> {
                 tid: granularity.pid,
                 part0: granularity.part0,
                 bdev: granularity.bdev,
+                op: granularity.dir,
                 total_time: stats.total_time,
                 sector_cnt: stats.sector_cnt,
                 total_requests: stats.total_requests,

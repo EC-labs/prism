@@ -47,6 +47,7 @@ pub struct IoWaitEvent {
     pub tid: u32,
     pub part0: u64,
     pub bdev: u64,
+    pub op: u8,
     pub total_time: u64,
     pub sector_cnt: u32,
     pub total_requests: u32,

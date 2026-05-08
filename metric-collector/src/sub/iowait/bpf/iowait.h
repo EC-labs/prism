@@ -1,6 +1,24 @@
 #ifndef __IOWAIT_H
 #define __IOWAIT_H
 
+#define READ 0
+#define WRITE 1
+
+#define REQ_OP_BITS	8
+#define REQ_OP_MASK	((1 << REQ_OP_BITS) - 1)
+
+static inline bool op_is_write(__u32 op)
+{
+	return !!(op & 1);
+}
+
+static inline enum req_op req_op(const struct request *req)
+{
+	return BPF_CORE_READ(req, cmd_flags) & REQ_OP_MASK;
+}
+
+#define rq_data_dir(rq)	(op_is_write(req_op(rq)) ? WRITE : READ)
+
 struct inflight {
     __u32 part0;
     __u64 sector;
@@ -19,6 +37,7 @@ struct granularity {
     __u32 pid;
     __u64 part0;
     __u64 bdev;
+    __u8  dir;
 } granularity;
 
 struct stats {

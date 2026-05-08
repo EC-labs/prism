@@ -33,6 +33,7 @@ ON CLUSTER default
     tid         UInt32,
     part0       UInt64,
     bdev        UInt64,
+    op          UInt8,
     total_time  UInt64,
     sector_cnt  UInt32,
     total_requests UInt32,

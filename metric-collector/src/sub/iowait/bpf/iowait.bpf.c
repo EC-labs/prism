@@ -71,18 +71,22 @@ int raw_block_io_done(u64 *ctx)
     k.sector = BPF_CORE_READ(req, __sector);
     k.op = BPF_CORE_READ(req, cmd_flags);
 
+
     struct inflight_val *v = bpf_map_lookup_elem(&pending, &k);
     if (!v)
         return 0;
 
     struct inflight_val value = *v;
     bpf_map_delete_elem(&pending, &k);
-    struct granularity gran = {
-        .tgid = get_tgid(value.pid_tgid),
-        .pid = get_pid(value.pid_tgid),
-        .part0 = k.part0,
-        .bdev = value.bdev,
-    };
+    struct granularity gran = {0};
+    gran.tgid = get_tgid(value.pid_tgid);
+    gran.pid = get_pid(value.pid_tgid);
+    gran.part0 = k.part0;
+    gran.bdev = value.bdev;
+    // The following link explains that to determine the direction of a request
+    // we should use kernel's provided `rq_data_dir` method:
+    // https://linux-kernel-labs.github.io/refs/pull/222/merge/labs/block_device_drivers.html#requests-for-block-devices
+    gran.dir = rq_data_dir(req);
 
     u64 ts = bpf_ktime_get_boot_ns();
     u64 sample = (ts/1000000000) % SAMPLES;
