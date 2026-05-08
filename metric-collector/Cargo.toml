@@ -24,7 +24,7 @@ lazy_static = "1.5.0"
 
 anyhow = "1.0"
 libbpf-rs = { version = "0.24.8" }
-clap = { version = "4.0.32", default-features = false, features = ["std", "derive", "help", "usage", "cargo", "env"] }
+clap = { version = "4.0.32", default-features = false, features = ["std", "derive", "help", "usage", "cargo", "env", "wrap_help"] }
 pnet = "0.35.0"
 
 rdkafka = { version = "=0.34", features = ["dynamic-linking"] }
@@ -43,3 +43,4 @@ tonic = "0.12"
 signal-hook = "0.4.3"
 clickhouse = { version = "0.13.2", features = ["inserter"] }
 rand = "0.10.1"
+indoc = "2.0.7"

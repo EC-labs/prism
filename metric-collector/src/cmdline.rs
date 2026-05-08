@@ -1,4 +1,5 @@
 use clap::{arg, command, value_parser, Arg, ArgAction, ArgGroup, Command};
+use indoc::indoc;
 
 pub fn register_args() -> Command {
     command!() // requires `cargo` feature
@@ -66,10 +67,27 @@ pub fn register_args() -> Command {
             Arg::new("containerd-container-filters")
                 .long("containerd-container-filters")
                 .action(ArgAction::Append)
+                .help("Filters used to bootstrap prism on containerd containers. Multiple filters can be provided.")
+                .long_help(indoc! {r#"
+                    To bootstrap prism on all pids that are within containers that are part of a pod whose name includes `<substring>` *AND* the that are within the `<namespace>` namespace:
+                        --containerd-container-filters "labels.io.kubernetes.pod.namespace==<namespace>,labels.io.kubernetes.pod.name~=<substring>"
+
+                    Providing multiple filters will boostrap prism on all pids that are within containers that match either filter. I.e., the following options will bootstrap prism on pids obtained by `<filter1>`, and those obtained via `<filter2>`:
+                        --containerd-container-filters <filter1> and --containerd-container-filters <filter2>
+                "#})
         )
         .arg(
             Arg::new("docker-container-names")
                 .long("docker-container-names")
                 .action(ArgAction::Append)
+                .help("Docker container names used to bootstrap prism. Multiple container names can be provided.")
+                .long_help(indoc! {r#"
+                    To bootstrap prism on all pids that are within containers that are part of a docker container whose name is `<container-name>`:
+                        --docker-container-names <container-name>
+
+                    Providing multiple values will boostrap prism on all pids that are within the listed containers. I.e., the following options will bootstrap prism on pids within containers `<container-1>` and `<container-2>`:
+                        --docker-container-names <container-1> --docker-container-names <container-2>
+
+                "#})
         )
 }
