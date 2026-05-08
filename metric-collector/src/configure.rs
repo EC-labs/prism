@@ -11,6 +11,7 @@ pub struct Config {
     pub sink_config: SinkConfig,
     pub process_name: Option<String>,
     pub containerd_container_filters: Option<Vec<String>>,
+    pub docker_container_names: Option<Vec<String>>,
 }
 
 impl TryFrom<ArgMatches> for Config {
@@ -82,12 +83,17 @@ impl TryFrom<ArgMatches> for Config {
             .remove_many::<String>("containerd-container-filters")
             .map(|v| v.collect::<Vec<_>>());
 
+        let docker_container_names = matches
+            .remove_many::<String>("docker-container-names")
+            .map(|v| v.collect::<Vec<_>>());
+
         Ok(Self {
             machine_id,
             pids,
             sink_config,
             process_name,
             containerd_container_filters,
+            docker_container_names,
         })
     }
 }

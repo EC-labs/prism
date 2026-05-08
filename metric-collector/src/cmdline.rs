@@ -67,4 +67,9 @@ pub fn register_args() -> Command {
                 .long("containerd-container-filters")
                 .action(ArgAction::Append)
         )
+        .arg(
+            Arg::new("docker-container-names")
+                .long("docker-container-names")
+                .action(ArgAction::Append)
+        )
 }

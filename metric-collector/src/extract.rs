@@ -281,6 +281,7 @@ impl Extractor {
             pid_rx,
             self.config.machine_id,
             self.config.containerd_container_filters.clone(),
+            self.config.docker_container_names.clone(),
         )?);
 
         for pid in init_pids {

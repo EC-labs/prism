@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use bollard::{query_parameters::InspectContainerOptions, Docker, API_DEFAULT_VERSION};
+use bollard::{
+    query_parameters::{InspectContainerOptions, ListContainersOptionsBuilder},
+    Docker, API_DEFAULT_VERSION,
+};
 use containerd_client::{
     connect,
     services::v1::{
@@ -13,6 +16,7 @@ use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
 use regex::Regex;
 use std::{
+    collections::HashMap,
     ffi::CStr,
     fs::{self, File},
     io::{BufRead, BufReader, Read},
@@ -33,9 +37,8 @@ use crate::event::{DockerEvent, Event, K8sEvent, ProcessContextEvent};
 
 lazy_static! {
     static ref RE_DOCKER: Regex = Regex::new(r"\/docker-(\w+)").unwrap();
-}
-lazy_static! {
     static ref RE_CONTAINERD: Regex = Regex::new(r"containerd-(\w+)").unwrap();
+    static ref RE_CGROUPV2: Regex = Regex::new(r"^0::(.*)\n$").unwrap();
 }
 
 #[derive(Debug)]
@@ -285,7 +288,76 @@ impl ContainerRuntimes {
 
             let res = res.into_inner();
             let Some(process) = res.process else { continue };
-            pids.push(process.pid as usize);
+            pids.extend(Self::pids_sharing_cgroup(
+                process.pid.try_into().expect("Invalid usize pid"),
+            ));
+        }
+
+        pids
+    }
+
+    async fn dockerd_processes_in_containers(names: Vec<String>) -> Vec<usize> {
+        let mut pids = Vec::new();
+        let Ok(dockerd_client) = Docker::connect_with_socket_defaults() else {
+            return pids;
+        };
+
+        let params = ListContainersOptionsBuilder::new()
+            .filters(&HashMap::from_iter([(
+                "name",
+                names.into_iter().map(|name| format!(r"^{name}$")).collect(),
+            )]))
+            .build();
+        let Ok(containers) = dockerd_client.list_containers(Some(params)).await else {
+            return pids;
+        };
+        for container in containers {
+            let Some(id) = container.id.as_ref() else {
+                continue;
+            };
+            let Ok(res) = dockerd_client
+                .inspect_container(&id, None as Option<InspectContainerOptions>)
+                .await
+            else {
+                continue;
+            };
+
+            let Some(state) = res.state else { continue };
+            let Some(pid) = state.pid else { continue };
+
+            pids.extend(Self::pids_sharing_cgroup(
+                pid.try_into().expect("Invalid usize pid"),
+            ));
+        }
+
+        pids
+    }
+
+    fn pids_sharing_cgroup(pid: usize) -> Vec<usize> {
+        let mut pids = Vec::new();
+        let Ok(cgroup_path) = std::fs::read_to_string(&format!("/proc/{pid}/cgroup")) else {
+            return vec![pid];
+        };
+
+        if let Some(captures) = RE_CGROUPV2.captures(&cgroup_path) {
+            let Some(group) = captures.iter().last() else {
+                return vec![pid];
+            };
+
+            let Some(cgroup_leaf) = group else {
+                return vec![pid];
+            };
+            let cgroup_leaf = cgroup_leaf.as_str();
+
+            let Ok(cgroup_procs) =
+                std::fs::read_to_string(&format!("/sys/fs/cgroup/{cgroup_leaf}/cgroup.procs"))
+            else {
+                return vec![pid];
+            };
+
+            for pid in cgroup_procs.split_whitespace() {
+                pids.push(pid.parse().expect("Valid utf-8"));
+            }
         }
         pids
     }
@@ -387,6 +459,7 @@ fn process_context_thread(
     mut pid_rx: broadcast::Receiver<u32>,
     machine_id: u32,
     containerd_container_filters: Option<Vec<String>>,
+    docker_container_names: Option<Vec<String>>,
     init_pids_tx: std::sync::mpsc::Sender<Vec<usize>>,
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel(1000);
@@ -394,15 +467,21 @@ fn process_context_thread(
     let async_rt = container_runtimes.init_async_runtime(rx, sink_tx.clone(), machine_id);
 
     let mut init_pids = Vec::new();
-    if let Some(ref containerd_container_filters) = containerd_container_filters {
-        let filters = containerd_container_filters.clone();
+    if let Some(containerd_container_filters) = containerd_container_filters {
         init_pids.extend(async_rt.block_on(async move {
-            ContainerRuntimes::containerd_processes_in_containers(filters).await
+            ContainerRuntimes::containerd_processes_in_containers(containerd_container_filters)
+                .await
+        }));
+    }
+
+    if let Some(docker_container_names) = docker_container_names {
+        init_pids.extend(async_rt.block_on(async move {
+            ContainerRuntimes::dockerd_processes_in_containers(docker_container_names).await
         }));
     }
 
     if let Err(e) = init_pids_tx.send(init_pids) {
-        warn!("Failed to announce containerd pids with filter {containerd_container_filters:?}:\n{e:?}");
+        warn!("Failed to send container pids: {e:?}");
     }
 
     loop {
@@ -460,6 +539,7 @@ pub fn init_thread(
     pid_rx: broadcast::Receiver<u32>,
     machine_id: u32,
     containerd_container_filters: Option<Vec<String>>,
+    docker_container_names: Option<Vec<String>>,
 ) -> Result<Vec<usize>> {
     let (init_pids_tx, init_pids_rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
@@ -469,6 +549,7 @@ pub fn init_thread(
             pid_rx,
             machine_id,
             containerd_container_filters,
+            docker_container_names,
             init_pids_tx,
         )
     });
