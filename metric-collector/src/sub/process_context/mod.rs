@@ -146,7 +146,12 @@ impl ContainerRuntimes {
     }
 
     fn new() -> Self {
-        let docker_client = Docker::connect_with_socket_defaults().ok();
+        let docker_client = Docker::connect_with_socket(
+            "unix:///proc/1/root/var/run/docker.sock",
+            120,
+            API_DEFAULT_VERSION,
+        )
+        .ok();
         let containerd_client = None;
         Self {
             docker_client,
@@ -298,7 +303,12 @@ impl ContainerRuntimes {
 
     async fn dockerd_processes_in_containers(names: Vec<String>) -> Vec<usize> {
         let mut pids = Vec::new();
-        let Ok(dockerd_client) = Docker::connect_with_socket_defaults() else {
+
+        let Ok(dockerd_client) = Docker::connect_with_socket(
+            "unix:///proc/1/root/var/run/docker.sock",
+            120,
+            API_DEFAULT_VERSION,
+        ) else {
             return pids;
         };
 
