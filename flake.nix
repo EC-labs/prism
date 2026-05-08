@@ -170,7 +170,7 @@
                                 set -e
 
                                 if (( $# != 1 )); then
-                                    echo "Missing repository argument (e.g. dclandau/)";
+                                    echo "Missing repository argument (e.g. `dclandau` for a docker hub account)";
                                     exit 1;
                                 fi
 

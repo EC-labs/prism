@@ -51,7 +51,7 @@ rec {
         ${virtualenv}/bin/analysis
     '';
     image = pkgs.dockerTools.buildImage {
-        name = "dclandau/prism-analysis";
+        name = "prism-analysis";
         inherit tag;
         copyToRoot = [ package pkgs.coreutils ];
         config = {
