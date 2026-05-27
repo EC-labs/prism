@@ -4,7 +4,7 @@ Prism is a Linux performance diagnostic tool for analysing thread dynamics in di
 
 # Quickstart
 
-This section illustrates how to start Prism on a single instance. For a distributed setup, refer to [docs/distributed.md](docs/distributed.md)
+This section illustrates how to start Prism on a single instance. For a distributed setup, refer to [deploy/prism-chart](deploy/prism-chart) to deploy with helm on a kubernetes cluster.
 
 <details>
 <summary>Run with Docker</summary>
