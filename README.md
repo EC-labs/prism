@@ -154,6 +154,22 @@ Visit the analysis UI at `http://localhost:8501/`. The UI includes some template
 
 This tool is the result of research presented in the following papers:
 
+**Beyond Thread States: Diagnosing Performance Degradation with eBPF and Thread Dynamics:**
+
+```
+Landau, D., Barbosa, J., & Saurabh, N. (2026). Beyond Thread States: Diagnosing Performance Degradation with eBPF and Thread Dynamics. arXiv preprint arXiv:2605.25298.
+
+@misc{landau2026threadstatesdiagnosingperformance,
+      title={Beyond Thread States: Diagnosing Performance Degradation with eBPF and Thread Dynamics}, 
+      author={Diogo Landau and Jorge G. Barbosa and Nishant Saurabh},
+      year={2026},
+      eprint={2605.25298},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC},
+      url={https://arxiv.org/abs/2605.25298}, 
+}
+```
+
 **eBPF-Based Instrumentation for Generalisable Diagnosis of Performance Degradation:**
 
 ```
